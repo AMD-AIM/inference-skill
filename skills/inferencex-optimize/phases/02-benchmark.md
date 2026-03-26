@@ -119,24 +119,40 @@ fi
 RESULT_FILENAME="${EXP_NAME}_${PRECISION}_${FRAMEWORK}_tp${TP}-ep${EP}_conc${CONC}"
 echo "DOCKER_LOG: $DOCKER_RUN_LOG"
 echo "RUN_CMD: docker exec $GPU_ENV -e MODEL=$MODEL -e TP=$TP -e EP_SIZE=$EP -e CONC=$CONC -e ISL=$ISL -e OSL=$OSL -e MAX_MODEL_LEN=$MAX_MODEL_LEN -e RANDOM_RANGE_RATIO=0.5 -e RESULT_FILENAME=$RESULT_FILENAME -e PRECISION=$PRECISION -e FRAMEWORK=$FRAMEWORK -e EXP_NAME=$EXP_NAME $CONTAINER_NAME /bin/bash /workspace/$BENCHMARK_SCRIPT"
+echo "Starting benchmark run: RESULT_FILENAME=$RESULT_FILENAME"
+echo "Streaming live benchmark output to terminal and $DOCKER_RUN_LOG"
 
-docker exec \
-    $GPU_ENV \
-    -e MODEL=$MODEL \
-    -e TP=$TP \
-    -e EP_SIZE=$EP \
-    -e CONC=$CONC \
-    -e ISL=$ISL \
-    -e OSL=$OSL \
-    -e MAX_MODEL_LEN=$MAX_MODEL_LEN \
-    -e RANDOM_RANGE_RATIO=0.5 \
-    -e RESULT_FILENAME=$RESULT_FILENAME \
-    -e PRECISION=$PRECISION \
-    -e FRAMEWORK=$FRAMEWORK \
-    -e EXP_NAME=$EXP_NAME \
-    "$CONTAINER_NAME" \
-    /bin/bash /workspace/$BENCHMARK_SCRIPT \
-    >> "$DOCKER_RUN_LOG" 2>&1
+(
+    set -o pipefail
+    docker exec \
+        $GPU_ENV \
+        -e MODEL=$MODEL \
+        -e TP=$TP \
+        -e EP_SIZE=$EP \
+        -e CONC=$CONC \
+        -e ISL=$ISL \
+        -e OSL=$OSL \
+        -e MAX_MODEL_LEN=$MAX_MODEL_LEN \
+        -e RANDOM_RANGE_RATIO=0.5 \
+        -e RESULT_FILENAME=$RESULT_FILENAME \
+        -e PRECISION=$PRECISION \
+        -e FRAMEWORK=$FRAMEWORK \
+        -e EXP_NAME=$EXP_NAME \
+        "$CONTAINER_NAME" \
+        /bin/bash /workspace/$BENCHMARK_SCRIPT \
+        2>&1 | tee -a "$DOCKER_RUN_LOG"
+) &
+EXEC_PID=$!
+
+while kill -0 "$EXEC_PID" 2>/dev/null; do
+    sleep 30
+    if kill -0 "$EXEC_PID" 2>/dev/null; then
+        echo "[heartbeat] Benchmark still running for $RESULT_FILENAME"
+        echo "[heartbeat] Full log: $DOCKER_RUN_LOG"
+    fi
+done
+
+wait "$EXEC_PID"
 EXIT_CODE=$?
 echo "Benchmark exit code: $EXIT_CODE"
 if [ $EXIT_CODE -ne 0 ]; then
@@ -145,7 +161,7 @@ if [ $EXIT_CODE -ne 0 ]; then
 fi
 ```
 
-IMPORTANT: The docker exec runs in the **foreground** writing stdout/stderr to the log file (no output is printed to the terminal). If the command fails (non-zero exit code), the last 50 lines of the log are printed to help diagnose the issue. On success, only the exit code line is shown.
+IMPORTANT: The docker exec must **not** be silent. Stream stdout/stderr to both the terminal and `DOCKER_RUN_LOG`, and emit heartbeat messages while the run is still active so the user never sees a blank terminal during a long benchmark.
 
 After each benchmark run, copy result files from the repo directory to `{{OUTPUT_DIR}}/results/`.
 Then remove the copied result files from the repo directory to keep it clean:

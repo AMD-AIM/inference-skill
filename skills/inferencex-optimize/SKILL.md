@@ -58,6 +58,10 @@ metadata:
   - final plan ready
   - execution starting
 - During execution, emit a visible status update at least at every phase boundary.
+- During long benchmark or profile runs, do not leave the terminal blank:
+  - stream live output to the terminal while also saving the full log file
+  - emit heartbeat updates if the run stays quiet for a while
+  - always show the full log path before the long run starts
 - Keep status updates human-readable. Prefer wording like `Status 2/5: checking available TP, sequence length, and concurrency options` over internal variable names.
 - Never go silent for a long discovery or execution step without a status update first.
 

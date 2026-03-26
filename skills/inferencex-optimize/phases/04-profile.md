@@ -328,25 +328,42 @@ echo "DOCKER_LOG: $DOCKER_RUN_LOG"
 echo "RUN_CMD: docker exec $GPU_ENV -e MODEL=$MODEL -e TP=$TP -e EP_SIZE=$EP -e CONC=$CONC -e ISL=$ISL -e OSL=$OSL -e MAX_MODEL_LEN=$MAX_MODEL_LEN -e RANDOM_RANGE_RATIO=0.5 -e RESULT_FILENAME=$PROFILE_RESULT -e PRECISION=$PRECISION -e FRAMEWORK=$FRAMEWORK -e EXP_NAME=$EXP_NAME $CONTAINER_NAME /bin/bash /workspace/$BENCHMARK_SCRIPT"
 ```
 
-Then start the profiling benchmark run (output appends to the container's `DOCKER_RUN_LOG`):
+Then start the profiling benchmark run. It may take a while, so stream stdout/stderr live to the terminal while also appending to `DOCKER_RUN_LOG`:
 ```bash
-docker exec \
-    $GPU_ENV \
-    -e MODEL=$MODEL \
-    -e TP=$TP \
-    -e EP_SIZE=$EP \
-    -e CONC=$CONC \
-    -e ISL=$ISL \
-    -e OSL=$OSL \
-    -e MAX_MODEL_LEN=$MAX_MODEL_LEN \
-    -e RANDOM_RANGE_RATIO=0.5 \
-    -e RESULT_FILENAME=$PROFILE_RESULT \
-    -e PRECISION=$PRECISION \
-    -e FRAMEWORK=$FRAMEWORK \
-    -e EXP_NAME=$EXP_NAME \
-    "$CONTAINER_NAME" \
-    /bin/bash /workspace/$BENCHMARK_SCRIPT \
-    >> "$DOCKER_RUN_LOG" 2>&1
+echo "Starting profile run: RESULT_FILENAME=$PROFILE_RESULT"
+echo "Streaming live profile output to terminal and $DOCKER_RUN_LOG"
+
+(
+    set -o pipefail
+    docker exec \
+        $GPU_ENV \
+        -e MODEL=$MODEL \
+        -e TP=$TP \
+        -e EP_SIZE=$EP \
+        -e CONC=$CONC \
+        -e ISL=$ISL \
+        -e OSL=$OSL \
+        -e MAX_MODEL_LEN=$MAX_MODEL_LEN \
+        -e RANDOM_RANGE_RATIO=0.5 \
+        -e RESULT_FILENAME=$PROFILE_RESULT \
+        -e PRECISION=$PRECISION \
+        -e FRAMEWORK=$FRAMEWORK \
+        -e EXP_NAME=$EXP_NAME \
+        "$CONTAINER_NAME" \
+        /bin/bash /workspace/$BENCHMARK_SCRIPT \
+        2>&1 | tee -a "$DOCKER_RUN_LOG"
+) &
+EXEC_PID=$!
+
+while kill -0 "$EXEC_PID" 2>/dev/null; do
+    sleep 30
+    if kill -0 "$EXEC_PID" 2>/dev/null; then
+        echo "[heartbeat] Profile run still running for $PROFILE_RESULT"
+        echo "[heartbeat] Full log: $DOCKER_RUN_LOG"
+    fi
+done
+
+wait "$EXEC_PID"
 EXIT_CODE=$?
 echo "Profile exit code: $EXIT_CODE"
 if [ $EXIT_CODE -ne 0 ]; then
@@ -355,7 +372,7 @@ if [ $EXIT_CODE -ne 0 ]; then
 fi
 ```
 
-IMPORTANT: The docker exec runs in the **foreground** writing stdout/stderr to the log file (no output is printed to the terminal). If the command fails (non-zero exit code), the last 50 lines of the log are printed to help diagnose the issue. On success, only the exit code line is shown.
+IMPORTANT: The profile run must **not** be silent. Stream stdout/stderr to both the terminal and `DOCKER_RUN_LOG`, and emit heartbeat messages while the run is still active so the user never sees a blank terminal during a long profiling step.
 
 ### 5. Clean Up Container
 After **all** profiling runs are complete, stop and remove the container:

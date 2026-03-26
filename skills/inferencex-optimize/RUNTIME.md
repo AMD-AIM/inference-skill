@@ -117,3 +117,25 @@ During execution:
 - After each phase, emit a short completion update that also says what comes next.
 - Before any long benchmark or profile step, say what is about to take time.
 - If a step is unexpectedly slow, add another brief update instead of leaving the user in silence.
+
+## Long-running log surfacing
+
+Long phases must not leave the terminal blank.
+
+Rules:
+
+- If a command may run for more than about 30 seconds, tell the user which step is running and where the full log is being written.
+- If a phase writes output to a log file, also surface live progress to the terminal:
+  - prefer streaming stdout/stderr with `tee` while still saving the full log file
+  - if streaming is impossible, print periodic heartbeat updates and show recent log lines
+- Before each long benchmark or profile run, print:
+  - the config being run
+  - the full log path
+  - what signal the user should expect next
+- During long runs, surface meaningful progress at least every 30-60 seconds.
+- After each long run, print:
+  - exit code
+  - success or failure
+  - what comes next
+
+When choosing between `silent log file only` and `visible progress`, prefer visible progress.
