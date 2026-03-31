@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SKILL_NAME="inferencex-optimize"
+SKILL_NAMES=("inferencex-optimize" "vllm-optimize")
 MODE="copy"
 
 usage() {
   cat <<'EOF'
-Install the InferenceX Optimize skill for Claude Code, OpenCode, and Cursor.
+Install the InferenceX and vLLM Optimize skills for Claude Code, OpenCode, and Cursor.
 
 Usage:
   ./install.sh
@@ -15,7 +15,7 @@ Usage:
   ./install.sh --project /path/to/project --link
 
 Options:
-  --project PATH   Install into PATH/.claude/skills/inferencex-optimize
+  --project PATH   Install into PATH/.claude/skills/SKILL_NAME
   --dest PATH      Install into an explicit skill directory path
   --link           Symlink instead of copying files
   --copy           Copy files explicitly (default)
@@ -24,22 +24,20 @@ EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="$REPO_ROOT/skills/$SKILL_NAME"
-DEST_DIR="${HOME}/.claude/skills/${SKILL_NAME}"
 CURSOR_PROJECT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project)
       [[ $# -ge 2 ]] || { echo "Missing value for --project" >&2; exit 1; }
-      DEST_DIR="$2/.claude/skills/${SKILL_NAME}"
       CURSOR_PROJECT="$2"
       shift 2
       ;;
     --dest)
       [[ $# -ge 2 ]] || { echo "Missing value for --dest" >&2; exit 1; }
-      DEST_DIR="$2"
       shift 2
+      echo "--dest option is deprecated. Use --project instead." >&2
+      exit 1
       ;;
     --link)
       MODE="link"
@@ -77,73 +75,100 @@ require_dir() {
   }
 }
 
-require_dir "$SOURCE_DIR"
-require_file "$SOURCE_DIR/SKILL.md"
-require_file "$SOURCE_DIR/INSTALL.md"
-require_file "$SOURCE_DIR/LICENSE"
-require_dir "$SOURCE_DIR/phases"
-require_dir "$SOURCE_DIR/templates"
-require_dir "$SOURCE_DIR/scripts"
+install_skill() {
+  local SKILL_NAME="$1"
+  local SOURCE_DIR="$REPO_ROOT/skills/$SKILL_NAME"
+  local DEST_DIR="${HOME}/.claude/skills/${SKILL_NAME}"
 
-mkdir -p "$(dirname "$DEST_DIR")"
+  require_dir "$SOURCE_DIR"
+  require_file "$SOURCE_DIR/SKILL.md"
 
-BACKUP_ROOT="$(dirname "$DEST_DIR")/.skill-backups/$SKILL_NAME"
+  # vllm-optimize uses README.md, inferencex-optimize uses INSTALL.md
+  if [[ "$SKILL_NAME" == "inferencex-optimize" ]]; then
+    require_file "$SOURCE_DIR/INSTALL.md"
+    require_file "$SOURCE_DIR/LICENSE"
+    require_dir "$SOURCE_DIR/phases"
+    require_dir "$SOURCE_DIR/templates"
+    require_dir "$SOURCE_DIR/scripts"
+  else
+    require_file "$SOURCE_DIR/README.md"
+    require_file "$SOURCE_DIR/RUNTIME.md"
+    require_dir "$SOURCE_DIR/phases"
+  fi
 
-if [[ -e "$DEST_DIR" || -L "$DEST_DIR" ]]; then
-  TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-  mkdir -p "$BACKUP_ROOT"
-  BACKUP_PATH="${BACKUP_ROOT}/${TIMESTAMP}"
-  mv "$DEST_DIR" "$BACKUP_PATH"
-  echo "Backed up existing install to: $BACKUP_PATH"
-fi
+  mkdir -p "$(dirname "$DEST_DIR")"
 
-if [[ "$MODE" == "link" ]]; then
-  ln -s "$SOURCE_DIR" "$DEST_DIR"
-  INSTALL_MODE_MESSAGE="symlinked"
-else
-  mkdir -p "$DEST_DIR"
-  cp -R "$SOURCE_DIR"/. "$DEST_DIR"/
-  INSTALL_MODE_MESSAGE="copied"
-fi
+  BACKUP_ROOT="$(dirname "$DEST_DIR")/.skill-backups/$SKILL_NAME"
 
-# ── Cursor skill + rule install ───────────────────────────────────────
+  if [[ -e "$DEST_DIR" || -L "$DEST_DIR" ]]; then
+    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_ROOT"
+    BACKUP_PATH="${BACKUP_ROOT}/${TIMESTAMP}"
+    mv "$DEST_DIR" "$BACKUP_PATH"
+    echo "Backed up existing install to: $BACKUP_PATH"
+  fi
 
-CURSOR_BASE="${CURSOR_PROJECT:-$HOME}"
-CURSOR_SKILL_DIR="${CURSOR_BASE}/.cursor/skills/${SKILL_NAME}"
-mkdir -p "$(dirname "$CURSOR_SKILL_DIR")"
-ln -sfn "$DEST_DIR" "$CURSOR_SKILL_DIR"
+  if [[ "$MODE" == "link" ]]; then
+    ln -s "$SOURCE_DIR" "$DEST_DIR"
+    echo "  Linked: $SKILL_NAME -> $SOURCE_DIR"
+  else
+    mkdir -p "$DEST_DIR"
+    cp -R "$SOURCE_DIR"/. "$DEST_DIR"/
+    echo "  Copied: $SKILL_NAME -> $DEST_DIR"
+  fi
 
-CURSOR_RULE_DEST="${CURSOR_BASE}/.cursor/rules/inferencex-optimize.mdc"
+  # Cursor skill symlink
+  CURSOR_BASE="${CURSOR_PROJECT:-$HOME}"
+  CURSOR_SKILL_DIR="${CURSOR_BASE}/.cursor/skills/${SKILL_NAME}"
+  mkdir -p "$(dirname "$CURSOR_SKILL_DIR")"
+  ln -sfn "$DEST_DIR" "$CURSOR_SKILL_DIR"
 
-# Extract SKILL.md body (everything after the closing --- of frontmatter)
-SKILL_BODY="$(awk '/^---/{if(++c==2){found=1;next}} found' "${DEST_DIR}/SKILL.md")"
+  # Cursor rule generation
+  CURSOR_RULE_DEST="${CURSOR_BASE}/.cursor/rules/${SKILL_NAME}.mdc"
+  
+  # Extract SKILL.md body (everything after the closing --- of frontmatter)
+  SKILL_BODY="$(awk '/^---/{if(++c==2){found=1;next}} found' "${DEST_DIR}/SKILL.md")"
 
-# Rewrite relative markdown links to absolute paths into the installed skill dir
-SKILL_BODY_ABS="$(printf '%s\n' "$SKILL_BODY" \
-  | sed "s|](INTAKE.md)|](${DEST_DIR}/INTAKE.md)|g" \
-  | sed "s|](RUNTIME.md)|](${DEST_DIR}/RUNTIME.md)|g" \
-  | sed "s|](EXAMPLES.md)|](${DEST_DIR}/EXAMPLES.md)|g" \
-  | sed "s|](phases/|](${DEST_DIR}/phases/|g")"
+  # Rewrite relative markdown links to absolute paths into the installed skill dir
+  SKILL_BODY_ABS="$(printf '%s\n' "$SKILL_BODY" \
+    | sed "s|](INTAKE.md)|](${DEST_DIR}/INTAKE.md)|g" \
+    | sed "s|](RUNTIME.md)|](${DEST_DIR}/RUNTIME.md)|g" \
+    | sed "s|](README.md)|](${DEST_DIR}/README.md)|g" \
+    | sed "s|](EXAMPLES.md)|](${DEST_DIR}/EXAMPLES.md)|g" \
+    | sed "s|](phases/|](${DEST_DIR}/phases/|g")"
 
-MDC_CONTENT="---
+  # Generate description based on skill name
+  local DESC=""
+  if [[ "$SKILL_NAME" == "inferencex-optimize" ]]; then
+    DESC="InferenceX benchmark and profiling workflow skill. Use this rule when the user asks to benchmark, profile, or optimize a model with InferenceX, names a config key, or asks to run any phase of the InferenceX pipeline."
+  else
+    DESC="vLLM benchmark and profiling workflow skill. Use this rule when the user asks to benchmark or profile a model with vLLM, run vLLM inference optimization, or analyze GPU kernel performance."
+  fi
+
+  MDC_CONTENT="---
 description: >-
-  InferenceX benchmark and profiling workflow skill. Use this rule when the
-  user asks to benchmark, profile, or optimize a model with InferenceX, names
-  a config key (e.g. qwen3.5-bf16-mi355x-sglang), or asks to run any phase
-  of the InferenceX pipeline.
+  ${DESC}
 alwaysApply: false
 ---
 ${SKILL_BODY_ABS}"
 
-mkdir -p "$(dirname "$CURSOR_RULE_DEST")"
-printf '%s\n' "$MDC_CONTENT" > "$CURSOR_RULE_DEST"
+  mkdir -p "$(dirname "$CURSOR_RULE_DEST")"
+  printf '%s\n' "$MDC_CONTENT" > "$CURSOR_RULE_DEST"
+  echo "  Rule:   $CURSOR_RULE_DEST"
+}
 
-cat <<EOF
-Installed skill: $SKILL_NAME
-  Skill dir:    $DEST_DIR
-  Cursor skill: $CURSOR_SKILL_DIR -> $DEST_DIR
-  Cursor rule:  $CURSOR_RULE_DEST
-  Mode:         $INSTALL_MODE_MESSAGE
+# Install each skill
+echo "Installing skills..."
+for SKILL_NAME in "${SKILL_NAMES[@]}"; do
+  echo ""
+  echo "=== $SKILL_NAME ==="
+  install_skill "$SKILL_NAME"
+done
 
-Compatible with: Claude Code, OpenCode, Cursor
-EOF
+echo ""
+echo "============================================"
+echo "  Installation Complete"
+echo "============================================"
+echo "Installed skills: ${SKILL_NAMES[*]}"
+echo ""
+echo "Compatible with: Claude Code, OpenCode, Cursor"
