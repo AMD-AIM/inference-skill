@@ -2,16 +2,17 @@
 
 Standalone distribution repo for the `inferencex-optimize` skill.
 
-This repo packages the InferenceX benchmark and profiling workflow as a reusable skill that can be installed once and used from both:
+This repo packages the InferenceX benchmark and profiling workflow as a reusable skill that can be installed once and used from:
 
 - `Claude Code`
 - `OpenCode`
+- `Cursor`
 
-Both tools discover skills from Claude-compatible install locations, so one install target works for both.
+Claude Code and OpenCode discover skills from Claude-compatible install locations. Cursor uses a generated `.mdc` rule. One `./install.sh` run sets up all three.
 
 ## Guide
 
-For verified OpenCode usage and standalone validation commands, see [GUIDE.md](GUIDE.md).
+For verified OpenCode and Cursor usage, see [GUIDE.md](GUIDE.md).
 
 ## Intended UX
 
@@ -73,21 +74,17 @@ Create a linked install for local development:
 ./install.sh --project /path/to/project --link
 ```
 
-## Install target
+## Install targets
 
 Global install writes to:
 
-```bash
-~/.claude/skills/inferencex-optimize
+```text
+~/.claude/skills/inferencex-optimize       # skill files (Claude Code + OpenCode)
+~/.cursor/skills/inferencex-optimize       # symlink (Cursor native skill)
+~/.cursor/rules/inferencex-optimize.mdc    # Cursor agent-requested rule
 ```
 
-Project install writes to:
-
-```bash
-/path/to/project/.claude/skills/inferencex-optimize
-```
-
-OpenCode discovers those same Claude-compatible paths, so no separate OpenCode-specific install step is required.
+Project install writes to the same three locations under the project directory.
 
 ## Source of truth
 

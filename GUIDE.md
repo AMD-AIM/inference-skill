@@ -139,3 +139,56 @@ TMP_HOME=$(mktemp -d)
 HOME="$TMP_HOME" ./install.sh
 HOME="$TMP_HOME" opencode debug skill
 ```
+
+## 7. Cursor usage
+
+After `./install.sh`, a Cursor rule is installed at:
+
+```bash
+~/.cursor/rules/inferencex-optimize.mdc
+```
+
+### Verify the rule is installed
+
+```bash
+ls ~/.cursor/rules/inferencex-optimize.mdc
+head -6 ~/.cursor/rules/inferencex-optimize.mdc
+```
+
+Expected frontmatter:
+
+```yaml
+---
+description: >-
+  InferenceX benchmark and profiling workflow skill. Use this rule when...
+alwaysApply: false
+---
+```
+
+### Verify path rewrites
+
+All file references in the rule should be absolute paths, not relative:
+
+```bash
+grep -E "\]\(.*\.md\)" ~/.cursor/rules/inferencex-optimize.mdc | head -5
+```
+
+Every match should contain the full installed skill path (e.g., `~/.claude/skills/inferencex-optimize/INTAKE.md`), not bare filenames.
+
+### Usage in Cursor
+
+The rule is **Agent Requested** — Cursor's AI loads it automatically when you ask about InferenceX benchmarking, profiling, or optimization in Composer (agent mode).
+
+Example prompt in Cursor Composer:
+
+```text
+Use inferencex-optimize for qwen3.5-bf16-mi355x-sglang.
+```
+
+Cursor's agent will recognize the request, pull in the rule, and follow the guided setup flow from `SKILL.md`.
+
+The installed rule embeds absolute paths to `INTAKE.md`, `RUNTIME.md`, and the phase docs at `~/.claude/skills/inferencex-optimize/`. The agent reads them on demand as the workflow progresses.
+
+### Note on the pre-existing `inferencex-optimizer.mdc`
+
+If you previously had a manually written rule at `~/.cursor/rules/inferencex-optimizer.mdc` (note the `-r` suffix), the installer does not touch it. You may want to disable or delete that older rule to avoid duplicate context. The new `inferencex-optimize.mdc` covers the full workflow including the optimize phases (6-9) that the older rule omitted.
