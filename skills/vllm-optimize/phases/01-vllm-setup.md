@@ -98,7 +98,21 @@ PROFILE_DIR=${PROFILE_DIR:-$OUTPUT_DIR/profiles}
 mkdir -p "$OUTPUT_DIR" "$PROFILE_DIR"
 ```
 
-### 4. Ensure Model is Available
+### 4. Validate Model Name (CRITICAL)
+
+**⚠️ IMPORTANT**: You MUST use the exact model name provided by the user. Do NOT guess, infer, or substitute a different model name without explicit user confirmation.
+
+If the user provides an ambiguous or incorrect model name (e.g., "GLM-4.7-Flash" instead of the exact HuggingFace model ID), you MUST:
+
+1. Ask the user for the exact HuggingFace model ID
+2. Or search for the correct model ID before proceeding
+3. NEVER assume a model name - always confirm with user
+
+Example:
+- User says: "GLM-4.7-Flash" → Must ask user for exact model ID like `THUDM/glm-4-9b-chat`
+- User says: "Qwen3.5-35B" → Must ask for exact model ID
+
+### 5. Ensure Model is Available
 
 ```bash
 # Download/cache model if not present (safe operation)
@@ -135,7 +149,7 @@ except Exception as e:
 PYEOF
 ```
 
-### 5. Start vLLM Server
+### 6. Start vLLM Server
 
 **For benchmark-only mode (NO profiling):**
 ```bash
@@ -170,7 +184,7 @@ python3 -m vllm.entrypoints.openai.api_server \
 
 **⚠️ CRITICAL**: The `--profiler-config.*` flags MUST be present at server startup. If you start without these flags, the profiler API endpoints will NOT be available.
 
-### 6. Wait for Server Ready
+### 7. Wait for Server Ready
 
 ```bash
 for i in {1..50}; do
@@ -183,7 +197,7 @@ for i in {1..50}; do
 done
 ```
 
-### 7. Verify Server
+### 8. Verify Server
 
 ```bash
 curl -s -H "Authorization: Bearer dummy" http://localhost:8000/v1/models | \
@@ -192,7 +206,7 @@ print('Status: Ready' if d.get('data') else 'Status: Failed')
 print('Model:', d.get('data',[{}])[0].get('id','unknown'))"
 ```
 
-### 8. Verify Profiler API (if started with profiling enabled)
+### 9. Verify Profiler API (if started with profiling enabled)
 
 ```bash
 # Test profiler endpoints

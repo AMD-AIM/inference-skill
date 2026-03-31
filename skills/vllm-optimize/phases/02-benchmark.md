@@ -3,6 +3,15 @@
 ## Objective
 Run vLLM benchmark with configurable concurrency sweep and measure performance metrics.
 
+## CRITICAL: Model Name Must Match User Input
+
+**⚠️ IMPORTANT**: The benchmark script MUST use the exact model name that was validated in Phase 1. Do NOT hardcode or guess model names. The model name should be passed via environment variable `MODEL` which is set from user input.
+
+```bash
+# The model name MUST come from user input, not be guessed
+MODEL="THUDM/glm-4-9b-chat"  # Example: exact HuggingFace model ID from user
+```
+
 ## Steps
 
 ### 1. Prepare Test Prompts
@@ -144,8 +153,8 @@ print(f"\nResults saved to: {output_path}")
 ```json
 {
   "meta": {
-    "model": "THUDM/glm-4-9b-chat",
-    "model_name": "GLM-4.7-Flash",
+    "model": "${MODEL}",  <!-- Must be exact HuggingFace model ID from user input -->
+    "model_name": "${MODEL_DISPLAY_NAME}",  <!-- Optional: friendly name from user -->
     "input_tokens": 1024,
     "output_tokens": 1024,
     "framework": "vLLM",
