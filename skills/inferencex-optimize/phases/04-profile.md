@@ -114,6 +114,28 @@ with open(path, 'w') as f:
     f.write(content)
 print('Patched gpu_worker.py: profiler enabled for rank 0 only')
 "
+
+    # Force-mount profiler routes (vLLM v0.18+ may skip mounting if profiler_config is None at import time).
+    # Without this, /start_profile and /stop_profile return 404 and benchmark_lib.sh profiling fails.
+    docker exec "$CONTAINER_NAME" python3 -c "
+import glob
+
+paths = glob.glob('/usr/local/lib/python3.*/dist-packages/vllm/entrypoints/serve/profile/api_router.py')
+if not paths:
+    print('INFO: vLLM profiler api_router.py not found — routes may be mounted differently in this version')
+else:
+    path = paths[0]
+    with open(path) as f:
+        content = f.read()
+    old = 'if app.state.args.profiler_config'
+    if old in content:
+        content = content.replace(old, 'if True  # force-mount profiler routes (patched by inferencex-optimize)', 1)
+        with open(path, 'w') as f:
+            f.write(content)
+        print(f'Patched {path}: profiler routes unconditionally mounted')
+    else:
+        print('INFO: profiler_config guard not found — routes may already be unconditional')
+"
 fi
 ```
 
@@ -192,6 +214,15 @@ transition = int(0.9 * total_iters)
 max_iters = 256
 delay_iters = max(0, transition - max_iters // 2)
 
+# Safety cap: if delay + max_iters exceeds 80% of total, the profiler
+# won't have headroom to flush traces before the workload ends.
+# This fires for small smoke runs (low conc, few prompts) but not
+# production-scale runs. Reposition to capture the middle of the workload.
+if delay_iters + max_iters > 0.8 * total_iters:
+    delay_iters = max(0, int(0.5 * total_iters) - max_iters // 2)
+    print(f'Safety cap applied: delay_iters reduced to {delay_iters} '
+          f'(total_iters={total_iters} too small for original delay)')
+
 print(f'Computed profiler iterations: delay={delay_iters}, max={max_iters}  '
       f'(OSL={osl}, CONC={conc}, RANDOM_RANGE_RATIO={rrr}, '
       f'avg_osl={avg_osl:.0f}, total_est={total_iters}, transition_est={transition})')
@@ -215,12 +246,17 @@ content = re.sub(r'--enforce-eager\s+', '', content)
 content = re.sub(r'--profiler-config\.\S+\s+\S+\s*', '', content)
 content = re.sub(r'--ignore_frontend\s+\S+\s*', '', content)
 new_content = content.replace('vllm serve ', 'vllm serve ' + profiler_args + ' ', 1)
+if new_content == content:
+    # Fallback: regex for lines with extra whitespace or env var prefixes before vllm serve
+    new_content = re.sub(r'(vllm\s+serve\s)', r'\1' + profiler_args + ' ', content, count=1)
 if new_content != content:
     with open(target, 'w') as fh:
         fh.write(new_content)
     print(f'Patched {target} with --profiler-config.* args')
 else:
-    print(f'No "vllm serve" found in {target}, nothing to patch')
+    print(f'ERROR: Could not inject profiler args into {target}')
+    print('Expected "vllm serve" command not found. Manual patching required.')
+    sys.exit(1)
 PYEOF
 ```
 
@@ -307,6 +343,25 @@ print('Disabled num_prompts capping — benchmark will use original num_prompts 
 ### 4. Run Each Profile via `docker exec`
 For each selected config, run the benchmark script with profiling env vars. If GPUs were manually specified, restrict visibility; otherwise use all GPUs available in the container.
 
+**4a. Pre-run cleanup — kill any stale server processes from previous failed runs:**
+A failed profiling attempt can leave a vLLM/SGLang/TRT-LLM server running inside the container, consuming GPU memory and causing OOM on the next attempt. Always clean up before starting:
+```bash
+docker exec "$CONTAINER_NAME" bash -c '
+    pkill -f "vllm.entrypoints" 2>/dev/null || true
+    pkill -f "sglang.launch_server" 2>/dev/null || true
+    pkill -f "trtllm-serve" 2>/dev/null || true
+    sleep 2
+    # Log GPU memory state
+    if command -v rocm-smi &>/dev/null; then
+        echo "GPU memory before profiling:"
+        rocm-smi --showmeminfo vram 2>/dev/null | grep -E "Used|Total" | head -4
+    elif command -v nvidia-smi &>/dev/null; then
+        echo "GPU memory before profiling:"
+        nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null
+    fi
+' || true
+```
+
 **CRITICAL — use `CUDA_VISIBLE_DEVICES`, NEVER `ROCR_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES`.**
 `ROCR_VISIBLE_DEVICES=3` re-indexes GPU 3 as device 0 at the ROCm runtime level. The benchmark scripts then copy `ROCR_VISIBLE_DEVICES` to `HIP_VISIBLE_DEVICES` with the same value (`3`), but HIP only sees device 0 after ROCR filtering, causing `RuntimeError: No HIP GPUs are available`. `CUDA_VISIBLE_DEVICES` works correctly on both AMD (ROCm/HIP) and NVIDIA without triggering re-indexing conflicts.
 
@@ -374,6 +429,37 @@ fi
 
 IMPORTANT: The profile run must **not** be silent. Stream stdout/stderr to both the terminal and `DOCKER_RUN_LOG`, and emit heartbeat messages while the run is still active so the user never sees a blank terminal during a long profiling step.
 
+### 4½. Wait for Trace Flush
+After the benchmark exits, the profiler may still be writing traces to disk (100MB–1GB+ for large models with `record_shapes` and `with_stack` enabled). Wait until the profiles directory size stabilizes before proceeding to container cleanup. This applies to both vLLM and SGLang — both write torch traces asynchronously.
+```bash
+echo "Waiting for trace files to finish writing..."
+PROF_DIR="{{REPO_DIR}}/profiles"
+STABLE_COUNT=0
+PREV_SIZE=""
+MAX_WAIT=60
+WAITED=0
+while [ $STABLE_COUNT -lt 3 ] && [ $WAITED -lt $MAX_WAIT ]; do
+    sleep 5
+    WAITED=$((WAITED + 5))
+    CURR_SIZE=$(du -sb "$PROF_DIR" 2>/dev/null | cut -f1)
+    if [ -z "$CURR_SIZE" ]; then
+        echo "[flush-wait] No profiles directory found, skipping"
+        break
+    fi
+    if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
+        STABLE_COUNT=$((STABLE_COUNT + 1))
+        echo "[flush-wait] Size stable at $(numfmt --to=iec $CURR_SIZE 2>/dev/null || echo ${CURR_SIZE}B), count=$STABLE_COUNT/3"
+    else
+        STABLE_COUNT=0
+        echo "[flush-wait] Still writing: $(numfmt --to=iec ${PREV_SIZE:-0} 2>/dev/null || echo ${PREV_SIZE:-0}B) -> $(numfmt --to=iec $CURR_SIZE 2>/dev/null || echo ${CURR_SIZE}B)"
+    fi
+    PREV_SIZE="$CURR_SIZE"
+done
+if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "WARNING: Trace may still be writing after ${MAX_WAIT}s — proceeding anyway"
+fi
+```
+
 ### 5. Clean Up Container
 After **all** profiling runs are complete, stop and remove the container:
 ```bash
@@ -404,10 +490,15 @@ if [ -f "{{REPO_DIR}}/profiles/profiler_out_0.txt" ]; then
     echo "Collected profiler_out_0.txt"
 fi
 
-# Copy benchmark result JSONs from the repo to the output results directory
+# Copy benchmark result JSONs from the repo to the output results directory.
+# InferenceX scripts use --result-dir /workspace/ (repo root), not /workspace/results/.
+# Use the profile result filename to avoid collecting unrelated repo JSON files.
 mkdir -p "{{OUTPUT_DIR}}/results"
-cp {{REPO_DIR}}/results/*.json "{{OUTPUT_DIR}}/results/" 2>/dev/null || true
-rm -f {{REPO_DIR}}/results/*.json 2>/dev/null || true
+cp {{REPO_DIR}}/${PROFILE_RESULT}*.json "{{OUTPUT_DIR}}/results/" 2>/dev/null || true
+rm -f {{REPO_DIR}}/${PROFILE_RESULT}*.json 2>/dev/null || true
+# Fallback: also check results/ subdirectory
+cp {{REPO_DIR}}/results/${PROFILE_RESULT}*.json "{{OUTPUT_DIR}}/results/" 2>/dev/null || true
+rm -f {{REPO_DIR}}/results/${PROFILE_RESULT}*.json 2>/dev/null || true
 
 echo "Collected trace files:"
 ls -lh "{{PROFILE_DIR}}/"

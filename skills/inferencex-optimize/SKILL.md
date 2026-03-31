@@ -1,7 +1,7 @@
 ---
 name: inferencex-optimize
 description: "Run the InferenceX benchmark and profiling workflow for a config key. When the user names a model or config key, immediately start a fast guided setup flow with batched choice questions, then execute the workflow."
-compatibility: claude-code, opencode
+compatibility: claude-code, opencode, cursor
 metadata:
   workflow: inferencex
   audience: performance-engineers
@@ -19,6 +19,7 @@ metadata:
 - If the runtime does not provide a question tool, ask concise numbered choices in normal chat.
 - Ask questions in grouped batches, not as a drip-feed of one question at a time.
 - Keep the user informed with explicit progress updates so they always know the current stage and next step.
+- Inform user about GEAK availability during setup when running in optimize or optimize-only mode.
 
 ## First-turn latency rule
 
@@ -81,8 +82,10 @@ Read these in this order:
 - `benchmark`: `env -> config -> benchmark -> benchmark-analyze`
 - `profile`: `env -> config -> profile -> profile-analyze`
 - `benchmark+profile`: same phase set as `full`
+- `optimize`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`. Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
+- `optimize-only`: `env -> config -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing profile analysis artifacts from a prior run). Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
 
-Choose the narrowest mode that matches the user's goal. For a smoke run, prefer a narrow configuration and confirm before widening to a full sweep.
+Choose the narrowest mode that matches the user's goal. For a smoke run, prefer a narrow configuration and confirm before widening to a full sweep. For optimization, prefer `optimize` for a fresh end-to-end run. Use `optimize-only` when profile data already exists and the user wants to skip re-profiling.
 
 ## References
 
@@ -95,3 +98,7 @@ Choose the narrowest mode that matches the user's goal. For a smoke run, prefer 
 - [Phase 3: Benchmark Analysis](phases/03-benchmark-analyze.md)
 - [Phase 4: Profiling](phases/04-profile.md)
 - [Phase 5: Profile Analysis](phases/05-profile-analyze.md)
+- [Phase 6: Problem Generation](phases/06-problem-generate.md)
+- [Phase 7: Kernel Optimization](phases/07-kernel-optimize.md)
+- [Phase 8: Integration & E2E Benchmark](phases/08-integration.md)
+- [Phase 9: Final Report](phases/09-report-generate.md)

@@ -76,6 +76,8 @@ Before asking the form, say one natural sentence like:
   - `Benchmark only`: `Run benchmark and benchmark analysis only`
   - `Profile only`: `Run profile and profile analysis only`
   - `Full workflow`: `Run the broader benchmark plus profiling workflow`
+  - `Optimize workflow`: `Full workflow including kernel optimization (benchmark, profile, optimize, and report)`
+  - `Optimize from existing profile`: `Run kernel optimization using existing profiling data`
   - `Resume existing output`: `Continue or restart from an existing output directory`
 
 Map these to:
@@ -85,6 +87,8 @@ Map these to:
 - `Benchmark only` -> `mode=benchmark`
 - `Profile only` -> `mode=profile`
 - `Full workflow` -> `mode=full`
+- `Optimize workflow` -> `mode=optimize`
+- `Optimize from existing profile` -> `mode=optimize-only`, ask for existing output path
 - `Resume existing output` -> ask for an output path, then ask how to continue
 
 ### Question 2
@@ -121,6 +125,10 @@ Ask a short follow-up only for missing concrete values:
   - `benchmark-analyze`
   - `profile`
   - `profile-analyze`
+  - `problem-generate`
+  - `kernel-optimize`
+  - `integration`
+  - `report-generate`
 
 If multiple concrete follow-ups are needed, batch them into one short message instead of asking them one by one.
 
@@ -233,6 +241,28 @@ Only if profiling is included, ask the extra choices that materially affect the 
   - `Enable eager mode`
   - `Reuse existing profile artifacts if present`
   - `Always start profile collection fresh`
+
+### Optimization extras
+
+Only if mode is `optimize` or `optimize-only`, ask the extra choices:
+
+- `header`: `Optimize`
+- `question`: `What optimization scope should I use?`
+- `options`:
+  - `Default optimization settings`: `Auto-detect GEAK availability; optimize all bottleneck kernels above threshold; fall back to manual if GEAK is unavailable`
+  - `Focus on fused kernels only`: `Only generate fused operator problems (residual+norm, SwiGLU); uses GEAK auto mode`
+  - `GEAK full mode`: `Use GEAK for both Triton (simple mode) and HIP/CK (kernel-url mode) kernels`
+  - `GEAK Triton only`: `Use GEAK simple mode for Triton/ATen kernels only; skip HIP/CK optimization`
+  - `Manual optimization only`: `Write optimized kernels manually without GEAK`
+  - `Skip integration benchmark`: `Generate and optimize kernels only, skip E2E benchmark`
+
+Map these to:
+- `Default optimization settings` -> `GEAK_MODE=auto`
+- `Focus on fused kernels only` -> `GEAK_MODE=auto, OPTIMIZE_SCOPE=fused_only`
+- `GEAK full mode` -> `GEAK_MODE=full`
+- `GEAK Triton only` -> `GEAK_MODE=triton_only`
+- `Manual optimization only` -> `GEAK_MODE=manual`
+- `Skip integration benchmark` -> `SKIP_INTEGRATION=true`
 
 ## Final confirmation
 

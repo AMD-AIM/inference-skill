@@ -164,8 +164,12 @@ fi
 IMPORTANT: The docker exec must **not** be silent. Stream stdout/stderr to both the terminal and `DOCKER_RUN_LOG`, and emit heartbeat messages while the run is still active so the user never sees a blank terminal during a long benchmark.
 
 After each benchmark run, copy result files from the repo directory to `{{OUTPUT_DIR}}/results/`.
-Then remove the copied result files from the repo directory to keep it clean:
+InferenceX benchmark scripts use `--result-dir /workspace/` which writes to the repo root, not a `results/` subdirectory. Check both locations and clean up:
 ```bash
+# Collect from repo root (where --result-dir /workspace/ writes)
+cp {{REPO_DIR}}/${RESULT_FILENAME}*.json "{{OUTPUT_DIR}}/results/" 2>/dev/null || true
+rm -f {{REPO_DIR}}/${RESULT_FILENAME}*.json 2>/dev/null || true
+# Fallback: also check results/ subdirectory
 cp {{REPO_DIR}}/results/${RESULT_FILENAME}*.json "{{OUTPUT_DIR}}/results/" 2>/dev/null || true
 rm -f {{REPO_DIR}}/results/${RESULT_FILENAME}*.json 2>/dev/null || true
 ```

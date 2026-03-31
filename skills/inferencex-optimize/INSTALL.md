@@ -1,82 +1,61 @@
 # Install InferenceX Optimize Skill
 
-This skill is designed to work in both:
-
-- `Claude Code`
-- `OpenCode`
-
-The shared install target is `~/.claude/skills/inferencex-optimize/`, which both tools can discover.
+This skill works in **Claude Code**, **OpenCode**, and **Cursor**.
 
 ## One-command install
 
-From the `inference-skill` repo root:
-
 ```bash
-./install.sh
+git clone https://github.com/AMD-AIM/inference-skill.git
+cd inference-skill
+bash install.sh
 ```
 
-That command installs a self-contained copy of this skill into:
+This installs the skill to three locations:
 
-```bash
-~/.claude/skills/inferencex-optimize
-```
+| Target | Path | Purpose |
+|--------|------|---------|
+| Claude Code / OpenCode | `~/.claude/skills/inferencex-optimize/` | Skill files (copy or symlink) |
+| Cursor skill | `~/.cursor/skills/inferencex-optimize/` | Symlink to the above |
+| Cursor rule | `~/.cursor/rules/inferencex-optimize.mdc` | Agent-requested rule for discovery |
 
 ## Project-local install
 
-To install the skill into a specific project instead of your home directory:
-
 ```bash
-./install.sh --project /path/to/project
+bash install.sh --project /path/to/project
 ```
 
-That writes to:
-
-```bash
-/path/to/project/.claude/skills/inferencex-optimize
-```
+Writes to `<project>/.claude/skills/`, `<project>/.cursor/skills/`, and `<project>/.cursor/rules/`.
 
 ## Linked dev install
 
-If you want the target to track this repo checkout during development:
-
 ```bash
-./install.sh --project /path/to/project --link
+bash install.sh --link
 ```
+
+Symlinks instead of copying, so edits in the repo checkout are immediately reflected.
 
 ## What gets installed
 
-The installer creates a standalone skill package with:
-
-- `SKILL.md`
-- `INTAKE.md`
-- `RUNTIME.md`
-- `EXAMPLES.md`
-- `INSTALL.md`
-- `LICENSE`
-- `phases/*.md`
+- `SKILL.md`, `INTAKE.md`, `RUNTIME.md`, `EXAMPLES.md`, `INSTALL.md`, `LICENSE`
+- `phases/*.md` -- phase instructions
 - `templates/agent-config.md`
-- `scripts/*.py`
+- `scripts/*.py` -- `classify_kernel.py`, `analyze_fusion_inferencex.py`, `generate_problems_inferencex.py`, and others
 - `resources/TraceLens-internal.tar.gz` when present
 
-## Reinstall / upgrade behavior
+## Reinstall / upgrade
 
-- If an older `inferencex-optimize` skill exists at the destination, the installer moves it to a timestamped backup under `.skill-backups/` before replacing it.
-- The installer is idempotent for repeated upgrades from the same repo checkout.
+If an older install exists, the installer moves it to a timestamped backup under `.skill-backups/` before replacing it. Repeated installs are idempotent.
 
-## Discovery notes
-
-- Claude Code discovers skills from `~/.claude/skills/` and project `.claude/skills/`.
-- OpenCode also discovers Claude-compatible skills from those same locations.
-
-## Verify install
-
-After install, confirm the target exists:
+## Verify
 
 ```bash
-ls ~/.claude/skills/inferencex-optimize
+ls ~/.claude/skills/inferencex-optimize/SKILL.md
+ls ~/.cursor/skills/inferencex-optimize/SKILL.md
+ls ~/.cursor/rules/inferencex-optimize.mdc
 ```
 
-For OpenCode, the skill will appear through the native `skill` tool.
-For Claude Code, the skill is available as a normal installed skill and can be loaded when relevant.
+## Discovery
 
-For verified OpenCode usage examples, see [`GUIDE.md`](../../GUIDE.md).
+- **Claude Code**: discovers skills from `~/.claude/skills/` and project `.claude/skills/`.
+- **OpenCode**: discovers the same Claude-compatible skill paths.
+- **Cursor**: discovers skills from `~/.cursor/skills/` (native skill) AND from `.cursor/rules/*.mdc` (agent-requested rule). Both are installed by `install.sh`.
