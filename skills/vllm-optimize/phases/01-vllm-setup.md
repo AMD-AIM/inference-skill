@@ -3,6 +3,12 @@
 ## Objective
 Start vLLM server with required configuration for benchmark and profiling.
 
+## CRITICAL: Profiler Enablement
+
+**IMPORTANT**: To use torch profiler, you MUST start vLLM with `--profiler-config.*` flags. Without these flags, the `/start_profile` and `/stop_profile` API endpoints will NOT be registered, and you will get "404 Not Found" errors.
+
+**This is a common issue** - the profiler API only becomes available when the server starts with profiling enabled.
+
 ## Steps
 
 ### 1. Environment Validation
@@ -131,7 +137,7 @@ PYEOF
 
 ### 5. Start vLLM Server
 
-**For benchmark-only mode:**
+**For benchmark-only mode (NO profiling):**
 ```bash
 python3 -m vllm.entrypoints.openai.api_server \
     --model "$MODEL" \
@@ -143,7 +149,7 @@ python3 -m vllm.entrypoints.openai.api_server \
     > /tmp/vllm.log 2>&1 &
 ```
 
-**For profiling mode:**
+**For profiling mode (REQUIRED for profiler API):**
 ```bash
 python3 -m vllm.entrypoints.openai.api_server \
     --model "$MODEL" \
@@ -161,6 +167,8 @@ python3 -m vllm.entrypoints.openai.api_server \
     --profiler-config.max_iterations ${PROFILE_ITERATIONS:-128} \
     > /tmp/vllm.log 2>&1 &
 ```
+
+**⚠️ CRITICAL**: The `--profiler-config.*` flags MUST be present at server startup. If you start without these flags, the profiler API endpoints will NOT be available.
 
 ### 6. Wait for Server Ready
 
@@ -184,6 +192,30 @@ print('Status: Ready' if d.get('data') else 'Status: Failed')
 print('Model:', d.get('data',[{}])[0].get('id','unknown'))"
 ```
 
+### 8. Verify Profiler API (if started with profiling enabled)
+
+```bash
+# Test profiler endpoints
+echo "Testing /start_profile..."
+curl -s -X POST http://localhost:8000/start_profile -H "Authorization: Bearer dummy"
+
+echo ""
+echo "Testing /stop_profile..."
+curl -s -X POST http://localhost:8000/stop_profile -H "Authorization: Bearer dummy"
+```
+
+If these return `{"detail":"Not Found"}`, the server was NOT started with profiling flags. You must restart with `--profiler-config.*` flags.
+
+## Troubleshooting
+
+### Profiler API returns 404 Not Found
+- **Cause**: Server started without `--profiler-config.*` flags
+- **Solution**: Restart server with profiling flags (see Section 5 above)
+
+### Only seeing "execute_context" in trace analysis
+- **Cause**: These are Python profiler annotations, NOT actual GPU kernels
+- **Solution**: Use EXCLUDE_PATTERNS to filter them out in analysis phase
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -199,5 +231,9 @@ print('Model:', d.get('data',[{}])[0].get('id','unknown'))"
 ## Completion
 
 Server running at http://localhost:8000 with OpenAI-compatible API.
+
+If started with profiling flags, the profiler API is available at:
+- `/start_profile` - Start profiling
+- `/stop_profile` - Stop profiling and save trace
 
 Next: Proceed to Phase 2 (Benchmark)
