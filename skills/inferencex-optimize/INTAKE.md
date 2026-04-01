@@ -4,14 +4,14 @@ Use this file to control the user interaction flow.
 
 ## Goal
 
-The intended user experience is:
+Target UX:
 
-1. The user names a model or config key.
-2. You ask 2-3 short rounds of setup questions.
-3. You summarize the selected plan.
-4. You start the workflow.
+1. User names a model or config key.
+2. Agent asks 2-3 short setup rounds (batched when possible).
+3. Agent summarizes the plan.
+4. Agent starts workflow after confirmation.
 
-The user should not need to manually construct an `opencode inferencex-optimize ...` command.
+The user should never need to manually construct an `opencode inferencex-optimize ...` command.
 
 ## User-facing language rules
 
@@ -21,9 +21,9 @@ The user should not need to manually construct an `opencode inferencex-optimize 
 - Prefer choice-based questions over open-ended prompts.
 - Prefer the native `question` tool when available.
 - If the runtime has no question tool, ask the same questions in compact numbered form.
-- Keep setup tight. Avoid more than 3 rounds unless the user explicitly asks to customize everything.
-- When a round contains multiple questions, ask them in a single batched form or a single numbered message.
-- Do not ask `Run plan`, then `Output`, then `GPUs` in separate turns unless the runtime makes batching impossible.
+- Keep setup tight: avoid more than 3 rounds unless the user explicitly asks to customize everything.
+- Batch multi-question rounds into one form (or one numbered message when forms are unavailable).
+- Do not split `Run plan`, `Output`, and `GPUs` across separate turns unless batching is impossible.
 
 ## Status output contract
 
@@ -40,9 +40,9 @@ Use short updates like:
 Rules:
 
 - Send a status update before any long-running discovery or execution step.
-- Keep each status update to 1-2 short sentences.
-- Say what you just finished, what you are doing now, and what comes next.
-- Do not make the user infer progress from tool output alone.
+- Keep each update to 1-2 short sentences.
+- Include: what finished, what is happening now, and what comes next.
+- Do not rely on tool output as the only progress signal.
 
 ## Intake algorithm
 
@@ -130,7 +130,7 @@ Ask a short follow-up only for missing concrete values:
   - `integration`
   - `report-generate`
 
-If multiple concrete follow-ups are needed, batch them into one short message instead of asking them one by one.
+If multiple concrete values are missing, batch follow-ups into one short message.
 
 ## Lightweight discovery before filter questions
 
@@ -141,7 +141,7 @@ Before asking about TP / sequence / concurrency:
 3. Discover available TP / EP / sequence-length / concurrency values for the selected config.
 4. Do not start the expensive benchmark or profile run yet.
 
-The purpose of discovery is to turn abstract questions into concrete choices.
+Discovery exists to turn abstract parameter prompts into concrete options.
 
 ## Smoke fast path
 

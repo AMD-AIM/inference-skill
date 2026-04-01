@@ -1,6 +1,6 @@
 # Runtime Notes
 
-Use this file after guided intake is complete and before phase execution starts.
+Use this file after guided intake and before phase execution.
 
 ## Bundled assets
 
@@ -28,11 +28,11 @@ Use only the files bundled next to this skill:
 - `scripts/generate_sglang_plugin.py`
 - `resources/TraceLens-internal.tar.gz`
 
-If required files are missing, stop and report that the skill installation is incomplete.
+If required files are missing, stop and report incomplete installation.
 
 ## Required run inputs
 
-Resolve these before loading any phase file:
+Resolve these before loading any phase doc:
 
 - `CONFIG_KEY`
 - `OUTPUT_DIR`
@@ -60,8 +60,8 @@ Resolve these before loading any phase file:
 - `GEAK_DIR`
 - `GEAK_OE_DIR`
 - `ENV_INFO_FILE`
-- `GEAK_MODE` (auto, full, triton_only, manual — from INTAKE optimization extras)
-- `OPTIMIZE_SCOPE` (all, fused_only — from INTAKE optimization extras)
+- `GEAK_MODE` (auto, full, triton_only, manual; from INTAKE optimization extras)
+- `OPTIMIZE_SCOPE` (all, fused_only; from INTAKE optimization extras)
 
 ## Recommended defaults
 
@@ -77,7 +77,7 @@ Resolve these before loading any phase file:
 - `MODE`: `full`
 - `PROBLEMS_DIR`: `<OUTPUT_DIR>/problems`
 - `OPTIMIZED_DIR`: `<OUTPUT_DIR>/optimized`
-- `OPTIMIZE_PRIORITY_THRESHOLD`: `5.0` (minimum % of total kernel time to create a problem file)
+- `OPTIMIZE_PRIORITY_THRESHOLD`: `5.0` (minimum percent of total kernel time to create a problem file)
 - `GEAK_DIR`: `~/GEAK` (GEAK installation directory for HIP kernel optimization)
 - `GEAK_OE_DIR`: `~/geak-oe` (geak-oe OpenEvolve directory, optional)
 - `ENV_INFO_FILE`: `<OUTPUT_DIR>/env_info.json` (environment info written by Phase 0)
@@ -108,7 +108,7 @@ Before executing any phase doc:
    - `generate_vllm_plugin.py` (for optimize modes, vLLM framework)
    - `generate_sglang_plugin.py` (for optimize modes, SGLang framework)
 
-For `resume` or `from-phase`, read the existing `progress.json` and prior artifacts first, but fully rerun the requested starting phase.
+For `resume` or `from-phase`, read existing `progress.json` and artifacts first, then fully rerun the requested start phase.
 
 ## Phase map
 
@@ -156,7 +156,7 @@ Long phases must not leave the terminal blank.
 
 Rules:
 
-- If a command may run for more than about 30 seconds, tell the user which step is running and where the full log is being written.
+- If a command may run longer than ~30 seconds, state the running step and full log path.
 - If a phase writes output to a log file, also surface live progress to the terminal:
   - prefer streaming stdout/stderr with `tee` while still saving the full log file
   - if streaming is impossible, print periodic heartbeat updates and show recent log lines

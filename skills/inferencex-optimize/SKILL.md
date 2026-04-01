@@ -1,6 +1,6 @@
 ---
 name: inferencex-optimize
-description: "Run the InferenceX benchmark and profiling workflow for a config key. When the user names a model or config key, immediately start a fast guided setup flow with batched choice questions, then execute the workflow."
+description: "Run the InferenceX benchmark/profiling workflow for a config key. When the user names a model or config key, immediately start a batched guided setup, then execute."
 compatibility: claude-code, opencode, cursor
 metadata:
   workflow: inferencex
@@ -14,11 +14,11 @@ metadata:
 
 - Treat a bare model/config key as enough to start. Do not require the user to spell out a full command.
 - If the user says `use inferencex-optimize skill for <model-or-config-key>`, start guided setup immediately.
-- Do not dump raw parameter names at the user in the first reply. Translate them into a short setup conversation.
+- Do not dump raw parameter names in the first reply; translate to a short setup conversation.
 - Prefer the native `question` tool for multiple-choice prompts when the runtime provides it.
 - If the runtime does not provide a question tool, ask concise numbered choices in normal chat.
 - Ask questions in grouped batches, not as a drip-feed of one question at a time.
-- Keep the user informed with explicit progress updates so they always know the current stage and next step.
+- Keep explicit progress updates so the user always knows current stage and next step.
 - Inform user about GEAK availability during setup when running in optimize or optimize-only mode.
 
 ## First-turn latency rule
@@ -102,3 +102,5 @@ Choose the narrowest mode that matches the user's goal. For a smoke run, prefer 
 - [Phase 7: Kernel Optimization](phases/07-kernel-optimize.md)
 - [Phase 8: Integration & E2E Benchmark](phases/08-integration.md)
 - [Phase 9: Final Report](phases/09-report-generate.md)
+- [E2E Test Runbook](tests/E2E_TEST.md)
+- [E2E Validator](tests/e2e_optimize_test.py)

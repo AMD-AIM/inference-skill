@@ -76,6 +76,9 @@ inference-skill/
       phases/
       templates/
       scripts/
+      tests/
+        E2E_TEST.md
+        e2e_optimize_test.py
       resources/
     vllm-optimize/
       SKILL.md
@@ -134,6 +137,16 @@ Each directory is the source of truth for its respective skill:
 - interaction examples
 - phase instructions
 - helper scripts
+- packaged test assets (for `inferencex-optimize`)
+
+## E2E test packaging
+
+`inferencex-optimize` now packages E2E assets inside the installed skill directory:
+
+- `~/.claude/skills/inferencex-optimize/tests/E2E_TEST.md`
+- `~/.claude/skills/inferencex-optimize/tests/e2e_optimize_test.py`
+
+Repo-level `tests/` paths are kept as compatibility entrypoints and forward to the canonical skill-level copy.
 
 ## Development workflow
 

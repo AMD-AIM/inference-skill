@@ -90,6 +90,9 @@ install_skill() {
     require_dir "$SOURCE_DIR/phases"
     require_dir "$SOURCE_DIR/templates"
     require_dir "$SOURCE_DIR/scripts"
+    require_dir "$SOURCE_DIR/tests"
+    require_file "$SOURCE_DIR/tests/E2E_TEST.md"
+    require_file "$SOURCE_DIR/tests/e2e_optimize_test.py"
   else
     require_file "$SOURCE_DIR/README.md"
     require_file "$SOURCE_DIR/RUNTIME.md"
@@ -135,6 +138,8 @@ install_skill() {
     | sed "s|](RUNTIME.md)|](${DEST_DIR}/RUNTIME.md)|g" \
     | sed "s|](README.md)|](${DEST_DIR}/README.md)|g" \
     | sed "s|](EXAMPLES.md)|](${DEST_DIR}/EXAMPLES.md)|g" \
+    | sed "s|](tests/E2E_TEST.md)|](${DEST_DIR}/tests/E2E_TEST.md)|g" \
+    | sed "s|](tests/e2e_optimize_test.py)|](${DEST_DIR}/tests/e2e_optimize_test.py)|g" \
     | sed "s|](phases/|](${DEST_DIR}/phases/|g")"
 
   # Generate description based on skill name
