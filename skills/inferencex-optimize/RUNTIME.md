@@ -6,17 +6,10 @@ Use this file after guided intake and before phase execution.
 
 Use only the files bundled next to this skill:
 
-- `phases/00-env-setup.md`
-- `phases/01-config-parse.md`
-- `phases/02-benchmark.md`
-- `phases/03-benchmark-analyze.md`
-- `phases/04-profile.md`
-- `phases/05-profile-analyze.md`
-- `phases/06-problem-generate.md`
-- `phases/07-kernel-optimize.md`
-- `phases/08-integration.md`
-- `phases/09-report-generate.md`
-- `templates/agent-config.md`
+**Phase docs:**
+- `phases/00-env-setup.md` through `phases/09-report-generate.md`
+
+**Pre-existing scripts (domain logic):**
 - `scripts/trace_analyzer.py`
 - `scripts/select_gpus.py`
 - `scripts/classify_kernel.py`
@@ -26,6 +19,39 @@ Use only the files bundled next to this skill:
 - `scripts/kernel_finalize.py`
 - `scripts/generate_vllm_plugin.py`
 - `scripts/generate_sglang_plugin.py`
+
+**Extracted scripts (phase automation):**
+- `scripts/generate_env_info.py` — GPU/GEAK/API key detection (Phase 0)
+- `scripts/validate_config_key.py` — Master YAML config-key validation with close-match suggestions (Phases 0, 1)
+- `scripts/start_profile_container.sh` — Docker container creation with `--mode benchmark|profile|optimize`, extra `--mount` and `--env` support (Phases 2, 4, 7, 8)
+- `scripts/run_profile_exec.sh` — Docker exec with heartbeats + trace flush (Phases 2, 4, 8)
+- `scripts/collect_profile_traces.sh` — Trace/result collection from repo (Phases 2, 4)
+- `scripts/patch_rank0_profiling.py` — Rank-0-only trace export (Phase 4, runs inside container)
+- `scripts/inject_profiler_config.py` — Profiler config injection (Phase 4, runs inside container)
+- `scripts/patch_benchmark_lib.py` — Relay/cap disable (Phase 4, runs inside container)
+- `scripts/validate_traces.py` — Trace discovery and validation (Phase 5)
+- `scripts/detect_gpu_arch.py` — GPU arch detection for roofline (Phase 5)
+- `scripts/install_tracelens.sh` — TraceLens installation (Phase 5)
+- `scripts/run_tracelens.sh` — TraceLens analysis pipeline (Phase 5)
+- `scripts/display_tracelens_results.sh` — Console result display (Phase 5)
+- `scripts/extract_model_shapes.py` — Model shape extraction (Phase 6)
+- `scripts/resolve_geak_mode.py` — GEAK mode resolution (Phase 7)
+- `scripts/load_optimization_manifest.py` — Manifest loading/filtering (Phase 7)
+- `scripts/collect_winning_kernels.py` — Kernel collection (Phase 7, runs inside container)
+- `scripts/verify_winning_kernels.py` — Pre-integration verification (Phase 8)
+- `scripts/inject_plugin.py` — Plugin injection (Phase 8, runs inside container)
+- `scripts/validate_optimization.py` — Baseline vs optimized comparison (Phase 8)
+- `scripts/generate_optimization_summary.py` — Summary JSON generation (Phase 9)
+
+**Templates:**
+- `templates/agent-config.md`
+- `templates/benchmark_report.md` — Phase 3 report template
+- `templates/dispatch_plugin_example.py` — Reference shape-aware dispatch plugin template (Phase 8 Step 1.5)
+- `templates/profiling_report.md` — Phase 5 report template
+- `templates/profile_analysis_schema.json` — Phase 5 JSON schema
+- `templates/optimization_report.md` — Phase 9 report template
+
+**Resources:**
 - `resources/TraceLens-internal.tar.gz`
 
 If required files are missing, stop and report incomplete installation.
@@ -62,6 +88,9 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`
 - `GEAK_MODE` (auto, full, triton_only, manual; from INTAKE optimization extras)
 - `OPTIMIZE_SCOPE` (all, fused_only; from INTAKE optimization extras)
+- `RESOURCES_DIR` (path to installed skill's `resources/` directory; contains `TraceLens-internal.tar.gz`)
+- `TEMPLATES_DIR` (path where bundled templates are copied during bootstrap)
+- `ENFORCE_EAGER_FLAG` (set to `--enforce-eager` when eager mode is required for the framework, or empty string otherwise; resolved by the agent based on framework and profiling requirements)
 
 ## Recommended defaults
 
@@ -83,30 +112,25 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`: `<OUTPUT_DIR>/env_info.json` (environment info written by Phase 0)
 - `GEAK_MODE`: `auto` (auto-detect GEAK availability; `full` = Triton + HIP/CK; `triton_only` = simple mode only; `manual` = no GEAK)
 - `OPTIMIZE_SCOPE`: `all` (optimize all bottleneck kernels; `fused_only` = only fused operator problems)
+- `RESOURCES_DIR`: `<installed_skill_root>/resources` (the `resources/` directory alongside `SKILL.md`; not copied to OUTPUT_DIR due to tarball size -- must remain accessible during execution)
+- `TEMPLATES_DIR`: `<OUTPUT_DIR>/templates`
+- `ENFORCE_EAGER_FLAG`: `""` (empty; set to `--enforce-eager` by the agent when the framework requires eager mode for profiling)
 
 ## Placeholder rules
 
 - Replace `{{VAR}}` placeholders in phase docs using the resolved variable map.
 - Ignore `{{SKIP_LABEL}}` markers. They are compiler annotations from the built-in OpenCode command path.
+- If a phase doc references `{{DRY_RUN_NOTE}}`, resolve it from `DRY_RUN`: empty for real runs, or a short note that benchmark/profile commands should be printed and validated without being executed.
 - If a phase doc references `{{PROFILE_SKIP_NOTE}}` or `{{PROFILE_ANALYSIS_NOTE}}`, resolve them from the selected mode before execution.
 
 ## Workspace bootstrap
 
 Before executing any phase doc:
 
-1. Create `OUTPUT_DIR`, `RESULTS_DIR`, `PROFILE_DIR`, `REPORT_DIR`, `SCRIPTS_DIR`, `PROBLEMS_DIR`, and `OPTIMIZED_DIR`.
+1. Create `OUTPUT_DIR`, `RESULTS_DIR`, `PROFILE_DIR`, `REPORT_DIR`, `SCRIPTS_DIR`, `TEMPLATES_DIR`, `PROBLEMS_DIR`, and `OPTIMIZED_DIR`.
 2. Write `config.json` with the resolved run configuration.
 3. Write initial `progress.json` if it does not already exist.
-4. Copy bundled helper assets into `SCRIPTS_DIR` when needed:
-   - `trace_analyzer.py`
-   - `select_gpus.py`
-   - `TraceLens-internal.tar.gz`
-   - `analyze_fusion_inferencex.py` (for optimize modes)
-   - `generate_problems_inferencex.py` (for optimize modes)
-   - `kernel_test_runner.py` (for optimize modes)
-   - `kernel_finalize.py` (for optimize modes)
-   - `generate_vllm_plugin.py` (for optimize modes, vLLM framework)
-   - `generate_sglang_plugin.py` (for optimize modes, SGLang framework)
+4. Copy ALL bundled scripts into `SCRIPTS_DIR` and ALL bundled templates into `TEMPLATES_DIR`. Phase docs reference scripts via `{{SCRIPTS_DIR}}/` and templates via `{{TEMPLATES_DIR}}/`. `RESOURCES_DIR` points to the installed skill's `resources/` directory in place (not copied); it must remain accessible during Phase 5 TraceLens installation.
 
 For `resume` or `from-phase`, read existing `progress.json` and artifacts first, then fully rerun the requested start phase.
 

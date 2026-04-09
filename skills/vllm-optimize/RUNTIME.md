@@ -1,5 +1,17 @@
 # vLLM Optimize - Runtime
 
+## Bundled Assets
+
+**Phase docs:** `phases/01-vllm-setup.md` through `phases/04-analysis.md`
+
+**Scripts:**
+- `scripts/detect_gpu.sh` — GPU detection, vLLM validation, visibility setup (Phase 1)
+- `scripts/vllm_benchmark.py` — Concurrent benchmark with configurable sweep (Phase 2)
+- `scripts/analyze_traces.py` — Gap analysis + kernel categorization (Phase 4)
+
+**Templates:**
+- `templates/analysis_report.md` — Phase 4 report template
+
 ## Execution Environment
 
 ### Container Requirements

@@ -145,6 +145,7 @@ Each directory is the source of truth for its respective skill:
 
 - `~/.claude/skills/inferencex-optimize/tests/E2E_TEST.md`
 - `~/.claude/skills/inferencex-optimize/tests/e2e_optimize_test.py`
+- `~/.claude/skills/inferencex-optimize/resources/TraceLens-internal.tar.gz`
 
 Repo-level `tests/` paths are kept as compatibility entrypoints and forward to the canonical skill-level copy.
 

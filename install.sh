@@ -90,6 +90,8 @@ install_skill() {
     require_dir "$SOURCE_DIR/phases"
     require_dir "$SOURCE_DIR/templates"
     require_dir "$SOURCE_DIR/scripts"
+    require_dir "$SOURCE_DIR/resources"
+    require_file "$SOURCE_DIR/resources/TraceLens-internal.tar.gz"
     require_dir "$SOURCE_DIR/tests"
     require_file "$SOURCE_DIR/tests/E2E_TEST.md"
     require_file "$SOURCE_DIR/tests/e2e_optimize_test.py"
@@ -97,6 +99,8 @@ install_skill() {
     require_file "$SOURCE_DIR/README.md"
     require_file "$SOURCE_DIR/RUNTIME.md"
     require_dir "$SOURCE_DIR/phases"
+    require_dir "$SOURCE_DIR/scripts"
+    require_dir "$SOURCE_DIR/templates"
   fi
 
   mkdir -p "$(dirname "$DEST_DIR")"

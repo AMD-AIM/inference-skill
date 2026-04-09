@@ -206,6 +206,19 @@ def get_throughput(data):
     return data.get("total_token_throughput", data.get("output_throughput", 0))
 
 
+def check_skill_layout():
+    checks = []
+    skill_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tarball_path = os.path.join(skill_root, "resources", "TraceLens-internal.tar.gz")
+    if os.path.isfile(tarball_path):
+        checks.append(CheckResult("packaging", "TraceLens fallback tarball present", "pass",
+                                  tarball_path))
+    else:
+        checks.append(CheckResult("packaging", "TraceLens fallback tarball present", "fail",
+                                  f"Missing: {tarball_path}"))
+    return checks
+
+
 # ---------------------------------------------------------------------------
 # Phase validation checks
 # ---------------------------------------------------------------------------
@@ -508,9 +521,12 @@ def check_integration(output_dir, config):
         with open(manifest_path) as f:
             manifest = json.load(f)
 
-        registered = manifest.get("registered", [])
+        registered = manifest.get("registered", manifest.get("patched", []))
         ops_key = "registered_ops" if framework == "vllm" else "patched_modules"
-        ops = manifest.get(ops_key, manifest.get("ops", registered))
+        if framework == "vllm":
+            ops = manifest.get(ops_key, manifest.get("ops", registered))
+        else:
+            ops = manifest.get(ops_key, manifest.get("patched", manifest.get("ops", registered)))
         if ops:
             checks.append(CheckResult("integration", f"{plugin_dir_name} manifest valid", "pass",
                                       f"{len(ops)} {ops_key}"))
@@ -933,6 +949,7 @@ def validate_output_dir(output_dir):
 
     # Run all phase checks
     checks = []
+    checks.extend(check_skill_layout())
     checks.extend(check_env(output_dir, config))
     checks.extend(check_config(output_dir, config))
     checks.extend(check_benchmark(output_dir, config))

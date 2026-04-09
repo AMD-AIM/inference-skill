@@ -5,7 +5,7 @@ Parse the master YAML config and generate the full benchmark sweep matrix.
 
 ## Steps
 
-### 1. Detect Config File
+### 1. Detect Config File and Validate Config Key
 ```bash
 CONFIG_KEY="{{CONFIG_KEY}}"
 if [[ "$CONFIG_KEY" == *mi3* ]]; then
@@ -14,7 +14,11 @@ else
     CONFIG_FILE=".github/configs/nvidia-master.yaml"
 fi
 echo "Config file: $CONFIG_FILE"
+python3 "{{SCRIPTS_DIR}}/validate_config_key.py" \
+    --config-file "{{REPO_DIR}}/$CONFIG_FILE" \
+    --config-key "$CONFIG_KEY"
 ```
+If the validator exits non-zero, stop immediately and use one of the suggested keys. Do NOT run sweep generation against a missing config key.
 
 ### 2. Generate Sweep Configs
 Use the InferenceX matrix generation script to produce the full benchmark matrix.
@@ -70,7 +74,7 @@ if [ ! -f "{{REPO_DIR}}/$BENCHMARK_SCRIPT" ]; then
     BENCHMARK_SCRIPT="benchmarks/single_node/${EXP_NAME%%_*}_${PRECISION}_${RUNNER}_${FRAMEWORK}.sh"
 fi
 ```
-IMPORTANT: When printing the resolved script path, always print the fully expanded path with actual values substituted (e.g. `benchmarks/single_node/kimik2.5_int4_mi355x.sh`), NOT the shell variable template. Verify the resolved script exists in `{{REPO_DIR}}` and print its path. If it does not exist, print a warning. Also print the first few lines of the script so the user can confirm it is correct.
+IMPORTANT: When printing the resolved script path, always print the fully expanded path with actual values substituted (e.g. `benchmarks/single_node/kimik2.5_fp4_mi355x.sh`), NOT the shell variable template. Verify the resolved script exists in `{{REPO_DIR}}` and print its path. If it does not exist, print a warning. Also print the first few lines of the script so the user can confirm it is correct.
 
 ### 6. Report Config Summary
 Print summary of benchmark points:

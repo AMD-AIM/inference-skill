@@ -41,7 +41,7 @@ Symlinks instead of copying, so edits in the repo checkout are immediately refle
 - `templates/agent-config.md`
 - `scripts/*.py` -- `classify_kernel.py`, `analyze_fusion_inferencex.py`, `generate_problems_inferencex.py`, and others
 - `tests/E2E_TEST.md` + `tests/e2e_optimize_test.py` -- E2E runbook and validator
-- `resources/TraceLens-internal.tar.gz` when present
+- `resources/TraceLens-internal.tar.gz` -- required bundled TraceLens fallback asset
 
 ## Reinstall / upgrade
 
@@ -53,6 +53,8 @@ If an older install exists, the installer moves it to a timestamped backup under
 ls ~/.claude/skills/inferencex-optimize/SKILL.md
 ls ~/.cursor/skills/inferencex-optimize/SKILL.md
 ls ~/.cursor/rules/inferencex-optimize.mdc
+ls ~/.claude/skills/inferencex-optimize/resources/TraceLens-internal.tar.gz
+ls ~/.cursor/skills/inferencex-optimize/resources/TraceLens-internal.tar.gz
 python3 ~/.claude/skills/inferencex-optimize/tests/e2e_optimize_test.py --help
 ```
 

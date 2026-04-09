@@ -51,7 +51,7 @@ Rules:
 3. Ask the Round 1 high-level question set in one batched form.
 4. If the answers require a concrete path or GPU list, ask one short follow-up for that value.
 5. Send a status update before discovery starts.
-6. Read [`RUNTIME.md`](RUNTIME.md) and do only the lightweight discovery needed to learn available TP / EP / sequence / concurrency values.
+6. Read [`RUNTIME.md`](RUNTIME.md), validate that the resolved config key exists in the selected master YAML, and do only the lightweight discovery needed to learn available TP / EP / sequence / concurrency values.
 7. Send a status update when discovery is complete.
 8. If this is a smoke-style run, offer a fast path with recommended smoke defaults.
 9. Only if the user wants customization, ask the detailed filter question set in one batched form.
@@ -138,8 +138,9 @@ Before asking about TP / sequence / concurrency:
 
 1. Read [`RUNTIME.md`](RUNTIME.md).
 2. Prepare only the minimum bootstrap needed for config discovery.
-3. Discover available TP / EP / sequence-length / concurrency values for the selected config.
-4. Do not start the expensive benchmark or profile run yet.
+3. Validate the resolved config key against the selected master YAML. If it is missing, stop and show close matches instead of continuing.
+4. Discover available TP / EP / sequence-length / concurrency values for the selected config.
+5. Do not start the expensive benchmark or profile run yet.
 
 Discovery exists to turn abstract parameter prompts into concrete options.
 

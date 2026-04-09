@@ -4,174 +4,53 @@
 Start vLLM server with required configuration for benchmark and profiling.
 
 ## CRITICAL: Profiler Enablement
-
-**IMPORTANT**: To use torch profiler, you MUST start vLLM with `--profiler-config.*` flags. Without these flags, the `/start_profile` and `/stop_profile` API endpoints will NOT be registered, and you will get "404 Not Found" errors.
-
-**This is a common issue** - the profiler API only becomes available when the server starts with profiling enabled.
+To use torch profiler, you MUST start vLLM with `--profiler-config.*` flags. Without them, `/start_profile` and `/stop_profile` return 404.
 
 ## Steps
 
 ### 1. Environment Validation
 
-```bash
-# Detect GPU vendor first
-GPU_VENDOR=""
-if command -v rocm-smi &>/dev/null; then
-    GPU_VENDOR="amd"
-    echo "Detected AMD GPU"
-elif command -v nvidia-smi &>/dev/null; then  
-    GPU_VENDOR="nvidia"
-    echo "Detected NVIDIA GPU"
-else
-    echo "Warning: No GPU detection tool found"
-fi
+Run: `bash scripts/detect_gpu.sh`
 
-# For AMD GPUs, get more info
-if [[ "$GPU_VENDOR" == "amd" ]]; then
-    echo "=== AMD GPU Detection ==="
-    rocm-smi --showproductname 2>/dev/null || echo "rocm-smi not available"
-    rocminfo 2>/dev/null | grep -i "gfx" | head -3 || echo "No GFX info"
-    
-    # Check GPU visibility
-    echo "HIP_VISIBLE_DEVICES: ${HIP_VISIBLE_DEVICES:-not set}"
-    echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-not set}"
-    
-    # List available GPU devices
-    if [[ -d /dev/dri ]]; then
-        echo "Available GPU devices:"
-        ls -la /dev/dri/card* 2>/dev/null || echo "No /dev/dri/cards found"
-    fi
-fi
+Outputs `GPU_VENDOR`, validates vLLM + PyTorch installation, sets GPU visibility if needed.
 
-# For NVIDIA GPUs
-if [[ "$GPU_VENDOR" == "nvidia" ]]; then
-    nvidia-smi --query-gpu=name,memory.total --format=csv
-fi
-
-# Check vLLM installation
-python3 -c "import vllm; print(f'vLLM {vllm.__version__}')" || echo "vLLM not installed"
-
-# Check PyTorch GPU detection
-python3 -c "
-import torch
-print(f'PyTorch version: {torch.__version__}')
-print(f'CUDA available: {torch.cuda.is_available()}')
-print(f'CUDA device count: {torch.cuda.device_count()}')
-for i in range(torch.cuda.device_count()):
-    print(f'  GPU {i}: {torch.cuda.get_device_name(i)}')
-" 2>/dev/null || echo "PyTorch GPU check failed"
-```
-
-### 2. Set Up GPU Visibility (if needed)
-
-```bash
-# If no GPUs visible, try to find and set GPU devices
-if ! python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
-    echo "Warning: No GPUs visible to PyTorch, attempting to set..."
-    
-    # For AMD, check /dev/dri
-    if [[ -d /dev/dri ]]; then
-        GPU_IDS=$(ls -1 /dev/dri/card* 2>/dev/null | grep -v render | sed 's/.*card//' | tr '\n' ',' | sed 's/,$//')
-        if [[ -n "$GPU_IDS" ]]; then
-            export CUDA_VISIBLE_DEVICES="$GPU_IDS"
-            export HIP_VISIBLE_DEVICES="$GPU_IDS"
-            echo "Set CUDA_VISIBLE_DEVICES=$GPU_IDS"
-        fi
-    fi
-    
-    # Verify again
-    python3 -c "import torch; print(f'After setting: {torch.cuda.device_count()} GPUs')"
-fi
-
-# Ensure HF_HOME is set for model caching
-export HF_HOME=${HF_HOME:-/root/.cache/huggingface}
-export HF_HUB_CACHE=${HF_HOME}/hub
-mkdir -p "$HF_HOME"
-```
-
-### 3. Create Directories
-
+### 2. Create Directories
 ```bash
 OUTPUT_DIR=${OUTPUT_DIR:-./vllm_results}
 PROFILE_DIR=${PROFILE_DIR:-$OUTPUT_DIR/profiles}
-
 mkdir -p "$OUTPUT_DIR" "$PROFILE_DIR"
 ```
 
-### 4. Validate Model Name (CRITICAL)
+### 3. Validate Model Name (CRITICAL)
 
-**⚠️ IMPORTANT**: You MUST use the exact model name provided by the user. Do NOT guess, infer, or substitute a different model name without explicit user confirmation.
+Use the EXACT model name provided by the user. Never guess or substitute. If ambiguous, ask the user for the exact HuggingFace model ID.
 
-If the user provides an ambiguous or incorrect model name (e.g., "GLM-4.7-Flash" instead of the exact HuggingFace model ID), you MUST:
-
-1. Ask the user for the exact HuggingFace model ID
-2. Or search for the correct model ID before proceeding
-3. NEVER assume a model name - always confirm with user
-
-Example:
-- User says: "GLM-4.7-Flash" → Must ask user for exact model ID like `THUDM/glm-4-9b-chat`
-- User says: "Qwen3.5-35B" → Must ask for exact model ID
-
-### 5. Ensure Model is Available
-
+### 4. Ensure Model is Available
 ```bash
-# Download/cache model if not present (safe operation)
-python3 << 'PYEOF'
-import os
-import sys
-
-model = os.environ.get('MODEL', 'Qwen/Qwen3.5-35B-A3B')
-hf_home = os.environ.get('HF_HOME', '/root/.cache/huggingface')
-os.environ['HF_HOME'] = hf_home
-
-print(f"Checking model: {model}")
-
-try:
-    # First try: Direct load (will download if needed)
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    print("Attempting to load tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True, use_fast=False)
-    print(f"Tokenizer loaded: {tokenizer.__class__.__name__}")
-    print(f"Model {model} is available and ready")
-except Exception as e:
-    print(f"First attempt failed: {e}")
-    print("Trying alternative method...")
-    
-    # Second try: snapshot_download (more explicit)
-    try:
-        from huggingface_hub import snapshot_download
-        print(f"Downloading model to {hf_home}...")
-        model_dir = snapshot_download(model, cache_dir=hf_home)
-        print(f"Model downloaded to: {model_dir}")
-    except Exception as e2:
-        print(f"Download also failed: {e2}")
-        sys.exit(1)
-PYEOF
+python3 -c "
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained('$MODEL', trust_remote_code=True, use_fast=False)
+print(f'Model {\"$MODEL\"} is available')
+" 2>/dev/null || {
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download('$MODEL')"
+}
 ```
 
-### 6. Start vLLM Server
+### 5. Start vLLM Server
 
-**For benchmark-only mode (NO profiling):**
+**Benchmark-only mode (no profiling):**
 ```bash
 python3 -m vllm.entrypoints.openai.api_server \
-    --model "$MODEL" \
-    --dtype ${DTYPE:-half} \
-    --tensor-parallel-size ${TP:-1} \
-    --trust-remote-code \
-    --enforce-eager \
-    --api-key dummy \
+    --model "$MODEL" --dtype ${DTYPE:-half} --tensor-parallel-size ${TP:-1} \
+    --trust-remote-code --enforce-eager --api-key dummy \
     > /tmp/vllm.log 2>&1 &
 ```
 
-**For profiling mode (REQUIRED for profiler API):**
+**Profiling mode (REQUIRED for profiler API):**
 ```bash
 python3 -m vllm.entrypoints.openai.api_server \
-    --model "$MODEL" \
-    --dtype ${DTYPE:-half} \
-    --tensor-parallel-size ${TP:-1} \
-    --trust-remote-code \
-    --enforce-eager \
-    --api-key dummy \
+    --model "$MODEL" --dtype ${DTYPE:-half} --tensor-parallel-size ${TP:-1} \
+    --trust-remote-code --enforce-eager --api-key dummy \
     --profiler-config.profiler torch \
     --profiler-config.torch_profiler_dir "$PROFILE_DIR" \
     --profiler-config.torch_profiler_record_shapes True \
@@ -182,72 +61,32 @@ python3 -m vllm.entrypoints.openai.api_server \
     > /tmp/vllm.log 2>&1 &
 ```
 
-**⚠️ CRITICAL**: The `--profiler-config.*` flags MUST be present at server startup. If you start without these flags, the profiler API endpoints will NOT be available.
-
-### 7. Wait for Server Ready
-
+### 6. Wait for Server Ready
 ```bash
 for i in {1..50}; do
-    if curl -s -H "Authorization: Bearer dummy" \
-        http://localhost:8000/v1/models 2>/dev/null | grep -q "$MODEL"; then
-        echo "Server ready!"
-        break
-    fi
+    curl -s -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null | grep -q "$MODEL" && { echo "Server ready!"; break; }
     sleep 12
 done
 ```
 
-### 8. Verify Server
-
+### 7. Verify Profiler API (if profiling enabled)
 ```bash
-curl -s -H "Authorization: Bearer dummy" http://localhost:8000/v1/models | \
-    python3 -c "import sys,json; d=json.load(sys.stdin)
-print('Status: Ready' if d.get('data') else 'Status: Failed')
-print('Model:', d.get('data',[{}])[0].get('id','unknown'))"
-```
-
-### 9. Verify Profiler API (if started with profiling enabled)
-
-```bash
-# Test profiler endpoints
-echo "Testing /start_profile..."
 curl -s -X POST http://localhost:8000/start_profile -H "Authorization: Bearer dummy"
-
-echo ""
-echo "Testing /stop_profile..."
 curl -s -X POST http://localhost:8000/stop_profile -H "Authorization: Bearer dummy"
 ```
-
-If these return `{"detail":"Not Found"}`, the server was NOT started with profiling flags. You must restart with `--profiler-config.*` flags.
+If 404, restart with `--profiler-config.*` flags.
 
 ## Troubleshooting
-
-### Profiler API returns 404 Not Found
-- **Cause**: Server started without `--profiler-config.*` flags
-- **Solution**: Restart server with profiling flags (see Section 5 above)
-
-### Only seeing "execute_context" in trace analysis
-- **Cause**: These are Python profiler annotations, NOT actual GPU kernels
-- **Solution**: Use EXCLUDE_PATTERNS to filter them out in analysis phase
+- **Profiler 404**: Server not started with profiling flags. Restart with `--profiler-config.*`.
+- **"execute_context" in traces**: Python annotations, not GPU kernels. Filter with EXCLUDE_PATTERNS in analysis.
 
 ## Environment Variables
-
 | Variable | Default | Description |
 |----------|---------|-------------|
 | MODEL | (required) | HuggingFace model name |
 | TP | 1 | Tensor parallelism |
 | DTYPE | half | Model precision |
-| HF_HOME | /root/.cache/huggingface | HuggingFace cache directory |
-| OUTPUT_DIR | ./vllm_results | Results directory |
 | PROFILE_DIR | $OUTPUT_DIR/profiles | Profiler output |
-| PROFILE_ITERATIONS | 128 | Profiler iterations |
 
 ## Completion
-
-Server running at http://localhost:8000 with OpenAI-compatible API.
-
-If started with profiling flags, the profiler API is available at:
-- `/start_profile` - Start profiling
-- `/stop_profile` - Stop profiling and save trace
-
-Next: Proceed to Phase 2 (Benchmark)
+Server running at http://localhost:8000. Next: Phase 2 (Benchmark).

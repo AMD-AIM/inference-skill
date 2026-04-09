@@ -1,0 +1,45 @@
+{
+  "tracelens_version": "<version>",
+  "trace_file": "<same as tracelens_primary_trace, kept for backward compatibility>",
+  "trace_roles": {
+    "merged_trace": "<path or null>",
+    "rank0_full_trace": "<path or null>",
+    "rank0_extend_trace": "<path or null>",
+    "rank0_decode_trace": "<path or null>",
+    "collective_trace_mode": "<tp-extend|rank-full|unavailable>",
+    "tracelens_primary_trace": "<path or null>",
+    "tracelens_primary_role": "<rank0-extend|rank0-full|merged-fallback|first-valid-fallback>",
+    "phase_split_input_trace": "<path or null>",
+    "phase_split_input_role": "<merged|rank0-full|unavailable>"
+  },
+  "num_ranks_analyzed": "<WORLD_SIZE from step 1>",
+  "top_ops": [{"name": "...", "total_time_us": 0, "pct": 0}],
+  "top_kernels": [{"name": "...", "calls": 0, "avg_time_us": 0, "pct": 0}],
+  "category_breakdown": {"gemm": 0, "attention": 0, "communication": 0},
+  "collective_overhead_pct": "<if multi-rank>",
+  "gpu_utilization_pct": "<estimated from timeline>",
+  "output_csv_dirs": ["tracelens_rank0_csvs/", "tracelens_collective_csvs/"],
+  "gpu_arch": "<detected GPU model or null>",
+  "phase_split": {
+    "available": true,
+    "prefill_decode_trace": "<path or null>",
+    "decode_only_trace": "<path or null>",
+    "execution_details": "<contents of phase_split/execution_details.json>"
+  },
+  "roofline": {
+    "prefill_decode": {
+      "available": true,
+      "csv_dir": "tracelens_prefill_decode_csvs/",
+      "gpu_timeline": {"computation_pct": 0, "communication_pct": 0, "idle_pct": 0},
+      "category_breakdown": {"gemm": 0, "attention": 0},
+      "top_roofline_ops": [{"name": "...", "flops_per_byte": 0, "tflops_s": 0, "bound_type": "memory|compute", "bound_distance_pct": 0}]
+    },
+    "decode_only": {
+      "available": true,
+      "csv_dir": "tracelens_decode_only_csvs/",
+      "gpu_timeline": {"computation_pct": 0, "communication_pct": 0, "idle_pct": 0},
+      "category_breakdown": {"gemm": 0, "attention": 0},
+      "top_roofline_ops": [{"name": "...", "flops_per_byte": 0, "tflops_s": 0, "bound_type": "memory|compute", "bound_distance_pct": 0}]
+    }
+  }
+}
