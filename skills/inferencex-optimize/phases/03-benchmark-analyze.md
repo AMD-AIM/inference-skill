@@ -1,3 +1,8 @@
+> **ARCHIVE**: This file is a reference copy of the original phase runbook. The active
+> agent docs are in `agents/phase-NN-*.md`. Script paths in this file reference the
+> pre-reorganization flat layout (`scripts/*.py`); the actual scripts are now under
+> `scripts/{env,container,profiling,optimize,plugin,report}/`.
+
 # Phase 3: Benchmark Analysis {{SKIP_LABEL}}
 
 ## Objective

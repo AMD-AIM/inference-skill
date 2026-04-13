@@ -265,6 +265,22 @@ Map these to:
 - `Manual optimization only` -> `GEAK_MODE=manual`
 - `Skip integration benchmark` -> `SKIP_INTEGRATION=true`
 
+### Monitor level
+
+Only if mode is `optimize` or `optimize-only`, optionally ask:
+
+- `header`: `Monitor`
+- `question`: `What level of quality monitoring should I use?`
+- `options`:
+  - `Standard monitoring`: `Review critical phases with quality checks, generic checks for others`
+  - `Strict monitoring`: `Apply quality checks to all phases, fail on any warning`
+  - `Minimal monitoring`: `Only check that phase results exist, skip quality analysis`
+
+Map these to:
+- `Standard monitoring` -> `MONITOR_LEVEL=standard` (default)
+- `Strict monitoring` -> `MONITOR_LEVEL=strict`
+- `Minimal monitoring` -> `MONITOR_LEVEL=minimal`
+
 ## Final confirmation
 
 Before execution, summarize:

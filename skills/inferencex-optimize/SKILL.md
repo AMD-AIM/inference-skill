@@ -47,6 +47,7 @@ metadata:
    - `Use full discovered sweep`
 8. Summarize the final plan and get a clear go/no-go from the user with a `Confirm` question before executing.
 9. Only after confirmation, read the needed phase docs and start execution.
+10. For multi-agent execution, read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and [`orchestrator/phase-registry.json`](orchestrator/phase-registry.json) to drive the dispatch loop. Spawn phase agents per the registry instead of reading phase docs directly.
 
 ## Status contract
 
@@ -73,8 +74,18 @@ Read these in this order:
 1. Before Round 1: no extra file reads required.
 2. After Round 1 answers: [`INTAKE.md`](INTAKE.md)
 3. Before discovery/bootstrap: [`RUNTIME.md`](RUNTIME.md)
-4. Before execution: only the phase docs needed for the chosen mode and start phase
+4. Before execution: read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and [`orchestrator/phase-registry.json`](orchestrator/phase-registry.json). Phase agents read their own `agents/phase-NN-*.md` docs -- the orchestrator does not read them.
 5. Read [`EXAMPLES.md`](EXAMPLES.md) only if interaction quality has drifted or you are editing/maintaining this skill.
+
+## Multi-agent orchestration
+
+After intake and bootstrap, the orchestrator dispatches work to specialized agents:
+
+- **Phase agents**: Self-contained per-phase agents under `agents/`. Each reads its own doc + a handoff from `handoff/to-phase-NN.md`. Write results to `agent-results/phase-NN-result.md`.
+- **Monitor agent**: Evaluates each phase result using `orchestrator/monitor.md`. Maintains `monitor/running-summary.md` for cross-phase awareness. Writes verdicts to `monitor/phase-NN-review.md`.
+- **Coder/Analyzer subagents**: Spawned by phase agents for specific tasks (kernel writing, data analysis).
+
+Communication schemas are in `protocols/`. The orchestrator never reads phase docs or runbooks directly.
 
 ## Modes
 
@@ -102,5 +113,13 @@ Choose the narrowest mode that matches the user's goal. For a smoke run, prefer 
 - [Phase 7: Kernel Optimization](phases/07-kernel-optimize.md)
 - [Phase 8: Integration & E2E Benchmark](phases/08-integration.md)
 - [Phase 9: Final Report](phases/09-report-generate.md)
+- [Orchestrator](orchestrator/ORCHESTRATOR.md)
+- [Phase Registry](orchestrator/phase-registry.json)
+- [Monitor](orchestrator/monitor.md)
+- [Phase Result Schema](protocols/phase-result.schema.md)
+- [Monitor Feedback Schema](protocols/monitor-feedback.schema.md)
+- [Handoff Format](protocols/handoff-format.md)
+- [Rerun Protocol](protocols/rerun-protocol.md)
+- [Analyzer Manifest Schema](protocols/analyzer-manifest.schema.md)
 - [E2E Test Runbook](tests/E2E_TEST.md)
 - [E2E Validator](tests/e2e_optimize_test.py)

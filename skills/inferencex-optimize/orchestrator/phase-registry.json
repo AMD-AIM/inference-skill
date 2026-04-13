@@ -1,0 +1,158 @@
+{
+  "phases": {
+    "env": {
+      "index": 0,
+      "agent": "phase-00-env-setup.md",
+      "deps": [],
+      "critical": false,
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "MODE", "REPO_DIR", "REPO_URL", "HF_CACHE", "SCRIPTS_DIR", "GEAK_DIR", "GEAK_OE_DIR", "ENV_INFO_FILE"],
+      "sticky": ["gpu_arch", "gpu_count", "container_image"]
+    },
+    "config": {
+      "index": 1,
+      "agent": "phase-01-config-parse.md",
+      "deps": ["env"],
+      "critical": false,
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "GPU_ARCH", "REPO_DIR", "SCRIPTS_DIR"],
+      "sticky": ["tp_size", "ep_size", "seq_lengths", "concurrency_levels"]
+    },
+    "benchmark": {
+      "index": 2,
+      "agent": "phase-02-benchmark.md",
+      "deps": ["config"],
+      "critical": true,
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "SCRIPTS_DIR", "REPO_DIR", "HF_CACHE", "PROFILE_DIR", "GPUS", "DRY_RUN_NOTE"],
+      "sticky": ["baseline_tpot", "baseline_throughput"],
+      "quality": {
+        "checks": [
+          { "name": "results_exist", "type": "file_exists", "path": "results/" },
+          { "name": "runs_completed", "type": "metric_threshold", "field": "benchmarks_succeeded", "min": 1 }
+        ]
+      }
+    },
+    "benchmark-analyze": {
+      "index": 3,
+      "agent": "phase-03-benchmark-analyze.md",
+      "deps": ["benchmark"],
+      "critical": false,
+      "required_context": ["OUTPUT_DIR", "SCRIPTS_DIR"],
+      "sticky": ["gap_analysis_summary", "best_concurrency"]
+    },
+    "profile": {
+      "index": 4,
+      "agent": "phase-04-profile.md",
+      "deps": ["config"],
+      "critical": false,
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "SCRIPTS_DIR", "REPO_DIR", "HF_CACHE", "PROFILE_DIR", "GPUS", "DRY_RUN_NOTE", "ENFORCE_EAGER_FLAG", "FILTER_TP", "FILTER_CONC_START", "FILTER_CONC_END", "FILTER_SEQ"]
+    },
+    "profile-analyze": {
+      "index": 5,
+      "agent": "phase-05-profile-analyze.md",
+      "deps": ["profile"],
+      "critical": true,
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "SCRIPTS_DIR", "RESOURCES_DIR"],
+      "sticky": ["top_kernels", "kernel_time_pct"],
+      "quality": {
+        "checks": [
+          { "name": "traces_valid", "type": "file_exists", "path": "profiles/" },
+          { "name": "analysis_produced", "type": "file_exists", "path": "results/profile_analysis.json" }
+        ]
+      },
+      "fallback_target": "profile"
+    },
+    "problem-generate": {
+      "index": 6,
+      "agent": "phase-06-problem-generate.md",
+      "deps": ["config"],
+      "requires_artifacts": [
+        "results/gap_analysis/gap_analysis.json",
+        "results/profile_analysis.json"
+      ],
+      "critical": false,
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "TOP_KERNELS", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "FRAMEWORK", "PRECISION", "OPTIMIZE_PRIORITY_THRESHOLD"],
+      "sticky": ["optimization_targets", "problem_count"]
+    },
+    "kernel-optimize": {
+      "index": 7,
+      "agent": "phase-07-kernel-optimize.md",
+      "deps": ["problem-generate"],
+      "critical": true,
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GPUS", "CONFIG_KEY"],
+      "quality": {
+        "checks": [
+          { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 },
+          { "name": "speedup_positive", "type": "metric_threshold", "field": "best_speedup", "min": 1.0 }
+        ]
+      },
+      "fallback_target": "problem-generate"
+    },
+    "integration": {
+      "index": 8,
+      "agent": "phase-08-integration.md",
+      "deps": ["kernel-optimize"],
+      "critical": true,
+      "required_context": ["OUTPUT_DIR", "CONFIG_KEY", "FRAMEWORK", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "RESULTS_DIR", "TEMPLATES_DIR", "GPUS"],
+      "quality": {
+        "checks": [
+          { "name": "plugin_generated", "type": "file_exists", "path": "optimized/" },
+          { "name": "validation_passed", "type": "pattern_match", "file": "agent-results/phase-08-result.md", "pattern": "validation.*pass" }
+        ]
+      },
+      "fallback_target": "kernel-optimize"
+    },
+    "report-generate": {
+      "index": 9,
+      "agent": "phase-09-report-generate.md",
+      "deps": ["integration"],
+      "critical": false,
+      "required_context": ["OUTPUT_DIR", "RESULTS_DIR", "SCRIPTS_DIR", "TEMPLATES_DIR"],
+      "sticky": ["final_speedup", "report_path"]
+    }
+  },
+  "modes": {
+    "benchmark": ["env", "config", "benchmark", "benchmark-analyze"],
+    "profile": ["env", "config", "profile", "profile-analyze"],
+    "full": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze"],
+    "optimize": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "integration", "report-generate"],
+    "optimize-only": ["env", "config", "problem-generate", "kernel-optimize", "integration", "report-generate"]
+  },
+  "rerun": { "max_per_phase": 2, "max_total": 5 },
+  "context_sources": {
+    "CONFIG_KEY":                { "source": "config" },
+    "OUTPUT_DIR":                { "source": "config" },
+    "MODE":                      { "source": "config" },
+    "REPO_DIR":                  { "source": "config" },
+    "REPO_URL":                  { "source": "config" },
+    "HF_CACHE":                  { "source": "config" },
+    "SCRIPTS_DIR":               { "source": "config" },
+    "PROFILE_DIR":               { "source": "config" },
+    "RESULTS_DIR":               { "source": "config" },
+    "PROBLEMS_DIR":              { "source": "config" },
+    "OPTIMIZED_DIR":             { "source": "config" },
+    "GEAK_DIR":                  { "source": "config" },
+    "GEAK_OE_DIR":               { "source": "config" },
+    "GEAK_MODE":                 { "source": "config" },
+    "OPTIMIZE_SCOPE":            { "source": "config" },
+    "OPTIMIZE_PRIORITY_THRESHOLD": { "source": "config" },
+    "ENV_INFO_FILE":             { "source": "config" },
+    "RESOURCES_DIR":             { "source": "config" },
+    "TEMPLATES_DIR":             { "source": "config" },
+    "CONTAINER_NAME":            { "source": "config" },
+    "FRAMEWORK":                 { "source": "config" },
+    "PRECISION":                 { "source": "config" },
+    "GPUS":                      { "source": "config" },
+    "DRY_RUN_NOTE":              { "source": "config" },
+    "ENFORCE_EAGER_FLAG":        { "source": "config" },
+    "FILTER_TP":                 { "source": "config" },
+    "FILTER_CONC_START":         { "source": "config" },
+    "FILTER_CONC_END":           { "source": "config" },
+    "FILTER_SEQ":                { "source": "config" },
+    "MONITOR_LEVEL":             { "source": "config" },
+    "SKIP_INTEGRATION":          { "source": "config" },
+    "GPU_ARCH":                  { "source": "artifact", "path": "results/gpu_arch.json", "field": "gpu_arch" },
+    "TP_SIZE":                   { "source": "artifact", "path": "results/sweep_configs.json", "field": "tp" },
+    "SEQ_LENGTHS":               { "source": "artifact", "path": "results/sweep_configs.json", "field": "seq_lengths" },
+    "CONCURRENCY_LEVELS":        { "source": "artifact", "path": "results/sweep_configs.json", "field": "concurrency_levels" },
+    "TOP_KERNELS":               { "source": "artifact", "path": "results/gap_analysis/gap_analysis.json", "field": "top_kernels" }
+  }
+}

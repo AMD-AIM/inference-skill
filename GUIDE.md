@@ -1,6 +1,6 @@
 # Guide
 
-This guide covers the verified ways to use `inferencex-optimize` and `vllm-optimize` from `OpenCode` after installing this repo.
+This guide covers the verified ways to use `inferencex-optimize` from `OpenCode` and `Cursor` after installing this repo.
 
 ## Prerequisites
 
@@ -30,26 +30,7 @@ From there, the agent should:
 - summarize the plan
 - begin execution
 
-## 2. vllm-optimize - Default user prompt
-
-For standalone vLLM benchmarking:
-
-```text
-Use vllm-optimize skill for Qwen/Qwen3.5-35B-A3B
-```
-
-From there, the agent should:
-
-- treat the model name as the starting point
-- first ask exactly three high-level question groups: `Run plan`, `Output`, and `GPUs`
-- ask those three groups in one batched form
-- then do lightweight discovery before asking sequence length and concurrency
-- offer the smoke fast path: `Use recommended smoke defaults`, `Review each filter`, or `Use full discovered sweep`
-- emit short status updates between each stage
-- summarize the plan
-- begin execution
-
-## 3. Verify OpenCode can discover the skills
+## 2. Verify OpenCode can discover the skill
 
 Run:
 
@@ -57,7 +38,7 @@ Run:
 opencode debug skill
 ```
 
-Expected output includes both skills:
+Expected output includes:
 
 ```json
 [
@@ -65,18 +46,11 @@ Expected output includes both skills:
     "name": "inferencex-optimize",
     "description": "Run the InferenceX benchmark and profiling workflow...",
     "location": "/home/you/.claude/skills/inferencex-optimize/SKILL.md"
-  },
-  {
-    "name": "vllm-optimize",
-    "description": "Run vLLM benchmark and profiling workflow in containerized environments...",
-    "location": "/home/you/.claude/skills/vllm-optimize/SKILL.md"
   }
 ]
 ```
 
-## 4. Minimal one-shot OpenCode test
-
-### For inferencex-optimize
+## 3. Minimal one-shot OpenCode test
 
 ```bash
 mkdir -p /tmp/inference-skill-opencode-project/.opencode
@@ -102,21 +76,7 @@ Verified expected response:
 env, config, benchmark, benchmark-analyze, profile, profile-analyze
 ```
 
-### For vllm-optimize
-
-```bash
-cd /tmp/inference-skill-opencode-project
-opencode run -m amd-anthropic/claude-opus-4-6 \
-  "Use the skill tool to load the vllm-optimize skill. Then reply with only the four phase names as a comma-separated list. Do not use any other tools."
-```
-
-Expected response:
-
-```text
-vllm-setup, benchmark, profiling, analysis
-```
-
-## 5. Guided interactive OpenCode usage
+## 4. Guided interactive OpenCode usage
 
 Inside any project where the skill is discoverable:
 
@@ -127,16 +87,12 @@ opencode
 Then use a prompt like:
 
 ```text
-# For InferenceX
 Use inferencex-optimize skill for qwen3.5-bf16-mi355x-sglang.
-
-# For vLLM
-Use vllm-optimize skill for Qwen/Qwen3.5-35B-A3B
 ```
 
 The agent should then ask a small number of choice-based setup questions before starting work.
 
-## 6. Non-interactive shell / CI note
+## 5. Non-interactive shell / CI note
 
 In some non-TTY shells, `opencode run` may not emit visible formatted output unless it has a pseudo-terminal.
 
@@ -148,45 +104,54 @@ script -q -c 'cd /tmp/inference-skill-opencode-project && opencode run -m amd-an
 
 This repo was verified with that form.
 
-## 7. Cursor usage
+## 6. Cursor usage
 
-After `./install.sh`, Cursor rules are installed at:
+After `./install.sh`, the Cursor rule is installed at:
 
 ```bash
 ~/.cursor/rules/inferencex-optimize.mdc
-~/.cursor/rules/vllm-optimize.mdc
 ```
 
-### Verify the rules are installed
+### Verify the rule is installed
 
 ```bash
 ls ~/.cursor/rules/inferencex-optimize.mdc
-ls ~/.cursor/rules/vllm-optimize.mdc
 ```
 
 ### Usage in Cursor
 
-Each rule is **Agent Requested** — Cursor's AI loads it automatically when you ask about the respective workflow in Composer (agent mode).
+The rule is **Agent Requested** — Cursor's AI loads it automatically when you ask about the workflow in Composer (agent mode).
 
-Example prompts in Cursor Composer:
+Example prompt in Cursor Composer:
 
 ```text
-# For InferenceX
 Use inferencex-optimize for qwen3.5-bf16-mi355x-sglang.
-
-# For vLLM
-Use vllm-optimize for Qwen/Qwen3.5-35B-A3B
 ```
 
-Cursor's agent will recognize each request, pull in the rule, and follow the guided setup flow from `SKILL.md`.
+Cursor's agent will recognize the request, pull in the rule, and follow the guided setup flow from `SKILL.md`.
+
+## 7. Multi-agent architecture
+
+The `inferencex-optimize` skill now supports a multi-agent orchestration model:
+
+- **Orchestrator** reads `SKILL.md`, `INTAKE.md`, then dispatches phases via `ORCHESTRATOR.md` and `phase-registry.json`
+- **Phase agents** are self-contained: each reads its own `agents/phase-NN-*.md` + a handoff document
+- **Monitor agent** verifies phase output quality and maintains a rolling summary
+- **Coder/Analyzer subagents** handle specialized tasks within phases
+
+The markdown-based communication protocol (handoffs, results, reviews) is platform-agnostic. Only the agent spawning mechanism differs:
+- Claude Code / OpenCode: `Agent` tool
+- Cursor: `Task` tool with `subagent_type="generalPurpose"`
+
+See `orchestrator/ORCHESTRATOR.md` for the full dispatch loop protocol.
 
 ## 8. Duplicate install note
 
-If you install either skill both globally and project-locally with the same skill name, OpenCode may resolve the global copy when listing skills.
+If you install the skill both globally and project-locally, OpenCode may resolve the global copy when listing skills.
 
 To avoid confusion while debugging:
 
-- keep only one active install of each skill, or
+- keep only one active install, or
 - use `HOME=$(mktemp -d)` for an isolated verification environment
 
 Example isolated verification:

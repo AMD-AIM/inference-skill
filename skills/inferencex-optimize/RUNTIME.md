@@ -9,39 +9,49 @@ Use only the files bundled next to this skill:
 **Phase docs:**
 - `phases/00-env-setup.md` through `phases/09-report-generate.md`
 
-**Pre-existing scripts (domain logic):**
-- `scripts/trace_analyzer.py`
-- `scripts/select_gpus.py`
-- `scripts/classify_kernel.py`
-- `scripts/analyze_fusion_inferencex.py`
-- `scripts/generate_problems_inferencex.py`
-- `scripts/kernel_test_runner.py`
-- `scripts/kernel_finalize.py`
-- `scripts/generate_vllm_plugin.py`
-- `scripts/generate_sglang_plugin.py`
+**Scripts (organized by category):**
 
-**Extracted scripts (phase automation):**
-- `scripts/generate_env_info.py` — GPU/GEAK/API key detection (Phase 0)
-- `scripts/validate_config_key.py` — Master YAML config-key validation with close-match suggestions (Phases 0, 1)
-- `scripts/start_profile_container.sh` — Docker container creation with `--mode benchmark|profile|optimize`, extra `--mount` and `--env` support (Phases 2, 4, 7, 8)
-- `scripts/run_profile_exec.sh` — Docker exec with heartbeats + trace flush (Phases 2, 4, 8)
-- `scripts/collect_profile_traces.sh` — Trace/result collection from repo (Phases 2, 4)
-- `scripts/patch_rank0_profiling.py` — Rank-0-only trace export (Phase 4, runs inside container)
-- `scripts/inject_profiler_config.py` — Profiler config injection (Phase 4, runs inside container)
-- `scripts/patch_benchmark_lib.py` — Relay/cap disable (Phase 4, runs inside container)
-- `scripts/validate_traces.py` — Trace discovery and validation (Phase 5)
-- `scripts/detect_gpu_arch.py` — GPU arch detection for roofline (Phase 5)
-- `scripts/install_tracelens.sh` — TraceLens installation (Phase 5)
-- `scripts/run_tracelens.sh` — TraceLens analysis pipeline (Phase 5)
-- `scripts/display_tracelens_results.sh` — Console result display (Phase 5)
-- `scripts/extract_model_shapes.py` — Model shape extraction (Phase 6)
-- `scripts/resolve_geak_mode.py` — GEAK mode resolution (Phase 7)
-- `scripts/load_optimization_manifest.py` — Manifest loading/filtering (Phase 7)
-- `scripts/collect_winning_kernels.py` — Kernel collection (Phase 7, runs inside container)
-- `scripts/verify_winning_kernels.py` — Pre-integration verification (Phase 8)
-- `scripts/inject_plugin.py` — Plugin injection (Phase 8, runs inside container)
-- `scripts/validate_optimization.py` — Baseline vs optimized comparison (Phase 8)
-- `scripts/generate_optimization_summary.py` — Summary JSON generation (Phase 9)
+`scripts/env/`:
+- `validate_config_key.py` — Master YAML config-key validation (Phases 0, 1)
+- `detect_gpu_arch.py` — GPU arch detection for roofline (Phase 5)
+- `generate_env_info.py` — GPU/GEAK/API key detection (Phase 0)
+- `select_gpus.py` — Least-loaded GPU selection (Phases 2, 4, 7, 8)
+
+`scripts/container/`:
+- `start_profile_container.sh` — Docker container creation with `--mode benchmark|profile|optimize` (Phases 2, 4, 7, 8)
+- `run_profile_exec.sh` — Docker exec with heartbeats + trace flush (Phases 2, 4, 8)
+- `collect_profile_traces.sh` — Trace/result collection (Phases 2, 4)
+
+`scripts/profiling/`:
+- `inject_profiler_config.py` — Profiler config injection (Phase 4)
+- `patch_rank0_profiling.py` — Rank-0-only trace export (Phase 4)
+- `patch_benchmark_lib.py` — Relay/cap disable (Phase 4)
+- `trace_analyzer.py` — Chrome-format trace parser for gap analysis (Phase 5)
+- `validate_traces.py` — Trace discovery and validation (Phase 5)
+- `install_tracelens.sh` — TraceLens installation (Phase 5)
+- `run_tracelens.sh` — TraceLens analysis pipeline (Phase 5)
+- `display_tracelens_results.sh` — Console result display (Phase 5)
+
+`scripts/optimize/`:
+- `classify_kernel.py` — Kernel type classification (Phase 6)
+- `analyze_fusion_inferencex.py` — Fusion opportunity detection (Phase 6)
+- `extract_model_shapes.py` — Model shape extraction (Phase 6)
+- `generate_problems_inferencex.py` — GEAK problem file generation (Phase 6)
+- `resolve_geak_mode.py` — GEAK mode resolution (Phase 7)
+- `load_optimization_manifest.py` — Manifest loading/filtering (Phase 7)
+- `kernel_test_runner.py` — Kernel correctness/benchmark testing (Phase 7)
+- `kernel_finalize.py` — Best kernel finalization (Phase 7)
+- `collect_winning_kernels.py` — Kernel collection (Phase 7)
+- `verify_winning_kernels.py` — Pre-integration verification (Phase 8)
+
+`scripts/plugin/`:
+- `generate_vllm_plugin.py` — vLLM plugin generation (Phase 8)
+- `generate_sglang_plugin.py` — SGLang plugin generation (Phase 8)
+- `inject_plugin.py` — Plugin injection into benchmark (Phase 8)
+
+`scripts/report/`:
+- `validate_optimization.py` — Baseline vs optimized comparison (Phase 8)
+- `generate_optimization_summary.py` — Summary JSON generation (Phase 9)
 
 **Templates:**
 - `templates/agent-config.md`
@@ -88,6 +98,8 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`
 - `GEAK_MODE` (auto, full, triton_only, manual; from INTAKE optimization extras)
 - `OPTIMIZE_SCOPE` (all, fused_only; from INTAKE optimization extras)
+- `MONITOR_LEVEL` (standard, strict, minimal; from INTAKE monitor level question)
+- `SKIP_INTEGRATION` (true/false; from INTAKE "Skip integration benchmark" option)
 - `RESOURCES_DIR` (path to installed skill's `resources/` directory; contains `TraceLens-internal.tar.gz`)
 - `TEMPLATES_DIR` (path where bundled templates are copied during bootstrap)
 - `ENFORCE_EAGER_FLAG` (set to `--enforce-eager` when eager mode is required for the framework, or empty string otherwise; resolved by the agent based on framework and profiling requirements)
@@ -112,6 +124,8 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`: `<OUTPUT_DIR>/env_info.json` (environment info written by Phase 0)
 - `GEAK_MODE`: `auto` (auto-detect GEAK availability; `full` = Triton + HIP/CK; `triton_only` = simple mode only; `manual` = no GEAK)
 - `OPTIMIZE_SCOPE`: `all` (optimize all bottleneck kernels; `fused_only` = only fused operator problems)
+- `MONITOR_LEVEL`: `standard` (review critical phases with quality checks, generic checks for others; `strict` = quality checks on all phases, fail on any warning; `minimal` = only check result exists)
+- `SKIP_INTEGRATION`: `false` (when `true`, skip Phase 8 integration benchmark — only generate optimized kernels and plugins)
 - `RESOURCES_DIR`: `<installed_skill_root>/resources` (the `resources/` directory alongside `SKILL.md`; not copied to OUTPUT_DIR due to tarball size -- must remain accessible during execution)
 - `TEMPLATES_DIR`: `<OUTPUT_DIR>/templates`
 - `ENFORCE_EAGER_FLAG`: `""` (empty; set to `--enforce-eager` by the agent when the framework requires eager mode for profiling)
@@ -127,10 +141,10 @@ Resolve these before loading any phase doc:
 
 Before executing any phase doc:
 
-1. Create `OUTPUT_DIR`, `RESULTS_DIR`, `PROFILE_DIR`, `REPORT_DIR`, `SCRIPTS_DIR`, `TEMPLATES_DIR`, `PROBLEMS_DIR`, and `OPTIMIZED_DIR`.
+1. Create `OUTPUT_DIR`, `RESULTS_DIR`, `PROFILE_DIR`, `REPORT_DIR`, `SCRIPTS_DIR`, `TEMPLATES_DIR`, `PROBLEMS_DIR`, `OPTIMIZED_DIR`, and the agent communication directories: `handoff/`, `agent-results/`, `monitor/`.
 2. Write `config.json` with the resolved run configuration.
 3. Write initial `progress.json` if it does not already exist.
-4. Copy ALL bundled scripts into `SCRIPTS_DIR` and ALL bundled templates into `TEMPLATES_DIR`. Phase docs reference scripts via `{{SCRIPTS_DIR}}/` and templates via `{{TEMPLATES_DIR}}/`. `RESOURCES_DIR` points to the installed skill's `resources/` directory in place (not copied); it must remain accessible during Phase 5 TraceLens installation.
+4. Copy ALL bundled scripts (preserving subdirectory structure: `env/`, `container/`, `profiling/`, `optimize/`, `plugin/`, `report/`) into `SCRIPTS_DIR` and ALL bundled templates into `TEMPLATES_DIR`. Phase agents reference scripts via `{{SCRIPTS_DIR}}/env/`, `{{SCRIPTS_DIR}}/container/`, etc. `RESOURCES_DIR` points to the installed skill's `resources/` directory in place (not copied); it must remain accessible during Phase 5 TraceLens installation.
 
 For `resume` or `from-phase`, read existing `progress.json` and artifacts first, then fully rerun the requested start phase.
 
@@ -148,13 +162,26 @@ Read only the phase docs needed for the selected mode and start phase.
 ## Execution guardrails
 
 - Execute phases in order.
-- Update `progress.json` after every completed phase.
+- The orchestrator updates `progress.json` after each phase's monitor review — phase agents do not write to it.
 - Save all outputs under `OUTPUT_DIR`.
 - Do not modify `/opt` or `/usr`.
 - Only patch the cloned InferenceX repo temporarily when profiling requires it; restore patched files afterward.
 - If filter application produces zero configs, stop immediately with a clear error.
 - If profiling artifacts are root-owned, clean them up and continue instead of leaving the run half-complete.
 - Prefer measured data over assumptions when writing reports.
+
+## Multi-agent orchestration
+
+When running in multi-agent mode, the orchestrator manages the execution loop:
+
+- Read `orchestrator/ORCHESTRATOR.md` for the dispatch loop protocol
+- Read `orchestrator/phase-registry.json` for phase metadata, mode maps, and quality criteria
+- Write `handoff/to-phase-NN.md` for each phase agent
+- Spawn phase agents that read their own `agents/phase-NN-*.md`
+- Spawn monitor agents after each phase per `orchestrator/monitor.md`
+- Monitor writes reviews to `monitor/phase-NN-review.md` and updates `monitor/running-summary.md`
+- Phase agents write results to `agent-results/phase-NN-result.md`
+- Communication schemas are defined in `protocols/`
 
 ## Execution status updates
 

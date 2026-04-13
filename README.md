@@ -1,8 +1,8 @@
 # inference-skill
 
-Standalone distribution repo for `inferencex-optimize` and `vllm-optimize` skills.
+Standalone distribution repo for the `inferencex-optimize` skill.
 
-This repo packages GPU inference benchmarking and profiling workflows as reusable skills that can be installed once and used from:
+This repo packages GPU inference benchmarking, profiling, and kernel optimization workflows as a reusable skill that can be installed once and used from:
 
 - `Claude Code`
 - `OpenCode`
@@ -10,27 +10,96 @@ This repo packages GPU inference benchmarking and profiling workflows as reusabl
 
 Claude Code and OpenCode discover skills from Claude-compatible install locations. Cursor uses a generated `.mdc` rule. One `./install.sh` run sets up all three.
 
-## Two Skills
+## Features
 
-### inferencex-optimize
-
-Full InferenceX benchmark and profiling workflow including:
-- Docker container setup
+Full InferenceX benchmark, profiling, and kernel optimization workflow with multi-agent orchestration:
+- Orchestrator-driven dispatch loop with phase agents
+- Quality monitoring with automatic rerun on failure
+- Docker container setup and GPU management
 - Sweep filtering and configuration
-- Benchmark execution
-- Torch profiler trace collection
-- TraceLens analysis
+- Benchmark execution and analysis
+- Torch profiler trace collection and TraceLens analysis
+- GEAK-accelerated kernel optimization
+- Framework plugin generation (vLLM, SGLang)
 - Report generation
 
-### vllm-optimize
+## Architecture
 
-Standalone vLLM benchmark and profiling workflow:
-- Automated vLLM server startup
-- Concurrency sweep benchmark
-- Torch profiler trace capture
-- GPU kernel analysis with proper filtering
-- Works in containerized environments
-- Supports AMD MI355X/MI300X and NVIDIA GPUs
+### Multi-agent orchestration
+
+The `inferencex-optimize` skill uses a multi-agent architecture that keeps each agent's context small (~100-200 lines) instead of accumulating the full pipeline (~1,700+ lines) in a single agent.
+
+```mermaid
+flowchart TB
+    User([User])
+    Skill[SKILL.md + INTAKE.md]
+    Orch[Orchestrator]
+    Registry[(phase-registry.json)]
+    Monitor[Monitor Agent]
+    Summary[(running-summary.md)]
+
+    User -->|config key + options| Skill
+    Skill -->|resolved variables| Orch
+    Orch -->|reads phase metadata| Registry
+
+    subgraph Phase Dispatch Loop
+        Handoff[Generate Handoff]
+        Agent[Phase Agent N]
+        Result[Phase Result]
+        Review[Monitor Review]
+
+        Orch --> Handoff
+        Handoff -->|to-phase-NN.md| Agent
+        Agent -->|phase-NN-result.md| Result
+        Result --> Review
+        Review -->|verdict| Orch
+    end
+
+    Monitor -.->|evaluates| Review
+    Monitor -.->|updates| Summary
+
+    subgraph Subagents
+        Coder[Coding Agent]
+        Analyzer[Analysis Agent]
+    end
+
+    Agent -->|spawns| Coder
+    Agent -->|spawns| Analyzer
+```
+
+### Pipeline phases
+
+Each workflow mode maps to a subset of 10 phases:
+
+```mermaid
+flowchart LR
+    P0[0 Env Setup] --> P1[1 Config Parse]
+    P1 --> P2[2 Benchmark]
+    P2 --> P3[3 Bench Analyze]
+    P3 --> P4[4 Profiling]
+    P4 --> P5[5 Profile Analyze]
+    P5 --> P6[6 Problem Gen]
+    P6 --> P7[7 Kernel Optimize]
+    P7 --> P8[8 Integration]
+    P8 --> P9[9 Report Gen]
+```
+
+| Mode | Phases |
+|------|--------|
+| benchmark | 0 → 1 → 2 → 3 |
+| profile | 0 → 1 → 4 → 5 |
+| full | 0 → 1 → 2 → 3 → 4 → 5 |
+| optimize | 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 |
+| optimize-only | 0 → 1 → 6 → 7 → 8 → 9 (requires prior profile artifacts) |
+
+### Token budget
+
+| Component | Context size | What it reads |
+|-----------|-------------|---------------|
+| Orchestrator | ~500 lines | ORCHESTRATOR.md + registry + current review |
+| Phase agent | ~100-200 lines | agent doc + handoff |
+| Monitor | ~60-100 lines | monitor doc + summary + result |
+| Single-agent (old) | ~1,700+ lines | all phase docs cumulative |
 
 ## Guide
 
@@ -38,19 +107,11 @@ For verified OpenCode and Cursor usage, see [GUIDE.md](GUIDE.md).
 
 ## Intended UX
 
-### inferencex-optimize
-
 ```text
 Use inferencex-optimize skill for qwen3.5-bf16-mi355x-sglang.
 ```
 
-### vllm-optimize
-
-```text
-Use vllm-optimize skill for Qwen/Qwen3.5-35B-A3B
-```
-
-After either prompt, the agent should drive a short guided setup:
+The agent should drive a short guided setup:
 - first ask exactly three high-level question groups: `Run plan`, `Output`, and `GPUs`
 - ask those questions together as one grouped form, not one-by-one
 - then do lightweight discovery before asking `tp`, `seq-len`, and `conc`
@@ -65,6 +126,7 @@ After either prompt, the agent should drive a short guided setup:
 inference-skill/
   install.sh
   LICENSE
+  tests/                                # Root-level test shims
   skills/
     inferencex-optimize/
       SKILL.md
@@ -73,20 +135,26 @@ inference-skill/
       EXAMPLES.md
       INSTALL.md
       LICENSE
-      phases/
+      orchestrator/                     # Multi-agent orchestration
+        ORCHESTRATOR.md
+        phase-registry.json
+        monitor.md
+      agents/                           # Self-contained phase agents
+        phase-00-env-setup.md ... phase-09-report-generate.md
+        coding-agent.md
+        analysis-agent.md
+      protocols/                        # Communication schemas
+        phase-result.schema.md
+        monitor-feedback.schema.md
+        handoff-format.md
+        rerun-protocol.md
+        analyzer-manifest.schema.md
+      phases/                           # Reference archive (human-readable)
       templates/
-      scripts/
+      scripts/                          # Organized by category
+        env/ container/ profiling/ optimize/ plugin/ report/
       tests/
-        E2E_TEST.md
-        e2e_optimize_test.py
       resources/
-    vllm-optimize/
-      SKILL.md
-      INTAKE.md
-      RUNTIME.md
-      README.md
-      phases/
-      scripts/
 ```
 
 ## Install
@@ -117,31 +185,28 @@ Global install writes to:
 
 ```text
 ~/.claude/skills/inferencex-optimize       # skill files (Claude Code + OpenCode)
-~/.claude/skills/vllm-optimize             # skill files (Claude Code + OpenCode)
 ~/.cursor/skills/inferencex-optimize       # symlink (Cursor native skill)
-~/.cursor/skills/vllm-optimize             # symlink (Cursor native skill)
 ~/.cursor/rules/inferencex-optimize.mdc    # Cursor agent-requested rule
-~/.cursor/rules/vllm-optimize.mdc          # Cursor agent-requested rule
 ```
 
 Project install writes to the same three locations under the project directory.
 
 ## Source of truth
 
-The standalone skills live under `skills/inferencex-optimize/` and `skills/vllm-optimize/`.
+The skill lives under `skills/inferencex-optimize/`.
 
-Each directory is the source of truth for its respective skill:
+This directory is the source of truth:
 - `SKILL.md` - skill definition and metadata
 - guided intake flow
 - runtime defaults and bootstrap rules
 - interaction examples
 - phase instructions
 - helper scripts
-- packaged test assets (for `inferencex-optimize`)
+- packaged test assets
 
 ## E2E test packaging
 
-`inferencex-optimize` now packages E2E assets inside the installed skill directory:
+E2E assets are packaged inside the installed skill directory:
 
 - `~/.claude/skills/inferencex-optimize/tests/E2E_TEST.md`
 - `~/.claude/skills/inferencex-optimize/tests/e2e_optimize_test.py`
@@ -151,6 +216,6 @@ Repo-level `tests/` paths are kept as compatibility entrypoints and forward to t
 
 ## Development workflow
 
-1. Edit files under `skills/inferencex-optimize/` or `skills/vllm-optimize/`.
-2. Reinstall with `./install.sh` or use `--link` during development.
-3. Validate the installed result from the destination skill directory.
+1. Edit files under `skills/inferencex-optimize/`
+2. Reinstall with `./install.sh` or use `--link` during development
+3. Validate the installed result from the destination skill directory

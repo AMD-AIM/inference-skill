@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SKILL_NAMES=("inferencex-optimize" "vllm-optimize")
+SKILL_NAMES=("inferencex-optimize")
 MODE="copy"
 
 usage() {
@@ -83,24 +83,26 @@ install_skill() {
   require_dir "$SOURCE_DIR"
   require_file "$SOURCE_DIR/SKILL.md"
 
-  # vllm-optimize uses README.md, inferencex-optimize uses INSTALL.md
   if [[ "$SKILL_NAME" == "inferencex-optimize" ]]; then
     require_file "$SOURCE_DIR/INSTALL.md"
     require_file "$SOURCE_DIR/LICENSE"
     require_dir "$SOURCE_DIR/phases"
     require_dir "$SOURCE_DIR/templates"
     require_dir "$SOURCE_DIR/scripts"
-    require_dir "$SOURCE_DIR/resources"
-    require_file "$SOURCE_DIR/resources/TraceLens-internal.tar.gz"
+    require_dir "$SOURCE_DIR/orchestrator"
+    require_dir "$SOURCE_DIR/agents"
+    require_dir "$SOURCE_DIR/protocols"
+    require_file "$SOURCE_DIR/orchestrator/ORCHESTRATOR.md"
+    require_file "$SOURCE_DIR/orchestrator/phase-registry.json"
+    require_file "$SOURCE_DIR/orchestrator/monitor.md"
+    if [[ -d "$SOURCE_DIR/resources" ]]; then
+      require_file "$SOURCE_DIR/resources/TraceLens-internal.tar.gz"
+    else
+      echo "WARNING: resources/ directory not found — TraceLens tarball will be unavailable" >&2
+    fi
     require_dir "$SOURCE_DIR/tests"
     require_file "$SOURCE_DIR/tests/E2E_TEST.md"
     require_file "$SOURCE_DIR/tests/e2e_optimize_test.py"
-  else
-    require_file "$SOURCE_DIR/README.md"
-    require_file "$SOURCE_DIR/RUNTIME.md"
-    require_dir "$SOURCE_DIR/phases"
-    require_dir "$SOURCE_DIR/scripts"
-    require_dir "$SOURCE_DIR/templates"
   fi
 
   mkdir -p "$(dirname "$DEST_DIR")"
@@ -144,15 +146,12 @@ install_skill() {
     | sed "s|](EXAMPLES.md)|](${DEST_DIR}/EXAMPLES.md)|g" \
     | sed "s|](tests/E2E_TEST.md)|](${DEST_DIR}/tests/E2E_TEST.md)|g" \
     | sed "s|](tests/e2e_optimize_test.py)|](${DEST_DIR}/tests/e2e_optimize_test.py)|g" \
-    | sed "s|](phases/|](${DEST_DIR}/phases/|g")"
+    | sed "s|](phases/|](${DEST_DIR}/phases/|g" \
+    | sed "s|](orchestrator/|](${DEST_DIR}/orchestrator/|g" \
+    | sed "s|](agents/|](${DEST_DIR}/agents/|g" \
+    | sed "s|](protocols/|](${DEST_DIR}/protocols/|g")"
 
-  # Generate description based on skill name
-  local DESC=""
-  if [[ "$SKILL_NAME" == "inferencex-optimize" ]]; then
-    DESC="InferenceX benchmark and profiling workflow skill. Use this rule when the user asks to benchmark, profile, or optimize a model with InferenceX, names a config key, or asks to run any phase of the InferenceX pipeline."
-  else
-    DESC="vLLM benchmark and profiling workflow skill. Use this rule when the user asks to benchmark or profile a model with vLLM, run vLLM inference optimization, or analyze GPU kernel performance."
-  fi
+  local DESC="InferenceX benchmark and profiling workflow skill. Use this rule when the user asks to benchmark, profile, or optimize a model with InferenceX, names a config key, or asks to run any phase of the InferenceX pipeline."
 
   MDC_CONTENT="---
 description: >-

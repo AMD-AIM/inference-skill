@@ -144,3 +144,43 @@ Okay. Which GPUs?
 ```
 
 Those should be asked together in one setup form.
+
+## Example 4: multi-agent orchestration (optimize workflow)
+
+User:
+
+```text
+Use inferencex-optimize skill for dsr1-fp4-mi355x-sglang with optimize workflow.
+```
+
+Assistant:
+
+The guided setup flow proceeds the same as before (Round 1 setup form, discovery, filter choices, confirmation). After confirmation:
+
+```text
+Status 5/5: starting multi-agent execution.
+
+Dispatching orchestrator → Phase 00 (env-setup)...
+  ✓ Phase 00 completed — GPU: gfx950, GEAK: available
+Dispatching orchestrator → Phase 01 (config-parse)...
+  ✓ Phase 01 completed — 1 sweep config generated
+Dispatching orchestrator → Phase 02 (benchmark) [critical]...
+  ✓ Phase 02 completed — 1 benchmark run, throughput: 2847 tok/s
+  Monitor: PASS — results_exist ✓, runs_completed ✓
+Dispatching orchestrator → Phase 03 (benchmark-analyze)...
+  ✓ Phase 03 completed — gap analysis: 12 bottleneck kernels
+...
+Dispatching orchestrator → Phase 07 (kernel-optimize) [critical]...
+  ✓ Phase 07 completed — 5/12 kernels improved, best speedup: 1.42x
+  Monitor: PASS — compiled_count=5 ✓, best_speedup=1.42 ✓
+Dispatching orchestrator → Phase 08 (integration) [critical]...
+  ✓ Phase 08 completed — E2E speedup: 1.08x
+  Monitor: PASS — plugin_generated ✓, validation passed ✓
+Dispatching orchestrator → Phase 09 (report-generate)...
+  ✓ Phase 09 completed — report at report/optimization_report.md
+
+All 10 phases completed. Final E2E speedup: 1.08x
+Report: ~/inferencex_dsr1-fp4-mi355x-sglang_20260413_100000/report/optimization_report.md
+```
+
+> In multi-agent mode, each phase runs as an isolated agent with bounded context. The orchestrator dispatches phases sequentially, and the monitor validates critical phases before proceeding. If a critical phase fails, the orchestrator reruns it (up to 2 times) before escalating.

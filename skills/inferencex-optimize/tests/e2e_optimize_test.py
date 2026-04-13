@@ -216,6 +216,222 @@ def check_skill_layout():
     else:
         checks.append(CheckResult("packaging", "TraceLens fallback tarball present", "fail",
                                   f"Missing: {tarball_path}"))
+
+    # Multi-agent orchestration files
+    orch_files = [
+        "orchestrator/ORCHESTRATOR.md",
+        "orchestrator/phase-registry.json",
+        "orchestrator/monitor.md",
+    ]
+    for f in orch_files:
+        path = os.path.join(skill_root, f)
+        if os.path.isfile(path):
+            checks.append(CheckResult("packaging", f"{f} present", "pass", path))
+        else:
+            checks.append(CheckResult("packaging", f"{f} present", "fail", f"Missing: {path}"))
+
+    # Agent files
+    expected_agents = [
+        f"agents/phase-{i:02d}-{name}.md"
+        for i, name in enumerate([
+            "env-setup", "config-parse", "benchmark", "benchmark-analyze",
+            "profile", "profile-analyze", "problem-generate",
+            "kernel-optimize", "integration", "report-generate",
+        ])
+    ] + ["agents/coding-agent.md", "agents/analysis-agent.md"]
+    for f in expected_agents:
+        path = os.path.join(skill_root, f)
+        if os.path.isfile(path):
+            checks.append(CheckResult("packaging", f"{f} present", "pass"))
+        else:
+            checks.append(CheckResult("packaging", f"{f} present", "fail", f"Missing: {path}"))
+
+    # Protocol files
+    protocol_files = [
+        "protocols/phase-result.schema.md",
+        "protocols/monitor-feedback.schema.md",
+        "protocols/handoff-format.md",
+        "protocols/rerun-protocol.md",
+        "protocols/analyzer-manifest.schema.md",
+    ]
+    for f in protocol_files:
+        path = os.path.join(skill_root, f)
+        if os.path.isfile(path):
+            checks.append(CheckResult("packaging", f"{f} present", "pass"))
+        else:
+            checks.append(CheckResult("packaging", f"{f} present", "fail", f"Missing: {path}"))
+
+    return checks
+
+
+def check_multi_agent_workspace(output_dir, config):
+    """Validate multi-agent communication workspace directories and files."""
+    checks = []
+
+    # Check workspace directories exist
+    for dirname in ["handoff", "agent-results", "monitor"]:
+        dirpath = os.path.join(output_dir, dirname)
+        if os.path.isdir(dirpath):
+            checks.append(CheckResult("multi-agent", f"{dirname}/ directory exists", "pass"))
+        else:
+            checks.append(CheckResult("multi-agent", f"{dirname}/ directory exists", "skip",
+                                      "Not present (single-agent mode or not yet created)"))
+
+    # Check agent-results files exist for completed phases
+    progress_path = os.path.join(output_dir, "progress.json")
+    if os.path.isfile(progress_path):
+        with open(progress_path) as f:
+            progress = json.load(f)
+        completed = progress.get("phases_completed", [])
+
+        phase_index_map = {
+            "env": 0, "config": 1, "benchmark": 2, "benchmark-analyze": 3,
+            "profile": 4, "profile-analyze": 5, "problem-generate": 6,
+            "kernel-optimize": 7, "integration": 8, "report-generate": 9,
+        }
+
+        results_dir = os.path.join(output_dir, "agent-results")
+        if os.path.isdir(results_dir):
+            for phase_key in completed:
+                idx = phase_index_map.get(phase_key)
+                if idx is not None:
+                    result_file = os.path.join(results_dir, f"phase-{idx:02d}-result.md")
+                    if os.path.isfile(result_file):
+                        checks.append(CheckResult("multi-agent",
+                                                   f"phase-{idx:02d}-result.md exists", "pass"))
+                    else:
+                        checks.append(CheckResult("multi-agent",
+                                                   f"phase-{idx:02d}-result.md exists", "skip",
+                                                   "Result file not found"))
+
+    # Check monitor running-summary exists
+    summary_path = os.path.join(output_dir, "monitor", "running-summary.md")
+    if os.path.isfile(summary_path):
+        checks.append(CheckResult("multi-agent", "running-summary.md exists", "pass"))
+    else:
+        checks.append(CheckResult("multi-agent", "running-summary.md exists", "skip",
+                                  "Not present (single-agent mode)"))
+
+    # Check monitor reviews for critical phases
+    monitor_dir = os.path.join(output_dir, "monitor")
+    if os.path.isdir(monitor_dir):
+        critical_phases = {2: "benchmark", 5: "profile-analyze",
+                           7: "kernel-optimize", 8: "integration"}
+        for idx, name in critical_phases.items():
+            review_file = os.path.join(monitor_dir, f"phase-{idx:02d}-review.md")
+            if os.path.isfile(review_file):
+                checks.append(CheckResult("multi-agent",
+                                           f"phase-{idx:02d}-review.md (critical) exists", "pass"))
+
+    # Validate progress.json uses canonical phase keys
+    if os.path.isfile(progress_path):
+        with open(progress_path) as f:
+            progress = json.load(f)
+        completed = progress.get("phases_completed", [])
+        valid_keys = set(OPTIMIZE_PHASES)
+        invalid = [k for k in completed if k not in valid_keys]
+        if invalid:
+            checks.append(CheckResult("multi-agent", "progress.json uses canonical phase keys",
+                                       "fail", f"Invalid keys: {invalid}"))
+        elif completed:
+            checks.append(CheckResult("multi-agent", "progress.json uses canonical phase keys",
+                                       "pass", f"{len(completed)} phases completed"))
+
+        # Validate retry_counts structure
+        retry_counts = progress.get("retry_counts", {})
+        if isinstance(retry_counts, dict):
+            bad_keys = [k for k in retry_counts if k not in valid_keys]
+            if bad_keys:
+                checks.append(CheckResult("multi-agent", "retry_counts uses canonical keys",
+                                           "fail", f"Invalid keys: {bad_keys}"))
+            else:
+                checks.append(CheckResult("multi-agent", "retry_counts uses canonical keys",
+                                           "pass"))
+            for k, v in retry_counts.items():
+                if isinstance(v, int) and v > 2:
+                    checks.append(CheckResult("multi-agent",
+                                               f"retry_counts[{k}] within limit",
+                                               "warning", f"Retried {v} times (max_per_phase=2)"))
+
+        total_reruns = progress.get("total_reruns", 0)
+        if isinstance(total_reruns, int) and total_reruns > 5:
+            checks.append(CheckResult("multi-agent", "total_reruns within limit",
+                                       "warning", f"Total reruns={total_reruns} (max=5)"))
+
+    # Validate handoff files match completed phases
+    handoff_dir = os.path.join(output_dir, "handoff")
+    if os.path.isdir(handoff_dir) and os.path.isfile(progress_path):
+        for phase_key in completed:
+            idx = phase_index_map.get(phase_key)
+            if idx is not None:
+                handoff_file = os.path.join(handoff_dir, f"to-phase-{idx:02d}.md")
+                if os.path.isfile(handoff_file):
+                    checks.append(CheckResult("multi-agent",
+                                               f"handoff/to-phase-{idx:02d}.md exists", "pass"))
+                    with open(handoff_file) as f:
+                        content = f.read()
+                    if "## Resolved Variables" not in content:
+                        checks.append(CheckResult("multi-agent",
+                                                   f"handoff phase-{idx:02d} has Resolved Variables",
+                                                   "warning", "Missing ## Resolved Variables section"))
+                else:
+                    checks.append(CheckResult("multi-agent",
+                                               f"handoff/to-phase-{idx:02d}.md exists", "skip",
+                                               "Handoff not found"))
+
+    # Validate result doc format (YAML frontmatter with required fields)
+    if os.path.isdir(results_dir):
+        for phase_key in completed:
+            idx = phase_index_map.get(phase_key)
+            if idx is None:
+                continue
+            result_file = os.path.join(results_dir, f"phase-{idx:02d}-result.md")
+            if not os.path.isfile(result_file):
+                continue
+            with open(result_file) as f:
+                content = f.read()
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = parts[1]
+                    has_phase = "phase:" in frontmatter
+                    has_status = "status:" in frontmatter
+                    if has_phase and has_status:
+                        checks.append(CheckResult("multi-agent",
+                                                   f"phase-{idx:02d}-result.md has valid frontmatter",
+                                                   "pass"))
+                    else:
+                        missing = []
+                        if not has_phase:
+                            missing.append("phase")
+                        if not has_status:
+                            missing.append("status")
+                        checks.append(CheckResult("multi-agent",
+                                                   f"phase-{idx:02d}-result.md has valid frontmatter",
+                                                   "warning", f"Missing fields: {missing}"))
+
+    # Validate monitor review format for critical phases
+    if os.path.isdir(monitor_dir):
+        for idx, name in critical_phases.items():
+            review_file = os.path.join(monitor_dir, f"phase-{idx:02d}-review.md")
+            if not os.path.isfile(review_file):
+                continue
+            with open(review_file) as f:
+                content = f.read()
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = parts[1]
+                    has_verdict = "verdict:" in frontmatter
+                    if has_verdict:
+                        checks.append(CheckResult("multi-agent",
+                                                   f"phase-{idx:02d}-review.md has verdict",
+                                                   "pass"))
+                    else:
+                        checks.append(CheckResult("multi-agent",
+                                                   f"phase-{idx:02d}-review.md has verdict",
+                                                   "warning", "Missing verdict in frontmatter"))
+
     return checks
 
 
@@ -961,6 +1177,7 @@ def validate_output_dir(output_dir):
     checks.extend(check_integration(output_dir, config))
     checks.extend(check_report(output_dir, config))
     checks.extend(check_progress_consistency(output_dir, config))
+    checks.extend(check_multi_agent_workspace(output_dir, config))
 
     # Scan for issues
     print("\nScanning logs and artifacts for issues...")

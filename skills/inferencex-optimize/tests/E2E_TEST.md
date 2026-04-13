@@ -231,3 +231,26 @@ This is expected -- not all kernels benefit from Triton optimization. The valida
 - vLLM v0.18 profiler route registration may require force-mount patch
 - Large model traces (>200MB) may truncate if flush-wait times out
 - SGLang profiling uses env vars (`SGLANG_TORCH_PROFILER_DIR`), not CLI args
+
+## Multi-Agent Workspace Validation
+
+When running in multi-agent mode, the E2E validator additionally checks:
+
+### Workspace directories
+
+- `handoff/` — Contains `to-phase-NN.md` for each dispatched phase
+- `agent-results/` — Contains `phase-NN-result.md` per `protocols/phase-result.schema.md`
+- `monitor/` — Contains `running-summary.md` and `phase-NN-review.md` per `protocols/monitor-feedback.schema.md`
+
+### Skill layout
+
+- `orchestrator/ORCHESTRATOR.md`, `phase-registry.json`, `monitor.md` exist
+- `agents/` contains 12 agent files (10 phase agents + coding-agent + analysis-agent)
+- `protocols/` contains 5 schema files
+
+### Troubleshooting multi-agent issues
+
+- **Phase agent failed**: Check `agent-results/phase-NN-result.md` for error details
+- **Monitor FAIL verdict**: Check `monitor/phase-NN-review.md` for failure_type and rerun guidance
+- **Missing handoff**: Orchestrator dispatch loop may have stopped early — check `progress.json`
+- **Stale running-summary**: Monitor may not have been spawned — verify orchestrator completed the phase

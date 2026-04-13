@@ -37,9 +37,12 @@ Symlinks instead of copying, so edits in the repo checkout are immediately refle
 ## What gets installed
 
 - `SKILL.md`, `INTAKE.md`, `RUNTIME.md`, `EXAMPLES.md`, `INSTALL.md`, `LICENSE`
-- `phases/*.md` -- phase instructions
-- `templates/agent-config.md`
-- `scripts/*.py` -- `classify_kernel.py`, `analyze_fusion_inferencex.py`, `generate_problems_inferencex.py`, and others
+- `orchestrator/` -- `ORCHESTRATOR.md`, `phase-registry.json`, `monitor.md`
+- `agents/` -- 10 phase agent docs + `coding-agent.md` + `analysis-agent.md`
+- `protocols/` -- communication schemas (handoff format, result schema, etc.)
+- `phases/*.md` -- reference archive of original phase runbooks
+- `templates/` -- report templates and schemas
+- `scripts/{env,container,profiling,optimize,plugin,report}/` -- ~30 helper scripts organized by category
 - `tests/E2E_TEST.md` + `tests/e2e_optimize_test.py` -- E2E runbook and validator
 - `resources/TraceLens-internal.tar.gz` -- required bundled TraceLens fallback asset
 
