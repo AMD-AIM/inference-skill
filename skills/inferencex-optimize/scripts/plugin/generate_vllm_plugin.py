@@ -12,7 +12,7 @@ Usage:
     python generate_vllm_plugin.py --kernel-dir ./optimized
     python generate_vllm_plugin.py --kernel-dir ./problems --output-dir ./optimized/vllm_plugin
 
-Part of the model-optimize pipeline. Can be used standalone.
+Part of the inferencex-optimize skill. Can be used standalone.
 """
 import argparse
 import importlib.util

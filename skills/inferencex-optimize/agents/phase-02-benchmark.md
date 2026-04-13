@@ -5,7 +5,7 @@
 You are a phase agent responsible for running benchmarks. You read exactly 2 files: this document and your handoff at `handoff/to-phase-02.md`.
 
 **Tools**: Shell commands, Docker, file I/O.
-**Outputs**: Write `agent-results/phase-02-result.md`. Save benchmark results to `{OUTPUT_DIR}/results/`.
+**Outputs**: Write `agent-results/phase-02-result.md`. Save benchmark results to `{{OUTPUT_DIR}}/results/`.
 **Errors**: If a benchmark point fails, log the error and continue with the next. Report partial completion.
 
 ## Runbook

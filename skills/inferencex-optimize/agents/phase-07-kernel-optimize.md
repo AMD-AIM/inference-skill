@@ -5,7 +5,7 @@
 You are a phase agent responsible for optimizing bottleneck GPU kernels using GEAK or manual methods. You read exactly 2 files: this document and your handoff at `handoff/to-phase-07.md`.
 
 **Tools**: Shell commands, Docker, Python, file I/O.
-**Outputs**: Write `agent-results/phase-07-result.md`. Write optimized kernels to `{OPTIMIZED_DIR}`, results to `{PROBLEMS_DIR}/geak_results.json`.
+**Outputs**: Write `agent-results/phase-07-result.md`. Write optimized kernels to `{{OPTIMIZED_DIR}}`, results to `{{PROBLEMS_DIR}}/geak_results.json`.
 **Sub-agents**: Spawn coder subagents for kernel writing tasks per `agents/coding-agent.md`.
 **Errors**: Track per-kernel attempts (max 5). Report partial results if some kernels fail.
 
@@ -121,7 +121,7 @@ GEAK typically writes trajectories plus `optimization_logs/<kernel_stem>_*/patch
 Allow up to **five** GEAK/manual attempts per kernel. After **every** attempt—successful or not—run Step 3.5 so no winning patch is stranded in `optimization_logs/`. Once a candidate passes accuracy + performance gates, run the finalize script to normalize formatting, metadata, and file naming expected by downstream collectors:
 
 ```bash
-docker exec $CONTAINER python3 /workspace/scripts/optimize/kernel_finalize.py \
+docker exec $CONTAINER_NAME python3 /workspace/scripts/optimize/kernel_finalize.py \
     --target /workspace/problems/${NAME}_opt.py
 ```
 
@@ -129,7 +129,7 @@ Repeat finalize only on the file that actually ships to `{{OPTIMIZED_DIR}}/` to 
 
 ### 5. Collect Winning Kernels
 ```bash
-docker exec $CONTAINER python3 /workspace/scripts/optimize/collect_winning_kernels.py \
+docker exec $CONTAINER_NAME python3 /workspace/scripts/optimize/collect_winning_kernels.py \
     --problems-dir /workspace/problems --optimized-dir /workspace/optimized
 ```
 

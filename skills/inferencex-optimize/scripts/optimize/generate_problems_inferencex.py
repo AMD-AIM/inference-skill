@@ -5,7 +5,7 @@ Problem file generator for the InferenceX optimization pipeline.
 Reads fusion opportunities, gap analysis, and optional TraceLens GEMM.csv
 to auto-generate problem files for kernel optimization.
 
-Adapted from model-optimize's generate_problems.py to work with InferenceX
+Adapted from the original generate_problems.py to work with InferenceX
 profiling outputs (gap_analysis.json + TraceLens CSVs).
 
 Usage:

@@ -6,17 +6,15 @@ MODE="copy"
 
 usage() {
   cat <<'EOF'
-Install the InferenceX and vLLM Optimize skills for Claude Code, OpenCode, and Cursor.
+Install the InferenceX Optimize skill for Claude Code, OpenCode, and Cursor.
 
 Usage:
   ./install.sh
   ./install.sh --project /path/to/project
-  ./install.sh --dest /custom/skill/dir
   ./install.sh --project /path/to/project --link
 
 Options:
   --project PATH   Install into PATH/.claude/skills/SKILL_NAME
-  --dest PATH      Install into an explicit skill directory path
   --link           Symlink instead of copying files
   --copy           Copy files explicitly (default)
   -h, --help       Show this help text
@@ -32,12 +30,6 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Missing value for --project" >&2; exit 1; }
       CURSOR_PROJECT="$2"
       shift 2
-      ;;
-    --dest)
-      [[ $# -ge 2 ]] || { echo "Missing value for --dest" >&2; exit 1; }
-      shift 2
-      echo "--dest option is deprecated. Use --project instead." >&2
-      exit 1
       ;;
     --link)
       MODE="link"

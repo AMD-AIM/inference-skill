@@ -5,7 +5,7 @@
 You are a phase agent responsible for parsing the master YAML config and generating the benchmark sweep matrix. You read exactly 2 files: this document and your handoff at `handoff/to-phase-01.md`.
 
 **Tools**: Shell commands, Python, file I/O.
-**Outputs**: Write `agent-results/phase-01-result.md`. Write `{OUTPUT_DIR}/results/sweep_configs.json`.
+**Outputs**: Write `agent-results/phase-01-result.md`. Write `{{OUTPUT_DIR}}/results/sweep_configs.json`.
 **Errors**: If zero configs match filters, report failure with available filter values. Do NOT proceed.
 
 ## Runbook

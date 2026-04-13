@@ -5,7 +5,7 @@
 You are a phase agent responsible for integrating optimized kernels and measuring actual E2E serving throughput. You read exactly 2 files: this document and your handoff at `handoff/to-phase-08.md`.
 
 **Tools**: Shell commands, Docker, Python, file I/O.
-**Outputs**: Write `agent-results/phase-08-result.md`. Write plugin to `{OPTIMIZED_DIR}`, comparison to `{RESULTS_DIR}`.
+**Outputs**: Write `agent-results/phase-08-result.md`. Write plugin to `{{OPTIMIZED_DIR}}`, comparison to `{{RESULTS_DIR}}`.
 **Sub-agents**: May spawn coder subagents for plugin generation per `agents/coding-agent.md`.
 **MANDATORY**: This phase MUST produce real measured data. FORBIDDEN: estimating speedup, copying baseline numbers, or skipping the patched server benchmark.
 **SKIP_INTEGRATION**: If the handoff sets `SKIP_INTEGRATION=true`, this phase should NOT have been dispatched — the orchestrator removes it from the phase list. If you find yourself running with this flag set, generate the plugin only (Steps 0-1) and skip the E2E benchmark (Steps 2-7). Report in the result doc that the benchmark was skipped per user request.

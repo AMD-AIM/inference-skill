@@ -92,7 +92,6 @@ Communication schemas are in `protocols/`. The orchestrator never reads phase do
 - `full`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze`
 - `benchmark`: `env -> config -> benchmark -> benchmark-analyze`
 - `profile`: `env -> config -> profile -> profile-analyze`
-- `benchmark+profile`: same phase set as `full`
 - `optimize`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`. Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
 - `optimize-only`: `env -> config -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing profile analysis artifacts from a prior run). Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
 

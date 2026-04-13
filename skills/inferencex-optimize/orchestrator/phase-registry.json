@@ -13,7 +13,7 @@
       "agent": "phase-01-config-parse.md",
       "deps": ["env"],
       "critical": false,
-      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "GPU_ARCH", "REPO_DIR", "SCRIPTS_DIR"],
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "REPO_DIR", "SCRIPTS_DIR"],
       "sticky": ["tp_size", "ep_size", "seq_lengths", "concurrency_levels"]
     },
     "benchmark": {
@@ -35,7 +35,7 @@
       "agent": "phase-03-benchmark-analyze.md",
       "deps": ["benchmark"],
       "critical": false,
-      "required_context": ["OUTPUT_DIR", "SCRIPTS_DIR"],
+      "required_context": ["OUTPUT_DIR", "SCRIPTS_DIR", "REPORT_DIR", "TEMPLATES_DIR"],
       "sticky": ["gap_analysis_summary", "best_concurrency"]
     },
     "profile": {
@@ -50,7 +50,7 @@
       "agent": "phase-05-profile-analyze.md",
       "deps": ["profile"],
       "critical": true,
-      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "SCRIPTS_DIR", "RESOURCES_DIR"],
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "SCRIPTS_DIR", "RESOURCES_DIR", "REPORT_DIR", "TEMPLATES_DIR", "PROFILE_DIR"],
       "sticky": ["top_kernels", "kernel_time_pct"],
       "quality": {
         "checks": [
@@ -63,7 +63,7 @@
     "problem-generate": {
       "index": 6,
       "agent": "phase-06-problem-generate.md",
-      "deps": ["config"],
+      "deps": ["profile-analyze"],
       "requires_artifacts": [
         "results/gap_analysis/gap_analysis.json",
         "results/profile_analysis.json"
@@ -104,8 +104,12 @@
       "index": 9,
       "agent": "phase-09-report-generate.md",
       "deps": ["integration"],
+      "conditional_deps": {
+        "when_absent": "integration",
+        "fallback_dep": "kernel-optimize"
+      },
       "critical": false,
-      "required_context": ["OUTPUT_DIR", "RESULTS_DIR", "SCRIPTS_DIR", "TEMPLATES_DIR"],
+      "required_context": ["OUTPUT_DIR", "RESULTS_DIR", "SCRIPTS_DIR", "TEMPLATES_DIR", "REPORT_DIR", "CONFIG_KEY", "FRAMEWORK", "ENV_INFO_FILE", "PROBLEMS_DIR"],
       "sticky": ["final_speedup", "report_path"]
     }
   },
@@ -117,6 +121,15 @@
     "optimize-only": ["env", "config", "problem-generate", "kernel-optimize", "integration", "report-generate"]
   },
   "rerun": { "max_per_phase": 2, "max_total": 5 },
+  "timeouts": {
+    "default_minutes": 30,
+    "overrides": {
+      "benchmark": 60,
+      "profile": 60,
+      "kernel-optimize": 90,
+      "integration": 60
+    }
+  },
   "context_sources": {
     "CONFIG_KEY":                { "source": "config" },
     "OUTPUT_DIR":                { "source": "config" },
@@ -137,7 +150,7 @@
     "ENV_INFO_FILE":             { "source": "config" },
     "RESOURCES_DIR":             { "source": "config" },
     "TEMPLATES_DIR":             { "source": "config" },
-    "CONTAINER_NAME":            { "source": "config" },
+    "REPORT_DIR":                { "source": "config" },
     "FRAMEWORK":                 { "source": "config" },
     "PRECISION":                 { "source": "config" },
     "GPUS":                      { "source": "config" },
@@ -147,9 +160,7 @@
     "FILTER_CONC_START":         { "source": "config" },
     "FILTER_CONC_END":           { "source": "config" },
     "FILTER_SEQ":                { "source": "config" },
-    "MONITOR_LEVEL":             { "source": "config" },
-    "SKIP_INTEGRATION":          { "source": "config" },
-    "GPU_ARCH":                  { "source": "artifact", "path": "results/gpu_arch.json", "field": "gpu_arch" },
+    "GPU_ARCH":                  { "source": "artifact", "path": "env_info.json", "field": "gpu_arch" },
     "TP_SIZE":                   { "source": "artifact", "path": "results/sweep_configs.json", "field": "tp" },
     "SEQ_LENGTHS":               { "source": "artifact", "path": "results/sweep_configs.json", "field": "seq_lengths" },
     "CONCURRENCY_LEVELS":        { "source": "artifact", "path": "results/sweep_configs.json", "field": "concurrency_levels" },

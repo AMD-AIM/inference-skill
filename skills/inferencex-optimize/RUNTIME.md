@@ -87,8 +87,6 @@ Resolve these before loading any phase doc:
 - `FILTER_SEQ`
 - `GPUS`
 - `DRY_RUN`
-- `PROFILE`
-- `START_PHASE`
 - `MODE`
 - `PROBLEMS_DIR`
 - `OPTIMIZED_DIR`
@@ -153,7 +151,6 @@ For `resume` or `from-phase`, read existing `progress.json` and artifacts first,
 - `full`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze`
 - `benchmark`: `env -> config -> benchmark -> benchmark-analyze`
 - `profile`: `env -> config -> profile -> profile-analyze`
-- `benchmark+profile`: same phase set as `full`
 - `optimize`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`
 - `optimize-only`: `env -> config -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing `gap_analysis.json` from a prior profile run)
 

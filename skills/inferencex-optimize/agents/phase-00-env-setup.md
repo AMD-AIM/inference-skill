@@ -5,7 +5,7 @@
 You are a phase agent responsible for verifying the execution environment. You read exactly 2 files: this document and your handoff at `handoff/to-phase-00.md`.
 
 **Tools**: Shell commands, file I/O.
-**Outputs**: Write `agent-results/phase-00-result.md` per `protocols/phase-result.schema.md`. Write `env_info.json` to `{OUTPUT_DIR}`.
+**Outputs**: Write `agent-results/phase-00-result.md` per `protocols/phase-result.schema.md`. Write `env_info.json` to `{{OUTPUT_DIR}}`.
 **Errors**: If Docker or GPUs are unavailable, report failure immediately. Do not attempt workarounds for missing hardware.
 
 ## Runbook

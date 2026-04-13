@@ -24,8 +24,17 @@ function dispatch(mode, config):
   # Skip integration phase if user requested it
   if config.SKIP_INTEGRATION == "true":
     phase_list = [p for p in phase_list if p != "integration"]
+    # Apply conditional_deps: report-generate falls back to kernel-optimize when integration is absent
+    for p_key in phase_list:
+      p = registry.phases[p_key]
+      if p.conditional_deps and p.conditional_deps.when_absent in phase_list:
+        pass  # condition not met, keep original deps
+      elif p.conditional_deps:
+        p.deps = [p.conditional_deps.fallback_dep]
 
   total_reruns = 0
+  prior_results = {}
+  running_summary = ""
 
   for phase_key in phase_list:
     phase = registry.phases[phase_key]
@@ -45,26 +54,38 @@ function dispatch(mode, config):
     result = spawn_agent(phase.agent, handoff)
 
     # 4. Spawn monitor
-    quality_checks = phase.quality.checks if phase.critical else [generic_result_exists_check]
+    if config.MONITOR_LEVEL == "minimal":
+      quality_checks = [generic_result_exists_check]
+    elif config.MONITOR_LEVEL == "strict":
+      quality_checks = phase.quality.checks if phase.quality else [generic_result_exists_check]
+    else:  # standard
+      quality_checks = phase.quality.checks if phase.critical else [generic_result_exists_check]
     monitor_prompt = build_monitor_prompt(quality_checks, phase_key)
     review = spawn_monitor(monitor_prompt, result, running_summary)
 
     # 5. Handle verdict
     if review.verdict == PASS:
+      prior_results[phase_key] = result
+      running_summary = review.running_summary
       update progress.json: add phase_key to phases_completed, record retry_counts[phase_key] = phase_reruns
       continue to next phase
 
     if review.verdict == WARN:
-      update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
-      continue to next phase (non-blocking)
+      if config.MONITOR_LEVEL == "strict":
+        # Strict mode: escalate WARN to FAIL
+        treat as FAIL (fall through to FAIL handling below)
+      else:
+        update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
+        continue to next phase (non-blocking)
 
     if review.verdict == FAIL:
       total_reruns += 1
       phase_reruns += 1
 
-      if phase_reruns > registry.rerun.max_per_phase
-         or total_reruns > registry.rerun.max_total:
-        if phase.fallback_target and fallback not yet attempted:
+      if phase_reruns >= registry.rerun.max_per_phase
+         or total_reruns >= registry.rerun.max_total:
+        if phase.fallback_target and {"phase_key": phase_key, "fallback_target": phase.fallback_target} not in progress.fallbacks_used:
+          progress.fallbacks_used.append({"phase_key": phase_key, "fallback_target": phase.fallback_target})
           rollback to fallback_target phase, invalidate subsequent outputs
           continue from fallback_target
         else:
@@ -82,7 +103,7 @@ The `generate_handoff` function resolves `required_context` values using `contex
 
 1. If a variable has `"source": "config"`, read from `config.json`.
 2. If a variable has `"source": "artifact"`, read from the specified file path relative to `OUTPUT_DIR`.
-3. If a variable has `"source": "sticky"`, read from `running-summary.md` YAML frontmatter.
+3. If a variable has `"source": "sticky"`, read from `running-summary.md` YAML frontmatter. Note: no `context_sources` entry currently uses this source type. Sticky values are maintained by the monitor in `running-summary.md` frontmatter and are available for handoff generation, but the orchestrator resolves them implicitly from the running summary rather than through an explicit registry mapping.
 
 Each `handoff/to-phase-NN.md` follows the schema in `protocols/handoff-format.md`.
 
@@ -104,6 +125,26 @@ After each phase agent completes:
 4. Read the monitor's review from `monitor/phase-NN-review.md`
 5. Act on the verdict per the dispatch loop (if `strict`, escalate WARN to FAIL)
 
+## Monitor Failure Handling
+
+If the monitor agent itself fails (malformed output, timeout, crash):
+
+1. Log a warning with the failure details.
+2. Treat the phase result as a non-critical PASS — do not block the pipeline on monitor infrastructure issues.
+3. Set `monitor_failure: true` in the phase's `retry_counts` entry for observability.
+4. Do not count the monitor failure against the rerun budget (`phase_reruns` and `total_reruns` remain unchanged).
+5. Continue to the next phase.
+
+## Timeout Policy
+
+Each phase has a wall-clock timeout defined in `phase-registry.json` under `timeouts`. If a phase agent exceeds its timeout:
+
+1. Terminate the phase agent.
+2. Treat the timeout as a FAIL with `failure_type: "infrastructure"`.
+3. Apply normal rerun logic (increment counters, append feedback, retry or fallback).
+
+Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-optimize, integration) have explicit overrides in the registry.
+
 ## Rerun Rules
 
 - `max_reruns_per_phase`: 2
@@ -124,6 +165,7 @@ Maintain `progress.json` with:
 - `current_phase`: phase key currently executing
 - `status`: "running" | "completed" | "failed"
 - `total_reruns`: running total across all phases
+- `fallbacks_used`: array of `{"phase_key": "...", "fallback_target": "..."}` pairs tracking which phases triggered fallbacks
 
 Phase keys match the canonical names from the registry: `env`, `config`, `benchmark`, `benchmark-analyze`, `profile`, `profile-analyze`, `problem-generate`, `kernel-optimize`, `integration`, `report-generate`.
 
@@ -142,3 +184,13 @@ Emit a visible status update to the user:
 - After each monitor review (with verdict)
 - On any rerun attempt
 - On workflow completion or failure
+
+## Interrupt and Resume
+
+If the session is disconnected or interrupted (Ctrl+C, network drop):
+
+1. `progress.json` tracks `phases_completed` and `current_phase`. On restart, read `progress.json` to determine the last completed phase.
+2. Resume from the phase after the last entry in `phases_completed`. Re-run `current_phase` if it was not added to `phases_completed` (it did not finish).
+3. Existing artifacts in `agent-results/`, `monitor/`, and `handoff/` for completed phases are preserved and reused. Only the interrupted phase is re-dispatched.
+4. `running_summary` is reconstructed from `monitor/running-summary.md` on disk.
+5. Sticky values in the running summary frontmatter survive the restart since they are persisted to disk after each monitor review.

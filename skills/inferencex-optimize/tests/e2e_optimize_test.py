@@ -66,6 +66,7 @@ ERROR_PATTERNS = [
     re.compile(r"\b404\b.*(?:Not Found|not found)"),
     re.compile(r"exit code:\s*[1-9]"),
     re.compile(r"Killed|SIGKILL|SIGTERM"),
+    re.compile(r"TimeoutError:"),
 ]
 
 # False-positive patterns to skip
@@ -279,18 +280,19 @@ def check_multi_agent_workspace(output_dir, config):
 
     # Check agent-results files exist for completed phases
     progress_path = os.path.join(output_dir, "progress.json")
+    results_dir = os.path.join(output_dir, "agent-results")
+    phase_index_map = {
+        "env": 0, "config": 1, "benchmark": 2, "benchmark-analyze": 3,
+        "profile": 4, "profile-analyze": 5, "problem-generate": 6,
+        "kernel-optimize": 7, "integration": 8, "report-generate": 9,
+    }
+    completed = []
+
     if os.path.isfile(progress_path):
         with open(progress_path) as f:
             progress = json.load(f)
         completed = progress.get("phases_completed", [])
 
-        phase_index_map = {
-            "env": 0, "config": 1, "benchmark": 2, "benchmark-analyze": 3,
-            "profile": 4, "profile-analyze": 5, "problem-generate": 6,
-            "kernel-optimize": 7, "integration": 8, "report-generate": 9,
-        }
-
-        results_dir = os.path.join(output_dir, "agent-results")
         if os.path.isdir(results_dir):
             for phase_key in completed:
                 idx = phase_index_map.get(phase_key)
@@ -351,12 +353,44 @@ def check_multi_agent_workspace(output_dir, config):
                 if isinstance(v, int) and v > 2:
                     checks.append(CheckResult("multi-agent",
                                                f"retry_counts[{k}] within limit",
-                                               "warning", f"Retried {v} times (max_per_phase=2)"))
+                                               "fail", f"Retried {v} times (max_per_phase=2)"))
 
         total_reruns = progress.get("total_reruns", 0)
         if isinstance(total_reruns, int) and total_reruns > 5:
             checks.append(CheckResult("multi-agent", "total_reruns within limit",
-                                       "warning", f"Total reruns={total_reruns} (max=5)"))
+                                       "fail", f"Total reruns={total_reruns} (max=5)"))
+
+        # Validate fallbacks_used structure
+        fallbacks_used = progress.get("fallbacks_used", [])
+        if isinstance(fallbacks_used, list):
+            for fb in fallbacks_used:
+                if not isinstance(fb, dict) or "phase_key" not in fb or "fallback_target" not in fb:
+                    checks.append(CheckResult("multi-agent", "fallbacks_used entry valid",
+                                               "fail", f"Invalid entry: {fb}"))
+                    break
+            else:
+                checks.append(CheckResult("multi-agent", "fallbacks_used structure valid", "pass",
+                                           f"{len(fallbacks_used)} entries"))
+
+        # Validate current_phase
+        current_phase = progress.get("current_phase")
+        if current_phase is not None:
+            if current_phase in valid_keys:
+                checks.append(CheckResult("multi-agent", "current_phase is canonical key", "pass",
+                                           current_phase))
+            else:
+                checks.append(CheckResult("multi-agent", "current_phase is canonical key", "fail",
+                                           f"Invalid: {current_phase}"))
+
+        # Validate status enum
+        status = progress.get("status")
+        if status is not None:
+            if status in ("running", "completed", "failed"):
+                checks.append(CheckResult("multi-agent", "progress.json status valid", "pass",
+                                           status))
+            else:
+                checks.append(CheckResult("multi-agent", "progress.json status valid", "fail",
+                                           f"Invalid status: {status}"))
 
     # Validate handoff files match completed phases
     handoff_dir = os.path.join(output_dir, "handoff")
@@ -396,19 +430,29 @@ def check_multi_agent_workspace(output_dir, config):
                     frontmatter = parts[1]
                     has_phase = "phase:" in frontmatter
                     has_status = "status:" in frontmatter
-                    if has_phase and has_status:
+                    has_phase_index = "phase_index:" in frontmatter
+                    has_timestamp = "timestamp:" in frontmatter
+                    required_fields = {"phase": has_phase, "status": has_status,
+                                       "phase_index": has_phase_index, "timestamp": has_timestamp}
+                    missing = [k for k, v in required_fields.items() if not v]
+                    if not missing:
                         checks.append(CheckResult("multi-agent",
                                                    f"phase-{idx:02d}-result.md has valid frontmatter",
                                                    "pass"))
                     else:
-                        missing = []
-                        if not has_phase:
-                            missing.append("phase")
-                        if not has_status:
-                            missing.append("status")
                         checks.append(CheckResult("multi-agent",
                                                    f"phase-{idx:02d}-result.md has valid frontmatter",
                                                    "warning", f"Missing fields: {missing}"))
+
+                    # Validate status enum
+                    status_match = re.search(r"status:\s*(\S+)", frontmatter)
+                    if status_match:
+                        status_val = status_match.group(1)
+                        if status_val not in ("completed", "failed", "partial"):
+                            checks.append(CheckResult("multi-agent",
+                                                       f"phase-{idx:02d}-result.md status enum",
+                                                       "warning",
+                                                       f"Invalid status '{status_val}', expected completed|failed|partial"))
 
     # Validate monitor review format for critical phases
     if os.path.isdir(monitor_dir):
@@ -427,6 +471,14 @@ def check_multi_agent_workspace(output_dir, config):
                         checks.append(CheckResult("multi-agent",
                                                    f"phase-{idx:02d}-review.md has verdict",
                                                    "pass"))
+                        # Non-PASS verdicts must include failure_type
+                        verdict_match = re.search(r"verdict:\s*(\S+)", frontmatter)
+                        if verdict_match and verdict_match.group(1).upper() in ("FAIL", "WARN"):
+                            if "failure_type:" not in frontmatter:
+                                checks.append(CheckResult("multi-agent",
+                                                           f"phase-{idx:02d}-review.md {verdict_match.group(1).upper()} has failure_type",
+                                                           "warning",
+                                                           f"{verdict_match.group(1).upper()} verdict missing failure_type field"))
                     else:
                         checks.append(CheckResult("multi-agent",
                                                    f"phase-{idx:02d}-review.md has verdict",
@@ -824,11 +876,11 @@ def check_report(output_dir, config):
     if os.path.isfile(summary_path):
         with open(summary_path) as f:
             summary = json.load(f)
-        if "phases" in summary or "kernel_results" in summary:
+        if "config_key" in summary or "kernel_results" in summary:
             checks.append(CheckResult("report", "optimization_summary.json valid", "pass"))
         else:
             checks.append(CheckResult("report", "optimization_summary.json valid", "fail",
-                                      f"Missing phases key. Keys: {list(summary.keys())}"))
+                                      f"Missing config_key. Keys: {list(summary.keys())}"))
     else:
         checks.append(CheckResult("report", "optimization_summary.json exists", "skip"))
 
@@ -856,6 +908,8 @@ def check_progress_consistency(output_dir, config):
         expected = OPTIMIZE_PHASES[:6]
     elif mode == "benchmark":
         expected = OPTIMIZE_PHASES[:4]
+    elif mode == "profile":
+        expected = ["env", "config", "profile", "profile-analyze"]
     else:
         expected = OPTIMIZE_PHASES
 
@@ -890,19 +944,19 @@ def _infer_phase(filepath):
     dirpart = os.path.dirname(filepath).lower()
 
     if "profile" in dirpart or "profile" in basename:
-        return "04-profile.md"
+        return "phase-04-profile.md"
     if "benchmark" in basename or "docker_run" in basename:
         if "profile" in basename:
-            return "04-profile.md"
-        return "02-benchmark.md"
+            return "phase-04-profile.md"
+        return "phase-02-benchmark.md"
     if "problem" in basename or "fusion" in basename or "bottleneck" in basename:
-        return "06-problem-generate.md"
+        return "phase-06-problem-generate.md"
     if "kernel" in basename or "geak" in basename or "_opt" in basename:
-        return "07-kernel-optimize.md"
+        return "phase-07-kernel-optimize.md"
     if "plugin" in dirpart or "optimized" in dirpart:
-        return "08-integration.md"
+        return "phase-08-integration.md"
     if "report" in dirpart:
-        return "09-report-generate.md"
+        return "phase-09-report-generate.md"
     return "unknown"
 
 
@@ -1182,6 +1236,13 @@ def validate_output_dir(output_dir):
     # Scan for issues
     print("\nScanning logs and artifacts for issues...")
     issues = scan_for_issues(output_dir)
+
+    # Fail if all checks were skipped — no artifacts to validate
+    passed = sum(1 for c in checks if c.status == "pass")
+    failed = sum(1 for c in checks if c.status == "fail")
+    if passed == 0 and failed == 0:
+        print("ERROR: All checks were skipped — no artifacts to validate")
+        return False
 
     # Generate reports
     json_path, md_path, report = generate_report(output_dir, config, checks, issues)

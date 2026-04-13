@@ -8,7 +8,7 @@ Usage:
     python kernel_finalize.py --src problem.py --target problem_opt.py
     python kernel_finalize.py --tracker problem_opt_best.json --target problem_opt.py
 
-Part of the model-optimize pipeline. Can be used standalone.
+Part of the inferencex-optimize skill. Can be used standalone.
 """
 import argparse
 import json

@@ -5,7 +5,7 @@
 You are a phase agent responsible for generating optimization problem files from profiling data. You read exactly 2 files: this document and your handoff at `handoff/to-phase-06.md`.
 
 **Tools**: Shell commands, Python, file I/O.
-**Outputs**: Write `agent-results/phase-06-result.md`. Write problem files and manifest to `{PROBLEMS_DIR}`.
+**Outputs**: Write `agent-results/phase-06-result.md`. Write problem files and manifest to `{{PROBLEMS_DIR}}`.
 **Errors**: If `gap_analysis.json` is missing, report failure immediately -- this is a hard prerequisite.
 
 ## Runbook
@@ -14,7 +14,11 @@ You are a phase agent responsible for generating optimization problem files from
 ```bash
 [ -f "{{OUTPUT_DIR}}/results/gap_analysis/gap_analysis.json" ] || { echo "ERROR: gap_analysis.json missing"; exit 1; }
 ```
-Find GEMM CSV in tracelens output dirs.
+Find GEMM CSV in tracelens output dirs:
+```bash
+GEMM_CSV=$(find "{{OUTPUT_DIR}}/results" -path "*/tracelens_*_csvs/GEMM.csv" -print -quit 2>/dev/null || true)
+if [ -z "$GEMM_CSV" ]; then echo "WARNING: No GEMM.csv found in tracelens output dirs"; fi
+```
 
 ### 1.5. Classify Kernel Types
 Treat `{{OUTPUT_DIR}}/results/profile_analysis.json` as the **primary** input. When estimating optimization impact, **exclude communication time** from the denominator so comm-heavy runs do not drown out compute targets. Use `classify_kernel()` from `classify_kernel.py` on each relevant op name; **skip** any op whose classified type is `communication` (those are not kernel-optimization problems in this pipeline).
@@ -84,7 +88,7 @@ python3 "{{SCRIPTS_DIR}}/optimize/analyze_fusion_inferencex.py" \
 python3 "{{SCRIPTS_DIR}}/optimize/generate_problems_inferencex.py" \
     --fusion-opportunities "{{PROBLEMS_DIR}}/fusion_opportunities.json" \
     --gap-analysis "{{OUTPUT_DIR}}/results/gap_analysis/gap_analysis.json" \
-    --bottleneck-kernels "{{PROBLEMS_DIR}}/bottleneck_kernels.json" \
+    $([ -f "{{PROBLEMS_DIR}}/bottleneck_kernels.json" ] && echo "--bottleneck-kernels {{PROBLEMS_DIR}}/bottleneck_kernels.json") \
     --gemm-csv "$GEMM_CSV" \
     --gpu-arch "{{OUTPUT_DIR}}/results/gpu_arch.json" \
     --model-shapes "{{PROBLEMS_DIR}}/model_shapes.json" \

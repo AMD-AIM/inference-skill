@@ -9,7 +9,7 @@ Usage:
     python kernel_test_runner.py --src problem.py --target problem_opt.py
     python kernel_test_runner.py --src problem.py --target problem_opt.py --goal 1.5
 
-Part of the model-optimize pipeline. Can be used standalone.
+Part of the inferencex-optimize skill. Can be used standalone.
 """
 import argparse
 import importlib.util

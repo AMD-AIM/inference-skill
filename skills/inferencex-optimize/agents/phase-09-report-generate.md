@@ -11,7 +11,7 @@ You are a phase agent responsible for generating the final optimization report. 
 ## Runbook
 
 ### 1. Gather Artifacts
-Read from `{OUTPUT_DIR}`:
+Read from `{{OUTPUT_DIR}}`:
 - `results/benchmark_summary.json` (Phase 3)
 - `results/gap_analysis/gap_analysis.json` (Phase 5)
 - `results/profile_analysis.json` (Phase 5)

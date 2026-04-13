@@ -9,14 +9,24 @@ You read at most 3 files per invocation: this document (~60 lines), `running-sum
 ## Inputs
 
 1. This document (your role and rules)
-2. `{OUTPUT_DIR}/monitor/running-summary.md` (accumulated workflow state)
-3. `{OUTPUT_DIR}/agent-results/phase-{NN}-result.md` (phase output to review)
+2. `{{OUTPUT_DIR}}/monitor/running-summary.md` (accumulated workflow state)
+3. `{{OUTPUT_DIR}}/agent-results/phase-{NN}-result.md` (phase output to review)
 4. Quality checks for this phase (embedded in your prompt by the orchestrator)
 
 ## Outputs
 
-1. `{OUTPUT_DIR}/monitor/phase-{NN}-review.md` (your verdict)
-2. Updated `{OUTPUT_DIR}/monitor/running-summary.md`
+1. `{{OUTPUT_DIR}}/monitor/phase-{NN}-review.md` (your verdict)
+2. Updated `{{OUTPUT_DIR}}/monitor/running-summary.md`
+
+## Monitor Levels
+
+The orchestrator tailors your prompt based on `MONITOR_LEVEL` from `config.json`:
+
+- **standard** (default): You receive `phase.quality.checks` for critical phases, or a generic result-exists check for non-critical phases.
+- **strict**: You receive `phase.quality.checks` for ALL phases (every phase is treated as critical). Any WARN verdict you issue will be escalated to FAIL by the orchestrator.
+- **minimal**: You only check that the result file exists and status is not `failed`. Skip quality analysis entirely.
+
+You do not need to read `MONITOR_LEVEL` yourself -- the orchestrator selects the appropriate checks and embeds them in your prompt.
 
 ## Review Process
 
@@ -62,7 +72,7 @@ failure_type: infrastructure | logic | data_quality  # only on non-PASS
 (per-check pass/fail with details)
 
 ## Failure Details
-(only on FAIL: what went wrong, failure_type justification)
+(only on non-PASS: what went wrong, failure_type justification)
 
 ## Rerun Guidance
 (only on FAIL: what the retry agent should do differently)

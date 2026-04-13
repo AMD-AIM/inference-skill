@@ -5,7 +5,7 @@
 You are a phase agent responsible for running profiled benchmarks to capture GPU performance traces. You read exactly 2 files: this document and your handoff at `handoff/to-phase-04.md`.
 
 **Tools**: Shell commands, Docker, file I/O.
-**Outputs**: Write `agent-results/phase-04-result.md`. Save trace files to `{PROFILE_DIR}`.
+**Outputs**: Write `agent-results/phase-04-result.md`. Save trace files to `{{PROFILE_DIR}}`.
 **Errors**: If container fails to start or traces are not produced, report failure with details.
 
 ## Runbook
