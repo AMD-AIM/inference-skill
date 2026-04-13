@@ -13,15 +13,18 @@ Claude Code and OpenCode discover skills from Claude-compatible install location
 ## Features
 
 Full InferenceX benchmark, profiling, and kernel optimization workflow with multi-agent orchestration:
-- Orchestrator-driven dispatch loop with phase agents
-- Quality monitoring with automatic rerun on failure
+- Orchestrator-driven dispatch loop with phase agents and declarative phase registry
+- Quality monitoring with configurable levels (standard/strict/minimal) and automatic rerun on failure
+- Phase timeout policy with per-phase overrides
+- Monitor failure handling (non-blocking, preserves rerun budget)
+- Interrupt/resume via `progress.json` state tracking
 - Docker container setup and GPU management
 - Sweep filtering and configuration
 - Benchmark execution and analysis
 - Torch profiler trace collection and TraceLens analysis
-- GEAK-accelerated kernel optimization
+- GEAK-accelerated kernel optimization (Triton + HIP/CK modes)
 - Framework plugin generation (vLLM, SGLang)
-- Report generation
+- Report generation with machine-readable summary
 
 ## Architecture
 
@@ -126,7 +129,9 @@ The agent should drive a short guided setup:
 inference-skill/
   install.sh
   LICENSE
-  tests/                                # Root-level test shims
+  CHANGELOG.md
+  pyproject.toml                        # pytest config
+  tests/README.md                       # Points to canonical test location
   skills/
     inferencex-optimize/
       SKILL.md
@@ -149,11 +154,12 @@ inference-skill/
         handoff-format.md
         rerun-protocol.md
         analyzer-manifest.schema.md
-      phases/                           # Reference archive (human-readable)
+      phases/README.md                  # Archive pointer to agents/
       templates/
       scripts/                          # Organized by category
         env/ container/ profiling/ optimize/ plugin/ report/
-      tests/
+        tests/                          # Unit tests for pure-logic scripts
+      tests/                            # E2E validator
       resources/
 ```
 
@@ -204,15 +210,31 @@ This directory is the source of truth:
 - helper scripts
 - packaged test assets
 
-## E2E test packaging
+## Testing
+
+### Unit tests
+
+Pure-logic script tests run without GPUs:
+
+```bash
+pytest skills/inferencex-optimize/scripts/tests/ -v
+```
+
+Covers `resolve_geak_mode`, `validate_config_key`, `load_optimization_manifest`, and `classify_kernel` (30 tests).
+
+### E2E validation
+
+The E2E validator checks pipeline artifacts after a full run:
+
+```bash
+python3 skills/inferencex-optimize/tests/e2e_optimize_test.py --output-dir <path>
+```
 
 E2E assets are packaged inside the installed skill directory:
 
 - `~/.claude/skills/inferencex-optimize/tests/E2E_TEST.md`
 - `~/.claude/skills/inferencex-optimize/tests/e2e_optimize_test.py`
 - `~/.claude/skills/inferencex-optimize/resources/TraceLens-internal.tar.gz`
-
-Repo-level `tests/` paths are kept as compatibility entrypoints and forward to the canonical skill-level copy.
 
 ## Development workflow
 
