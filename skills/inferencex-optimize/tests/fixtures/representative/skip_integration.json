@@ -1,0 +1,28 @@
+{
+  "id": "R5",
+  "name": "skip_integration",
+  "description": "SKIP_INTEGRATION=true, no comparison expected, pipeline completes cleanly",
+  "mode": "optimize",
+  "skip_integration": true,
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "report-generate"],
+      "current_phase": null,
+      "status": "completed",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    },
+    "comparison": null,
+    "blockers": {"blockers": []},
+    "baseline_benchmark": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0, "mean_itl_ms": 5.0, "mean_tpot_ms": 10.0, "duration": 60},
+    "optimized_benchmark": null
+  },
+  "expected": {
+    "pipeline_status": "completed",
+    "all_phases_completed": true,
+    "performance_gate": null,
+    "artifacts_valid": null,
+    "validated": null
+  }
+}

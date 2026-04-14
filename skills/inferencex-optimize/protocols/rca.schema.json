@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Root Cause Analysis",
+  "description": "Structured RCA output written by the analysis agent.",
+  "type": "object",
+  "required": ["schema_version", "phase", "summary", "retry_recommendation", "terminal_action"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "phase": {
+      "type": "string",
+      "description": "Phase key that failed"
+    },
+    "summary": {
+      "type": "string",
+      "description": "1-3 sentence root cause summary"
+    },
+    "retry_recommendation": {
+      "type": "string",
+      "enum": ["retry_same", "retry_with_changes", "fallback", "stop"],
+      "description": "Recommended next action"
+    },
+    "terminal_action": {
+      "type": ["string", "null"],
+      "enum": ["stop_with_blocker", "continue", null],
+      "description": "If set to stop_with_blocker, emit a pipeline blocker even if budget remains"
+    },
+    "blocker_classifications": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "e.g. compilation_failure, framework_limit, true_kernel_parity"
+    },
+    "targets_analyzed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "classification"],
+        "properties": {
+          "target": { "type": "string" },
+          "classification": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "failure_type": {
+      "type": "string",
+      "enum": ["infrastructure", "logic", "data_quality"]
+    }
+  },
+  "additionalProperties": false
+}

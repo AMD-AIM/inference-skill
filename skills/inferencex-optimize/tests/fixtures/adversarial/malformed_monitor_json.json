@@ -1,0 +1,21 @@
+{
+  "id": "A1",
+  "name": "malformed_monitor_json",
+  "description": "Monitor review output has invalid YAML frontmatter — missing verdict field",
+  "mode": "optimize",
+  "inputs": {
+    "monitor_review": "---\nphase: benchmark\nphase_index: 2\n---\n## Summary\nPhase completed but verdict is missing from frontmatter.\n",
+    "progress": {
+      "phases_completed": ["env", "config"],
+      "current_phase": "benchmark",
+      "status": "running",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    }
+  },
+  "expected": {
+    "should_fail_closed": true,
+    "failure_reason": "Monitor review missing required 'verdict' field in frontmatter"
+  }
+}

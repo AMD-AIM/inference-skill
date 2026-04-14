@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Runner Failure",
+  "description": "Structured failure record for validation or runtime faults in the deterministic runner. Not for phase-level failures (those go through monitor + RCA).",
+  "type": "object",
+  "required": ["schema_version", "error_type", "message", "phase", "timestamp"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "error_type": {
+      "type": "string",
+      "enum": [
+        "schema_invalid",
+        "missing_artifact",
+        "monitor_error",
+        "timeout",
+        "budget_exhausted",
+        "manual_intervention_required"
+      ],
+      "description": "Failure taxonomy"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error description"
+    },
+    "phase": {
+      "type": ["string", "null"],
+      "description": "Phase key where the failure occurred, or null for pre-dispatch failures"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "context": {
+      "type": "object",
+      "description": "Additional structured context about the failure",
+      "additionalProperties": true
+    },
+    "recoverable": {
+      "type": "boolean",
+      "description": "Whether the runner can attempt recovery"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,42 @@
+{
+  "id": "R2",
+  "name": "optimize_only_pass",
+  "description": "optimize-only mode with existing gap_analysis, clean pass",
+  "mode": "optimize-only",
+  "skip_integration": false,
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "problem-generate", "kernel-optimize", "integration", "report-generate"],
+      "current_phase": null,
+      "status": "completed",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    },
+    "comparison": {
+      "schema_version": "1.0",
+      "artifacts_valid": true,
+      "performance_valid": true,
+      "validated": true,
+      "performance_gate": "pass",
+      "ttft_upgraded": false,
+      "baseline_file": "run_fp4_tp8.json",
+      "optimized_file": "optimized_run_fp4_tp8.json",
+      "baseline": {"total_token_throughput": 800, "mean_ttft_ms": 120.0},
+      "optimized": {"total_token_throughput": 900, "mean_ttft_ms": 110.0},
+      "speedup": 1.125,
+      "e2e_speedup": 1.125,
+      "ttft_regression_pct": -8.33
+    },
+    "blockers": {"blockers": []},
+    "baseline_benchmark": {"total_token_throughput": 800, "mean_ttft_ms": 120.0, "mean_itl_ms": 6.0, "mean_tpot_ms": 12.0, "duration": 60},
+    "optimized_benchmark": {"total_token_throughput": 900, "mean_ttft_ms": 110.0, "mean_itl_ms": 5.5, "mean_tpot_ms": 11.0, "duration": 60}
+  },
+  "expected": {
+    "pipeline_status": "completed",
+    "all_phases_completed": true,
+    "performance_gate": "pass",
+    "artifacts_valid": true,
+    "validated": true
+  }
+}

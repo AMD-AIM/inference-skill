@@ -167,6 +167,14 @@ Read only the phase docs needed for the selected mode and start phase.
 - If profiling artifacts are root-owned, clean them up and continue instead of leaving the run half-complete.
 - Prefer measured data over assumptions when writing reports.
 
+## Canonical runtime path
+
+The **deterministic runner** (`scripts/orchestrate/runner.py`) is the canonical orchestration path. It handles all mechanical work: mode resolution, dependency checks, artifact prerequisites, context-source resolution, context-budget enforcement, retry budgets, fallback invalidation, handoff generation, atomic `progress.json` writes, and parity artifact emission.
+
+Set `USE_RUNNER=false` in the run configuration to revert to the legacy LLM orchestrator path. The legacy path remains fully supported.
+
+Architecture details: `docs/ARCHITECTURE.md`. Parity verification: `docs/PARITY_CONTRACT.md`.
+
 ## Multi-agent orchestration
 
 When running in multi-agent mode, the orchestrator manages the execution loop:

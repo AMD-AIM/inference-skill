@@ -97,28 +97,41 @@ Communication schemas are in `protocols/`. The orchestrator never reads phase do
 
 Choose the narrowest mode that matches the user's goal. For a smoke run, prefer a narrow configuration and confirm before widening to a full sweep. For optimization, prefer `optimize` for a fresh end-to-end run. Use `optimize-only` when profile data already exists and the user wants to skip re-profiling.
 
+## Rollback
+
+To revert from the deterministic runner to the legacy LLM orchestrator, set `USE_RUNNER=false` in the run configuration. The legacy path remains fully functional for all modes.
+
 ## References
 
-- [`INTAKE.md`](INTAKE.md)
-- [`RUNTIME.md`](RUNTIME.md)
-- [`EXAMPLES.md`](EXAMPLES.md)
-- [Phase 0: Environment Setup](phases/00-env-setup.md)
-- [Phase 1: Config Parsing & Sweep Generation](phases/01-config-parse.md)
-- [Phase 2: Benchmark Execution](phases/02-benchmark.md)
-- [Phase 3: Benchmark Analysis](phases/03-benchmark-analyze.md)
-- [Phase 4: Profiling](phases/04-profile.md)
-- [Phase 5: Profile Analysis](phases/05-profile-analyze.md)
-- [Phase 6: Problem Generation](phases/06-problem-generate.md)
-- [Phase 7: Kernel Optimization](phases/07-kernel-optimize.md)
-- [Phase 8: Integration & E2E Benchmark](phases/08-integration.md)
-- [Phase 9: Final Report](phases/09-report-generate.md)
+### Architecture
+- [Architecture](docs/ARCHITECTURE.md) — four-plane model, invariants, evidence lifecycle
+- [Parity Contract](docs/PARITY_CONTRACT.md) — canonical parity hash definition
+- [Runner-LLM Boundary](protocols/runner-llm-boundary.md) — code vs. LLM responsibility split
+
+### Orchestration
 - [Orchestrator](orchestrator/ORCHESTRATOR.md)
 - [Phase Registry](orchestrator/phase-registry.json)
 - [Monitor](orchestrator/monitor.md)
+- [Deterministic Runner](scripts/orchestrate/runner.py)
+
+### Setup & Configuration
+- [`INTAKE.md`](INTAKE.md)
+- [`RUNTIME.md`](RUNTIME.md)
+- [`EXAMPLES.md`](EXAMPLES.md)
+
+### Protocols
 - [Phase Result Schema](protocols/phase-result.schema.md)
 - [Monitor Feedback Schema](protocols/monitor-feedback.schema.md)
 - [Handoff Format](protocols/handoff-format.md)
 - [Rerun Protocol](protocols/rerun-protocol.md)
 - [Analyzer Manifest Schema](protocols/analyzer-manifest.schema.md)
+- [Progress Schema](protocols/progress.schema.json)
+- [Monitor Verdict Schema](protocols/monitor-verdict.schema.json)
+- [RCA Schema](protocols/rca.schema.json)
+- [Runner Failure Schema](protocols/runner-failure.schema.json)
+
+### Testing
 - [E2E Test Runbook](tests/E2E_TEST.md)
 - [E2E Validator](tests/e2e_optimize_test.py)
+- [Invariant Tests](tests/test_invariants.py)
+- [Fixture Manifest](tests/fixtures/MANIFEST.md)

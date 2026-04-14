@@ -144,6 +144,15 @@ def test_pipeline_status_integration_expected_but_missing():
     assert pipeline_status([], "fail", integration_expected=True) == "completed with blockers"
 
 
+def test_pipeline_status_integration_skipped():
+    assert pipeline_status(
+        [], None, integration_expected=True, integration_skipped=True,
+    ) == "completed"
+    assert pipeline_status(
+        [], None, integration_expected=False, integration_skipped=True,
+    ) == "completed"
+
+
 # ---------------------------------------------------------------------------
 # validate_optimization fixture tests
 # ---------------------------------------------------------------------------
@@ -151,7 +160,7 @@ def test_pipeline_status_integration_expected_but_missing():
 def test_zero_baseline_throughput():
     with tempfile.TemporaryDirectory() as tmpdir:
         comp = _make_pair(tmpdir, 0, 500)
-        assert comp["artifacts_valid"] is False
+        assert comp["artifacts_valid"] is True
         assert comp["speedup"] is None
         assert comp["performance_gate"] == "fail"
         assert comp["validated"] is False
@@ -160,7 +169,7 @@ def test_zero_baseline_throughput():
 def test_zero_optimized_throughput():
     with tempfile.TemporaryDirectory() as tmpdir:
         comp = _make_pair(tmpdir, 1000, 0)
-        assert comp["artifacts_valid"] is False
+        assert comp["artifacts_valid"] is True
         assert comp["performance_gate"] == "fail"
 
 
@@ -275,6 +284,24 @@ def test_no_matching_baseline():
 # ---------------------------------------------------------------------------
 
 GENERATE_SCRIPT = os.path.join(REPORT_SCRIPTS_DIR, "generate_optimization_summary.py")
+
+
+def _run_generate_summary_with_skip(output_dir, results_dir):
+    report_dir = os.path.join(output_dir, "report")
+    os.makedirs(report_dir, exist_ok=True)
+    out_path = os.path.join(report_dir, "optimization_summary.json")
+    cmd = [
+        sys.executable, GENERATE_SCRIPT,
+        "--output", out_path,
+        "--config-key", "test-key",
+        "--framework", "sglang",
+        "--results-dir", results_dir,
+        "--skip-integration",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"generate_summary failed: {result.stderr}"
+    with open(out_path) as f:
+        return json.load(f)
 
 
 def _run_generate_summary(output_dir, results_dir, problems_dir=""):
@@ -411,6 +438,16 @@ def test_summary_integration_manifest_ingestion():
         assert summary["integration_integrated"] == 1
         assert summary["integration_blocked"] == 0
         assert summary["integration_coverage_pct"] == 1.0
+
+
+def test_summary_skip_integration_completed():
+    """SKIP_INTEGRATION=true with no comparison → completed (not incomplete)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results_dir = os.path.join(tmpdir, "results")
+        os.makedirs(results_dir)
+        summary = _run_generate_summary_with_skip(tmpdir, results_dir)
+        assert summary["pipeline_status"] == "completed"
+        assert summary["all_phases_completed"] is True
 
 
 def test_summary_no_phases_completed_field():

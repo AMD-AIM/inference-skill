@@ -57,7 +57,13 @@ def derive_fields(speedup, artifacts_valid, ttft_regression_pct=None):
     }
 
 
-def pipeline_status(blocker_list, integration_gate=None, *, integration_expected=False):
+def pipeline_status(
+    blocker_list,
+    integration_gate=None,
+    *,
+    integration_expected=False,
+    integration_skipped=False,
+):
     """Derive pipeline_status from blockers *and* integration health.
 
     blocker_list         -- list of blocker dicts (may be empty)
@@ -66,6 +72,9 @@ def pipeline_status(blocker_list, integration_gate=None, *, integration_expected
                             integration *should* have produced a comparison file.
                             When True and integration_gate is None the pipeline
                             is treated as incomplete rather than clean.
+    integration_skipped  -- True when the user set SKIP_INTEGRATION=true.
+                            Overrides integration_expected: a deliberately skipped
+                            integration is not treated as incomplete.
     """
     early_phases = {"benchmark", "profile-analyze"}
 
@@ -79,6 +88,6 @@ def pipeline_status(blocker_list, integration_gate=None, *, integration_expected
         return "completed with blockers"
     if integration_gate == "warn":
         return "completed with warnings"
-    if integration_gate is None and integration_expected:
+    if integration_gate is None and integration_expected and not integration_skipped:
         return "pipeline incomplete"
     return "completed"

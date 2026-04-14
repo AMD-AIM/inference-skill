@@ -1,0 +1,42 @@
+{
+  "id": "R3",
+  "name": "retry_then_pass",
+  "description": "Critical phase fails once on attempt 1, retries and succeeds on attempt 2",
+  "mode": "optimize",
+  "skip_integration": false,
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "integration", "report-generate"],
+      "current_phase": null,
+      "status": "completed",
+      "retry_counts": {"benchmark": 1},
+      "total_reruns": 1,
+      "fallbacks_used": []
+    },
+    "comparison": {
+      "schema_version": "1.0",
+      "artifacts_valid": true,
+      "performance_valid": true,
+      "validated": true,
+      "performance_gate": "pass",
+      "ttft_upgraded": false,
+      "baseline_file": "run_fp4_tp8.json",
+      "optimized_file": "optimized_run_fp4_tp8.json",
+      "baseline": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0},
+      "optimized": {"total_token_throughput": 1050, "mean_ttft_ms": 98.0},
+      "speedup": 1.05,
+      "e2e_speedup": 1.05,
+      "ttft_regression_pct": -2.0
+    },
+    "blockers": {"blockers": []},
+    "baseline_benchmark": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0, "mean_itl_ms": 5.0, "mean_tpot_ms": 10.0, "duration": 60},
+    "optimized_benchmark": {"total_token_throughput": 1050, "mean_ttft_ms": 98.0, "mean_itl_ms": 5.0, "mean_tpot_ms": 10.0, "duration": 60}
+  },
+  "expected": {
+    "pipeline_status": "completed",
+    "all_phases_completed": true,
+    "performance_gate": "pass",
+    "artifacts_valid": true,
+    "validated": true
+  }
+}

@@ -17,12 +17,14 @@ Options:
   --project PATH   Install into PATH/.claude/skills/SKILL_NAME
   --link           Symlink instead of copying files
   --copy           Copy files explicitly (default)
+  --verify         Verify installation without installing
   -h, --help       Show this help text
 EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CURSOR_PROJECT=""
+VERIFY_ONLY=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +39,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --copy)
       MODE="copy"
+      shift
+      ;;
+    --verify)
+      VERIFY_ONLY=true
       shift
       ;;
     -h|--help)
@@ -156,6 +162,85 @@ ${SKILL_BODY_ABS}"
   printf '%s\n' "$MDC_CONTENT" > "$CURSOR_RULE_DEST"
   echo "  Rule:   $CURSOR_RULE_DEST"
 }
+
+verify_skill() {
+  local SKILL_NAME="$1"
+  local SOURCE_DIR="$REPO_ROOT/skills/$SKILL_NAME"
+  local ERRORS=0
+
+  echo "Verifying $SKILL_NAME..."
+
+  # Required files
+  for f in SKILL.md RUNTIME.md INTAKE.md INSTALL.md LICENSE; do
+    if [[ -f "$SOURCE_DIR/$f" ]]; then
+      echo "  OK  $f"
+    else
+      echo "  MISSING  $f"
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+
+  # Required directories
+  for d in orchestrator agents protocols scripts templates phases tests; do
+    if [[ -d "$SOURCE_DIR/$d" ]]; then
+      echo "  OK  $d/"
+    else
+      echo "  MISSING  $d/"
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+
+  # Orchestrator files
+  for f in orchestrator/ORCHESTRATOR.md orchestrator/phase-registry.json orchestrator/monitor.md; do
+    if [[ -f "$SOURCE_DIR/$f" ]]; then
+      echo "  OK  $f"
+    else
+      echo "  MISSING  $f"
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+
+  # Optional: TraceLens tarball
+  if [[ -f "$SOURCE_DIR/resources/TraceLens-internal.tar.gz" ]]; then
+    echo "  OK  resources/TraceLens-internal.tar.gz (optional)"
+  else
+    echo "  INFO  resources/TraceLens-internal.tar.gz not found (optional)"
+  fi
+
+  # Control-plane tests
+  if [[ -f "$SOURCE_DIR/tests/test_invariants.py" ]]; then
+    echo "  OK  tests/test_invariants.py"
+  else
+    echo "  MISSING  tests/test_invariants.py"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  if [[ $ERRORS -eq 0 ]]; then
+    echo "  PASSED: all required files present"
+  else
+    echo "  FAILED: $ERRORS required file(s) missing"
+  fi
+  return $ERRORS
+}
+
+if [[ "$VERIFY_ONLY" == "true" ]]; then
+  TOTAL_ERRORS=0
+  for SKILL_NAME in "${SKILL_NAMES[@]}"; do
+    echo ""
+    echo "=== $SKILL_NAME ==="
+    if ! verify_skill "$SKILL_NAME"; then
+      TOTAL_ERRORS=$((TOTAL_ERRORS + 1))
+    fi
+  done
+  echo ""
+  if [[ $TOTAL_ERRORS -eq 0 ]]; then
+    echo "Verification passed."
+    exit 0
+  else
+    echo "Verification failed."
+    exit 1
+  fi
+fi
 
 # Install each skill
 echo "Installing skills..."

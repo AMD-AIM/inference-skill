@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Monitor Verdict",
+  "description": "Structured representation of a monitor review verdict, extracted from monitor/phase-NN-review.md frontmatter.",
+  "type": "object",
+  "required": ["schema_version", "phase", "phase_index", "verdict"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "phase": {
+      "type": "string",
+      "description": "Canonical phase key from the registry"
+    },
+    "phase_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "WARN", "FAIL"]
+    },
+    "failure_type": {
+      "type": ["string", "null"],
+      "enum": ["infrastructure", "logic", "data_quality", null],
+      "description": "Required when verdict is not PASS"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Attempt number (1 = first attempt)"
+    },
+    "check_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed"],
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "passed": { "type": "boolean" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

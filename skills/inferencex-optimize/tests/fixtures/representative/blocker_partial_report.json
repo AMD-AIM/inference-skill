@@ -1,0 +1,40 @@
+{
+  "id": "R4",
+  "name": "blocker_partial_report",
+  "description": "kernel-optimize phase blocked after budget exhaustion, partial report generated",
+  "mode": "optimize",
+  "skip_integration": false,
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "report-generate"],
+      "current_phase": null,
+      "status": "completed",
+      "retry_counts": {"kernel-optimize": 2},
+      "total_reruns": 2,
+      "fallbacks_used": [{"phase_key": "kernel-optimize", "fallback_target": "problem-generate"}]
+    },
+    "comparison": null,
+    "blockers": {
+      "blockers": [
+        {
+          "phase": "kernel-optimize",
+          "summary": "Compilation failed on all targets after fallback",
+          "blocker_classifications": ["compilation_failure"],
+          "terminal_action": "budget_exhausted",
+          "rca_artifact": "results/kernel_opt_root_cause.json",
+          "monitor_review": "monitor/phase-07-review.md",
+          "timestamp": "2025-01-15T10:30:00Z"
+        }
+      ]
+    },
+    "baseline_benchmark": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0, "mean_itl_ms": 5.0, "mean_tpot_ms": 10.0, "duration": 60},
+    "optimized_benchmark": null
+  },
+  "expected": {
+    "pipeline_status": "completed with blockers",
+    "all_phases_completed": false,
+    "performance_gate": null,
+    "artifacts_valid": null,
+    "validated": null
+  }
+}

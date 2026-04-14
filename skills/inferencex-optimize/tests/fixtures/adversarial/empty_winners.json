@@ -1,0 +1,25 @@
+{
+  "id": "A5",
+  "name": "empty_winners",
+  "description": "geak_results.json with zero winning kernels — all speedups <= 1.0",
+  "mode": "optimize",
+  "inputs": {
+    "geak_results": [
+      {"kernel": "fused_moe", "speedup": 0.95, "patch_recovered": false, "status": "parity"},
+      {"kernel": "attention_fwd", "speedup": 1.0, "patch_recovered": false, "status": "parity"}
+    ],
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize"],
+      "current_phase": "integration",
+      "status": "running",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    }
+  },
+  "expected": {
+    "kernels_improved": 0,
+    "should_warn": true,
+    "failure_reason": "No kernels achieved speedup > 1.0"
+  }
+}

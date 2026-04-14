@@ -15,4 +15,15 @@ Canonical phase agent docs are now at:
 - `agents/phase-08-integration.md`
 - `agents/phase-09-report-generate.md`
 
-The orchestrator dispatches work via `orchestrator/ORCHESTRATOR.md` and `orchestrator/phase-registry.json`. Phase agents read their own doc plus a handoff file -- they do not read these archive stubs.
+## Runtime Path
+
+The **canonical runtime path** uses the deterministic runner (`scripts/orchestrate/runner.py`) for all mechanical orchestration. The runner owns sequencing, prerequisites, retry budgets, context-budget enforcement, atomic progress writes, and parity artifact emission.
+
+To revert to the legacy LLM orchestrator path, set `USE_RUNNER=false` in the run configuration.
+
+### Key documents
+
+- **Architecture**: `docs/ARCHITECTURE.md` — four-plane model, invariants, lifecycle rules
+- **Parity contract**: `docs/PARITY_CONTRACT.md` — which fields participate in parity verification
+- **Runner-LLM boundary**: `protocols/runner-llm-boundary.md` — what the runner handles vs. LLM agents
+- **Orchestrator dispatch**: `orchestrator/ORCHESTRATOR.md` and `orchestrator/phase-registry.json`

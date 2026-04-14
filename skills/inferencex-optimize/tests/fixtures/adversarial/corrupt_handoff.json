@@ -1,0 +1,21 @@
+{
+  "id": "A7",
+  "name": "corrupt_handoff",
+  "description": "Handoff YAML frontmatter is malformed — missing required phase and phase_index fields",
+  "mode": "optimize",
+  "inputs": {
+    "handoff_content": "---\ntarget: benchmark\n---\n## Context\nSome context without proper phase identification.\n",
+    "progress": {
+      "phases_completed": ["env", "config"],
+      "current_phase": "benchmark",
+      "status": "running",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    }
+  },
+  "expected": {
+    "should_reject_handoff": true,
+    "failure_reason": "Handoff missing required frontmatter fields: phase, phase_index"
+  }
+}

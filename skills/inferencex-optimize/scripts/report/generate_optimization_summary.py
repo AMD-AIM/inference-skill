@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--env-info", default="")
     parser.add_argument("--results-dir", default="")
     parser.add_argument("--problems-dir", default="")
+    parser.add_argument("--skip-integration", action="store_true", default=False)
     args = parser.parse_args()
 
     summary = {
@@ -65,6 +66,7 @@ def main():
     summary["pipeline_status"] = pipeline_status(
         blocker_list, integration_gate,
         integration_expected=bool(args.results_dir),
+        integration_skipped=args.skip_integration,
     )
     summary["all_phases_completed"] = summary["pipeline_status"] in {
         "completed", "completed with warnings",

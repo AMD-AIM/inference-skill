@@ -1,0 +1,38 @@
+{
+  "id": "A8",
+  "name": "budget_exhausted",
+  "description": "All retry budgets consumed with multiple fallbacks used, pipeline halted",
+  "mode": "optimize",
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate"],
+      "current_phase": "kernel-optimize",
+      "status": "failed",
+      "retry_counts": {"kernel-optimize": 2, "problem-generate": 2, "profile-analyze": 1},
+      "total_reruns": 5,
+      "fallbacks_used": [
+        {"phase_key": "kernel-optimize", "fallback_target": "problem-generate"},
+        {"phase_key": "problem-generate", "fallback_target": "profile-analyze"}
+      ]
+    },
+    "comparison": null,
+    "blockers": {
+      "blockers": [
+        {
+          "phase": "kernel-optimize",
+          "summary": "Budget exhausted after 5 total reruns across multiple fallbacks",
+          "blocker_classifications": ["compilation_failure", "framework_limit"],
+          "terminal_action": "budget_exhausted",
+          "rca_artifact": "results/kernel_opt_root_cause.json",
+          "monitor_review": "monitor/phase-07-review.md",
+          "timestamp": "2025-01-15T12:00:00Z"
+        }
+      ]
+    }
+  },
+  "expected": {
+    "pipeline_status": "completed with blockers",
+    "all_phases_completed": false,
+    "total_reruns_at_limit": true
+  }
+}

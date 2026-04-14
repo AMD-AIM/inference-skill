@@ -1,0 +1,24 @@
+{
+  "id": "A2",
+  "name": "malformed_rca_json",
+  "description": "RCA output JSON missing required fields (no retry_recommendation, no terminal_action)",
+  "mode": "optimize",
+  "inputs": {
+    "rca_output": {
+      "phase": "benchmark",
+      "summary": "The benchmark harness crashed"
+    },
+    "progress": {
+      "phases_completed": ["env", "config"],
+      "current_phase": "benchmark",
+      "status": "running",
+      "retry_counts": {"benchmark": 1},
+      "total_reruns": 1,
+      "fallbacks_used": []
+    }
+  },
+  "expected": {
+    "should_fail_closed": true,
+    "failure_reason": "RCA output missing required fields: retry_recommendation, terminal_action"
+  }
+}

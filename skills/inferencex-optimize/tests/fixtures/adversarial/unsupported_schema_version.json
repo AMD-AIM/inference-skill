@@ -1,0 +1,21 @@
+{
+  "id": "A6",
+  "name": "unsupported_schema_version",
+  "description": "progress.json with schema_version=99.0 — should be rejected on resume",
+  "mode": "optimize",
+  "inputs": {
+    "progress": {
+      "schema_version": "99.0",
+      "phases_completed": ["env", "config", "benchmark"],
+      "current_phase": "benchmark-analyze",
+      "status": "running",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    }
+  },
+  "expected": {
+    "should_reject_resume": true,
+    "failure_reason": "Unsupported schema_version 99.0"
+  }
+}

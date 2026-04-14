@@ -227,10 +227,20 @@ After each phase agent completes:
 
 If the monitor agent itself fails (malformed output, timeout, crash):
 
-1. Log a warning with the failure details.
-2. Treat the phase result as a non-critical PASS — do not block the pipeline on monitor infrastructure issues.
+**For critical phases** (those with `"critical": true` in the registry):
+
+1. Log the failure with full details (error type, phase key, monitor output if available).
+2. Treat the monitor failure as a **FAIL verdict** — critical phases fail closed on monitor infrastructure issues.
 3. Set `monitor_failure: true` in the phase's `retry_counts` entry for observability.
-4. Do not count the monitor failure against the rerun budget (`phase_reruns` and `total_reruns` remain unchanged).
+4. Route through the standard FAIL branch: RCA (if available), budget check, retry or fallback.
+5. The `failure_type` is `"infrastructure"` (monitor crash/timeout) or `"data_quality"` (malformed output).
+
+**For non-critical phases**:
+
+1. Log a warning with the failure details.
+2. Treat the phase result as a PASS — do not block the pipeline on monitor infrastructure issues for non-critical phases.
+3. Set `monitor_failure: true` in the phase's `retry_counts` entry for observability.
+4. Do not count the monitor failure against the rerun budget.
 5. Continue to the next phase.
 
 ## Timeout Policy

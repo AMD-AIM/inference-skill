@@ -1,0 +1,17 @@
+{
+  "id": "A3",
+  "name": "partial_progress_json",
+  "description": "progress.json missing phases_completed and current_phase fields",
+  "mode": "optimize",
+  "inputs": {
+    "progress": {
+      "status": "running",
+      "retry_counts": {},
+      "total_reruns": 0
+    }
+  },
+  "expected": {
+    "should_reject_resume": true,
+    "failure_reason": "progress.json missing required field: phases_completed"
+  }
+}

@@ -1,4 +1,6 @@
 {
+  "schema_version": "1.0",
+  "max_context_lines": 500,
   "phases": {
     "env": {
       "index": 0,
@@ -23,12 +25,21 @@
       "critical": true,
       "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "SCRIPTS_DIR", "REPO_DIR", "HF_CACHE", "PROFILE_DIR", "GPUS", "DRY_RUN_NOTE"],
       "sticky": ["baseline_tpot", "baseline_throughput"],
+      "monitor_context_fields": {
+        "source_artifacts": [],
+        "scalars": ["benchmark_result_status", "benchmarks_succeeded", "baseline_artifacts_ready"]
+      },
       "quality": {
         "checks": [
           { "name": "results_exist", "type": "file_exists", "path": "results/" },
           { "name": "runs_completed", "type": "metric_threshold", "field": "benchmarks_succeeded", "min": 1 }
         ],
-        "detection_rules": "Fail benchmark when any of: expected result JSONs are missing; benchmarks_succeeded < 1; throughput artifacts are present but invalid or clearly incomplete; the benchmark phase reports an environment or harness issue that makes downstream comparison unsafe."
+        "detection_rules": "Fail benchmark when any of: expected result JSONs are missing; benchmarks_succeeded < 1; throughput artifacts are present but invalid or clearly incomplete; the benchmark phase reports an environment or harness issue that makes downstream comparison unsafe.",
+        "detection_rules_structured": [
+          {"field": "benchmarks_succeeded", "op": "lt", "value": 1, "verdict": "FAIL"},
+          {"field": "benchmark_result_status", "op": "eq", "value": "failed", "verdict": "FAIL"},
+          {"field": "baseline_artifacts_ready", "op": "eq", "value": false, "verdict": "FAIL"}
+        ]
       },
       "rca_artifact": {
         "output": "results/benchmark_root_cause.json",
@@ -58,13 +69,23 @@
       "critical": true,
       "required_context": ["OUTPUT_DIR", "GPU_ARCH", "SCRIPTS_DIR", "RESOURCES_DIR", "REPORT_DIR", "TEMPLATES_DIR", "PROFILE_DIR"],
       "sticky": ["top_kernels", "kernel_time_pct"],
+      "monitor_context_fields": {
+        "source_artifacts": ["results/trace_manifest.json"],
+        "scalars": ["trace_integrity_status", "tracelens_status", "phase_split_status", "trace_count", "world_size", "phase_split_inputs_ready"]
+      },
       "quality": {
         "checks": [
           { "name": "traces_valid", "type": "file_exists", "path": "profiles/" },
           { "name": "analysis_produced", "type": "file_exists", "path": "results/profile_analysis.json" },
           { "name": "trace_manifest_exists", "type": "file_exists", "path": "results/trace_manifest.json" }
         ],
-        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable. Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag."
+        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable. Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag.",
+        "detection_rules_structured": [
+          {"field": "trace_integrity_status", "op": "eq", "value": "corrupt", "verdict": "FAIL"},
+          {"field": "trace_integrity_status", "op": "eq", "value": "missing", "verdict": "FAIL"},
+          {"field": "trace_count", "op": "lt", "value": 1, "verdict": "FAIL"},
+          {"field": "phase_split_inputs_ready", "op": "eq", "value": false, "verdict": "WARN"}
+        ]
       },
       "rca_artifact": {
         "output": "results/profile_root_cause.json",
@@ -91,11 +112,20 @@
       "deps": ["problem-generate"],
       "critical": true,
       "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GPUS", "CONFIG_KEY"],
+      "monitor_context_fields": {
+        "source_artifacts": [],
+        "scalars": ["compiled_count", "best_speedup", "winning_kernel_count", "optimization_coverage_status", "expected_improvement_status"]
+      },
       "quality": {
         "checks": [
           { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 }
         ],
-        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation. Warn instead of FAIL when expected_improvement_status = parity_or_blocked and the blockers are structured (for example true_kernel_parity or framework_limit), so inherently unimprovable targets are captured instead of retried blindly."
+        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation. Warn instead of FAIL when expected_improvement_status = parity_or_blocked and the blockers are structured (for example true_kernel_parity or framework_limit), so inherently unimprovable targets are captured instead of retried blindly.",
+        "detection_rules_structured": [
+          {"field": "compiled_count", "op": "lt", "value": 1, "verdict": "FAIL"},
+          {"field": "best_speedup", "op": "le", "value": 1.0, "verdict": "FAIL", "condition": "expected_improvement_status != parity_or_blocked"},
+          {"field": "expected_improvement_status", "op": "eq", "value": "parity_or_blocked", "verdict": "WARN"}
+        ]
       },
       "rca_artifact": {
         "output": "results/kernel_opt_root_cause.json",
@@ -110,13 +140,23 @@
       "deps": ["kernel-optimize"],
       "critical": true,
       "required_context": ["OUTPUT_DIR", "CONFIG_KEY", "FRAMEWORK", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "RESULTS_DIR", "TEMPLATES_DIR", "GPUS"],
+      "monitor_context_fields": {
+        "source_artifacts": ["results/optimization_comparison.json"],
+        "scalars": ["artifacts_valid", "performance_gate", "e2e_speedup", "ttft_regression_pct", "ttft_upgraded"]
+      },
       "quality": {
         "checks": [
           { "name": "plugin_generated", "type": "file_exists", "path": "optimized/" },
           { "name": "comparison_exists", "type": "file_exists", "path": "results/optimization_comparison.json" },
           { "name": "integration_manifest_exists", "type": "file_exists", "path": "results/integration_manifest.json" }
         ],
-        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; a top-priority winner is still unintegrated without a structured blocker. Warn when validation_status = warn and the only performance issue is the accepted 0.97 <= speedup < 1.0 band. Performance policy: pass when speedup >= 1.0; warn when 0.97 <= speedup < 1.0; fail when speedup < 0.97. Severe TTFT regression should upgrade a weak result from warn to fail. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json."
+        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; a top-priority winner is still unintegrated without a structured blocker. Warn when validation_status = warn and the only performance issue is the accepted 0.97 <= speedup < 1.0 band. Performance policy: pass when speedup >= 1.0; warn when 0.97 <= speedup < 1.0; fail when speedup < 0.97. Severe TTFT regression should upgrade a weak result from warn to fail. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json.",
+        "detection_rules_structured": [
+          {"field": "performance_gate", "op": "eq", "value": "fail", "verdict": "FAIL"},
+          {"field": "e2e_speedup", "op": "lt", "value": 0.97, "verdict": "FAIL"},
+          {"field": "e2e_speedup", "op": "lt", "value": 1.0, "verdict": "WARN"},
+          {"field": "ttft_regression_pct", "op": "gt", "value": 20.0, "verdict": "FAIL", "condition": "performance_gate == warn"}
+        ]
       },
       "rca_artifact": {
         "output": "results/integration_root_cause.json",
@@ -145,6 +185,10 @@
     "optimize": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "integration", "report-generate"],
     "optimize-only": ["env", "config", "problem-generate", "kernel-optimize", "integration", "report-generate"]
   },
+  "parallel_groups": {
+    "full": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]],
+    "optimize": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
+  },
   "rerun": { "max_per_phase": 2, "max_total": 5 },
   "timeouts": {
     "default_minutes": 30,
@@ -154,6 +198,11 @@
       "kernel-optimize": 90,
       "integration": 60
     }
+  },
+  "_reserved_fields": {
+    "monitor_context_fields": "Activated in Commit 3 — structured context extraction for monitor",
+    "detection_rules_structured": "Activated in Commit 5 — typed predicates replacing prose detection_rules",
+    "parallel_groups": "Activated in Commit 6 — concurrent phase execution groups"
   },
   "context_sources": {
     "CONFIG_KEY":                { "source": "config" },

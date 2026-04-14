@@ -1,0 +1,24 @@
+{
+  "id": "A4",
+  "name": "missing_comparison",
+  "description": "optimization_comparison.json absent despite integration being expected in optimize mode",
+  "mode": "optimize",
+  "skip_integration": false,
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "integration", "report-generate"],
+      "current_phase": null,
+      "status": "completed",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    },
+    "comparison": null,
+    "blockers": {"blockers": []}
+  },
+  "expected": {
+    "pipeline_status": "pipeline incomplete",
+    "all_phases_completed": false,
+    "failure_reason": "Integration expected but optimization_comparison.json is absent"
+  }
+}
