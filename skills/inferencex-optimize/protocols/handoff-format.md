@@ -44,6 +44,14 @@ passes through from the intake)
 ### Environment Check
 (only present for infrastructure failures — prompts the phase agent to verify
 prerequisites before proceeding)
+
+## Root Cause Analysis
+(only present on reruns after RCA agent has run — orchestrator-constructed from RCA artifact)
+
+- **RCA artifact**: {path to *_root_cause.json relative to OUTPUT_DIR}
+- **Summary**: {1-2 sentence RCA summary from root_cause.json}
+- **Retry recommendation**: {retry_recommendation field from RCA}
+- **Blocker classifications**: {summary of target/classification pairs from RCA}
 ```
 
 ## Generation Rules

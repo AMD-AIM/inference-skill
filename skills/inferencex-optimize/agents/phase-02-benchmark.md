@@ -78,6 +78,13 @@ docker stop "$CONTAINER_NAME"; docker rm "$CONTAINER_NAME"
 ### Completion
 Write `agent-results/phase-02-result.md` with benchmarks_run, benchmarks_succeeded, result file paths.
 
+Include these scalar fields in `## Key Findings` for monitor consumption:
+- `benchmark_result_status`: completed | failed | partial
+- `benchmarks_succeeded`: integer count of successful benchmark runs
+- `baseline_artifacts_ready`: true | false (all expected result JSONs present and non-empty)
+
+If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact and adjust your approach based on the retry recommendation and blocker classifications before re-executing benchmarks.
+
 Double-check before closing the phase: every sweep row you intended to run has either a collected artifact under `{{OUTPUT_DIR}}` or a logged failure reason; container `docker rm` succeeded so no orphaned `inferencex-benchmark-*` instances remain; and result filenames remain unique per `(exp-name, precision, framework, tp, ep, conc)` so later analysis does not overwrite data.
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

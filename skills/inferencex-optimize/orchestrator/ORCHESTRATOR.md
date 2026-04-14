@@ -56,11 +56,14 @@ function dispatch(mode, config):
     # 4. Spawn monitor
     if config.MONITOR_LEVEL == "minimal":
       quality_checks = [generic_result_exists_check]
+      detection_rules = null
     elif config.MONITOR_LEVEL == "strict":
       quality_checks = phase.quality.checks if phase.quality else [generic_result_exists_check]
+      detection_rules = phase.quality.detection_rules if phase.quality else null
     else:  # standard
       quality_checks = phase.quality.checks if phase.critical else [generic_result_exists_check]
-    monitor_prompt = build_monitor_prompt(quality_checks, phase_key)
+      detection_rules = phase.quality.detection_rules if (phase.critical and phase.quality) else null
+    monitor_prompt = build_monitor_prompt(quality_checks, phase_key, detection_rules)
     review = spawn_monitor(monitor_prompt, result, running_summary)
 
     # 5. Handle verdict
@@ -79,20 +82,47 @@ function dispatch(mode, config):
         continue to next phase (non-blocking)
 
     if review.verdict == FAIL:
+      # --- RCA-first recovery path ---
+      # Step A: Spawn RCA agent (does NOT increment counters)
+      rca_artifact = phase.rca_artifact  # from registry; null for non-critical phases
+      rca_result = null
+      if rca_artifact:
+        analyzer_manifest = build_rca_manifest(phase_key, rca_artifact, review)
+        rca_result = spawn_analysis_agent(analyzer_manifest)
+        # rca_result writes rca_artifact.output (e.g. results/integration_root_cause.json)
+
+      # Step B: Increment counters AFTER RCA, BEFORE budget check
       total_reruns += 1
       phase_reruns += 1
 
-      if phase_reruns >= registry.rerun.max_per_phase
-         or total_reruns >= registry.rerun.max_total:
+      # Step C: Check budget limits
+      if phase_reruns > registry.rerun.max_per_phase
+         or total_reruns > registry.rerun.max_total:
         if phase.fallback_target and {"phase_key": phase_key, "fallback_target": phase.fallback_target} not in progress.fallbacks_used:
           progress.fallbacks_used.append({"phase_key": phase_key, "fallback_target": phase.fallback_target})
           rollback to fallback_target phase, invalidate subsequent outputs
           continue from fallback_target
         else:
-          STOP: report failure to user with monitor history
+          # No recoverable fallback remains: emit the terminal blocker now
+          write_pipeline_blocker(phase_key, review, rca_result)
+          # Check terminal_policy: allow_partial_report lets Phase 09 run with blockers
+          if phase.terminal_policy == "allow_partial_report":
+            skip to report-generate phase
+          else:
+            STOP: report failure to user with monitor history
 
-      # Rewrite handoff with Prior Attempt Feedback
+      # Step D: Check if RCA recommends stop even when budget remains
+      if rca_result and rca_result.terminal_action == "stop_with_blocker":
+        write_pipeline_blocker(phase_key, review, rca_result)
+        if phase.terminal_policy == "allow_partial_report":
+          skip to report-generate phase
+        else:
+          STOP: report blocker to user
+
+      # Step E: Rewrite handoff with RCA + Prior Attempt Feedback
       handoff = append_feedback(handoff, review, review.failure_type)
+      if rca_result:
+        handoff = append_rca_section(handoff, rca_artifact.output, rca_result)
       write(OUTPUT_DIR/handoff/to-phase-{index}.md, handoff)
       retry current phase (goto step 3)
 ```
@@ -107,6 +137,65 @@ The `generate_handoff` function resolves `required_context` values using `contex
 
 Each `handoff/to-phase-NN.md` follows the schema in `protocols/handoff-format.md`.
 
+## RCA Manifest Construction
+
+When the monitor returns FAIL for a critical phase with an `rca_artifact` entry in the registry:
+
+1. Read `phases[phase_key].rca_artifact` from the registry.
+2. Build an `analyzer_manifest` YAML block:
+   - `task` = `"Root cause analysis for {phase_key} failure: {monitor.failure_type}"`
+   - `output_path` = `rca_artifact.output` (e.g. `"results/integration_root_cause.json"`)
+   - `files` = one entry per item in `rca_artifact.analysis_context`, with:
+     - `path` = the context item path
+     - `description` = auto-generated from the file name
+     - `format` = inferred from extension (`json`, `md`, `log`)
+     - `required` = `true` for JSON artifacts, `false` for directories and logs
+3. Append the monitor's review text as an additional context file.
+4. Spawn the analysis agent with this manifest via `agents/analysis-agent.md`.
+
+The analysis agent writes its output to `output_path` as a JSON file following the common RCA schema (see `protocols/rerun-protocol.md`).
+
+If the RCA agent fails (timeout, crash, malformed output):
+- Record an RCA failure note in the rewritten handoff.
+- One plain retry is still allowed if retry budget remains.
+- If no retry budget remains, emit a structured blocker and apply normal fallback or stop rules.
+
+## Pipeline Blocker Emission
+
+The `write_pipeline_blocker` function appends an entry to `results/pipeline_blockers.json`:
+
+```json
+{
+  "blockers": [
+    {
+      "phase": "{phase_key}",
+      "summary": "{monitor summary or RCA summary}",
+      "blocker_classifications": [],
+      "terminal_action": "{from RCA or 'budget_exhausted'}",
+      "rca_artifact": "{path to root_cause.json if present}",
+      "monitor_review": "{path to monitor review}",
+      "timestamp": "{ISO 8601}"
+    }
+  ]
+}
+```
+
+This file is read by Phase 09 to populate the report's `## Blockers` table.
+
+## Handoff RCA Section
+
+When a phase is retried after RCA, the rewritten handoff includes:
+
+```markdown
+## Root Cause Analysis
+- **RCA artifact**: {rca_artifact.output path}
+- **Summary**: {1-2 sentence RCA summary}
+- **Retry recommendation**: {from RCA retry_recommendation field}
+- **Blocker classifications**: {summary of target/classification pairs}
+```
+
+The retrying phase agent reads this section alongside `## Prior Attempt Feedback` to adjust its approach.
+
 ## Monitor Invocation
 
 After each phase agent completes:
@@ -118,12 +207,21 @@ After each phase agent completes:
 2. Build a monitor prompt containing:
    - The quality checks selected per the monitor level
    - The phase key and index
-3. Spawn a fresh monitor agent with:
+   - The detection rules text (if present)
+3. **Build monitor context JSON** (critical phases with detection rules only):
+   - Read the JSON artifacts referenced in the phase's detection rules
+   - Extract the relevant scalar fields into a compact `monitor/phase-{NN}-context.json`
+   - This keeps the monitor agent cheap — it reads one small JSON instead of parsing large result files
+   - Example for Phase 08: read `results/optimization_comparison.json`, extract `artifacts_valid`, `performance_gate`, `e2e_speedup`, `ttft_regression_pct`, `ttft_upgraded`
+   - Example for Phase 05: read `results/trace_manifest.json`, extract `trace_count`, `world_size`, `phase_split_inputs_ready`, per-trace integrity summary
+   - Example for Phase 07: no JSON artifacts needed (scalars are in `## Key Findings`), so context JSON is omitted
+4. Spawn a fresh monitor agent with:
    - `orchestrator/monitor.md` (monitor role doc)
    - `monitor/running-summary.md` (accumulated state)
    - `agent-results/phase-NN-result.md` (latest output)
-4. Read the monitor's review from `monitor/phase-NN-review.md`
-5. Act on the verdict per the dispatch loop (if `strict`, escalate WARN to FAIL)
+   - `monitor/phase-{NN}-context.json` (if generated in step 3)
+5. Read the monitor's review from `monitor/phase-NN-review.md`
+6. Act on the verdict per the dispatch loop (if `strict`, escalate WARN to FAIL)
 
 ## Monitor Failure Handling
 
@@ -141,14 +239,17 @@ Each phase has a wall-clock timeout defined in `phase-registry.json` under `time
 
 1. Terminate the phase agent.
 2. Treat the timeout as a FAIL with `failure_type: "infrastructure"`.
-3. Apply normal rerun logic (increment counters, append feedback, retry or fallback).
+3. Route the timeout through the same FAIL branch described above.
+   - Critical phases still use the RCA-first recovery loop: spawn RCA (if `rca_artifact` exists), then increment counters, then check budget, then rewrite the handoff, then retry/fallback/stop.
+   - Non-critical phases follow the same generic FAIL handling, but naturally skip RCA because they have no `rca_artifact`.
 
 Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-optimize, integration) have explicit overrides in the registry.
 
 ## Rerun Rules
 
-- `max_reruns_per_phase`: 2
+- `max_reruns_per_phase`: 2 (two re-dispatches after the original attempt)
 - `max_total_reruns`: 5
+- Retry counters increment immediately before the budget check for the rerun that is about to be dispatched, so the budget is exhausted only when a counter becomes **greater than** its limit, not when it is merely equal.
 - On FAIL: write a new handoff that appends `## Prior Attempt Feedback` with the monitor's failure comments, `failure_type`, and remediation guidance
 - Infrastructure failures get an additional `## Environment Check` section
 - A fresh phase agent is always spawned (never reuse a failed agent)
@@ -160,7 +261,7 @@ Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-o
 The orchestrator is the sole writer of `progress.json`. Phase agents never write to it.
 
 Maintain `progress.json` with:
-- `phases_completed`: array of canonical phase keys
+- `phases_completed`: array of canonical phase keys (tracks which phases finished)
 - `retry_counts`: object mapping phase keys to their retry count (e.g., `{"benchmark": 1}`)
 - `current_phase`: phase key currently executing
 - `status`: "running" | "completed" | "failed"
@@ -168,6 +269,8 @@ Maintain `progress.json` with:
 - `fallbacks_used`: array of `{"phase_key": "...", "fallback_target": "..."}` pairs tracking which phases triggered fallbacks
 
 Phase keys match the canonical names from the registry: `env`, `config`, `benchmark`, `benchmark-analyze`, `profile`, `profile-analyze`, `problem-generate`, `kernel-optimize`, `integration`, `report-generate`.
+
+**Naming note**: `progress.json.phases_completed` is an *array* of phase keys. The summary JSON (`optimization_summary.json`) uses a separate *boolean* field `all_phases_completed` (true when `pipeline_status` is `completed` or `completed with warnings`). These are intentionally different: the array tracks incremental progress, the boolean summarizes the final outcome.
 
 Update `progress.json` after each monitor review (PASS, WARN, or FAIL). On FAIL+retry, update `current_phase` and `retry_counts` before re-dispatching. On rollback, remove rolled-back phases from `phases_completed`.
 

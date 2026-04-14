@@ -21,9 +21,9 @@ rm -f  "{{OUTPUT_DIR}}/results/profile_analysis.json" "{{OUTPUT_DIR}}/results/gp
 
 ### 1. Discover and Validate Traces
 ```bash
-python3 "{{SCRIPTS_DIR}}/profiling/validate_traces.py" --trace-dir "{{PROFILE_DIR}}"
+python3 "{{SCRIPTS_DIR}}/profiling/validate_traces.py" --trace-dir "{{PROFILE_DIR}}" --results-dir "{{OUTPUT_DIR}}/results"
 ```
-Capture outputs: `TRACE_COUNT`, `WORLD_SIZE`, `TRACELENS_PRIMARY_TRACE`, etc. If `TRACE_COUNT=0`, skip to step 4.
+Capture outputs: `TRACE_COUNT`, `WORLD_SIZE`, `TRACELENS_PRIMARY_TRACE`, `PHASE_SPLIT_INPUTS_READY`, etc. This also writes `{{OUTPUT_DIR}}/results/trace_manifest.json` with per-trace integrity status and phase-split readiness for monitor consumption. If `TRACE_COUNT=0`, skip to step 4.
 
 ### 2. Gap Analysis
 ```bash
@@ -100,5 +100,14 @@ Create `{{REPORT_DIR}}/profiling_report.md` using `{{TEMPLATES_DIR}}/profiling_r
 
 ### Completion
 Write `agent-results/phase-05-result.md` with gap_analysis status, tracelens status, GPU arch, report path, and top kernel findings (for sticky: `top_kernels`, `kernel_time_pct`).
+
+Include these scalar fields in `## Key Findings` for monitor consumption:
+- `trace_integrity_status`: valid | corrupt | missing (overall, based on trace_manifest.json)
+- `tracelens_status`: completed | skipped | failed
+- `phase_split_status`: completed | skipped | unavailable
+- `trace_count`: integer
+- `world_size`: integer
+
+Reference `results/trace_manifest.json` in `## Artifacts`.
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

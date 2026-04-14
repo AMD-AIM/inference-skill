@@ -207,6 +207,16 @@ def get_throughput(data):
     return data.get("total_token_throughput", data.get("output_throughput", 0))
 
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "scripts", "report"))
+from integration_outcome import derive_fields, performance_gate as _performance_gate, SEVERE_TTFT_REGRESSION_PCT
+
+
+def expected_performance_gate(speedup, ttft_regression_pct=None):
+    gate, _ = _performance_gate(speedup, ttft_regression_pct)
+    return gate
+
+
 def check_skill_layout():
     checks = []
     skill_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -394,6 +404,12 @@ def check_multi_agent_workspace(output_dir, config):
 
     # Validate handoff files match completed phases
     handoff_dir = os.path.join(output_dir, "handoff")
+    rca_phase_map = {
+        "benchmark": "results/benchmark_root_cause.json",
+        "profile-analyze": "results/profile_root_cause.json",
+        "kernel-optimize": "results/kernel_opt_root_cause.json",
+        "integration": "results/integration_root_cause.json",
+    }
     if os.path.isdir(handoff_dir) and os.path.isfile(progress_path):
         for phase_key in completed:
             idx = phase_index_map.get(phase_key)
@@ -408,6 +424,17 @@ def check_multi_agent_workspace(output_dir, config):
                         checks.append(CheckResult("multi-agent",
                                                    f"handoff phase-{idx:02d} has Resolved Variables",
                                                    "warning", "Missing ## Resolved Variables section"))
+                    # Check for ## Root Cause Analysis when RCA artifact exists
+                    rca_file = rca_phase_map.get(phase_key)
+                    if rca_file:
+                        rca_path = os.path.join(output_dir, rca_file)
+                        if os.path.isfile(rca_path) and "## Root Cause Analysis" in content:
+                            checks.append(CheckResult("multi-agent",
+                                                       f"handoff phase-{idx:02d} has RCA section", "pass"))
+                        elif os.path.isfile(rca_path) and "## Root Cause Analysis" not in content:
+                            checks.append(CheckResult("multi-agent",
+                                                       f"handoff phase-{idx:02d} has RCA section", "warning",
+                                                       "RCA artifact exists but handoff missing ## Root Cause Analysis"))
                 else:
                     checks.append(CheckResult("multi-agent",
                                                f"handoff/to-phase-{idx:02d}.md exists", "skip",
@@ -633,8 +660,119 @@ def check_profile(output_dir, config):
     return checks
 
 
+def _check_trace_manifest(output_dir):
+    """Validate trace_manifest.json independently of gap_analysis.json."""
+    checks = []
+    manifest_path = os.path.join(output_dir, "results", "trace_manifest.json")
+    if not os.path.isfile(manifest_path):
+        checks.append(CheckResult("profile-analyze", "trace_manifest.json exists", "fail",
+                                  "Missing structured trace manifest"))
+        return checks
+
+    try:
+        manifest = load_json(manifest_path)
+    except (json.JSONDecodeError, IOError) as exc:
+        checks.append(CheckResult("profile-analyze", "trace_manifest.json readable", "fail",
+                                  str(exc)))
+        return checks
+
+    required_fields = {
+        "trace_count", "world_size", "traces",
+        "tracelens_primary_trace", "phase_split_inputs_ready",
+    }
+    missing = required_fields - set(manifest.keys())
+    if missing:
+        checks.append(CheckResult("profile-analyze", "trace_manifest.json schema valid", "fail",
+                                  f"Missing: {sorted(missing)}"))
+    else:
+        checks.append(CheckResult("profile-analyze", "trace_manifest.json schema valid", "pass"))
+
+    if "schema_version" in manifest:
+        checks.append(CheckResult("profile-analyze", "trace_manifest has schema_version", "pass",
+                                  manifest["schema_version"]))
+
+    traces = manifest.get("traces")
+    if isinstance(traces, list):
+        checks.append(CheckResult("profile-analyze", "trace_manifest traces list", "pass",
+                                  f"{len(traces)} trace(s)"))
+        expected_trace_count = manifest.get("trace_count")
+        valid_trace_count = sum(
+            1
+            for trace in traces
+            if isinstance(trace, dict) and trace.get("integrity") == "valid"
+        )
+        if expected_trace_count == valid_trace_count:
+            checks.append(CheckResult("profile-analyze", "trace_manifest trace_count matches valid traces", "pass",
+                                      f"trace_count={expected_trace_count}, valid_traces={valid_trace_count}"))
+        else:
+            checks.append(CheckResult("profile-analyze", "trace_manifest trace_count matches valid traces", "fail",
+                                      f"trace_count={expected_trace_count}, valid_traces={valid_trace_count}, len(traces)={len(traces)}"))
+
+        invalid_entries = []
+        invalid_integrity = []
+        invalid_roles = []
+        for idx, trace in enumerate(traces):
+            if not isinstance(trace, dict):
+                invalid_entries.append(idx)
+                continue
+            missing_keys = {"path", "size_bytes", "integrity", "role"} - set(trace.keys())
+            if missing_keys:
+                invalid_entries.append(f"{idx} missing {sorted(missing_keys)}")
+            if trace.get("integrity") not in {"valid", "corrupt", "missing"}:
+                invalid_integrity.append(f"{idx}:{trace.get('integrity')}")
+            if trace.get("role") not in {"primary", "secondary", "unknown"}:
+                invalid_roles.append(f"{idx}:{trace.get('role')}")
+
+        if invalid_entries:
+            checks.append(CheckResult("profile-analyze", "trace_manifest entries valid", "fail",
+                                      f"Invalid entries: {invalid_entries}"))
+        else:
+            checks.append(CheckResult("profile-analyze", "trace_manifest entries valid", "pass"))
+
+        if invalid_integrity:
+            checks.append(CheckResult("profile-analyze", "trace_manifest integrity enum valid", "fail",
+                                      ", ".join(invalid_integrity)))
+        else:
+            checks.append(CheckResult("profile-analyze", "trace_manifest integrity enum valid", "pass"))
+
+        if invalid_roles:
+            checks.append(CheckResult("profile-analyze", "trace_manifest role enum valid", "fail",
+                                      ", ".join(invalid_roles)))
+        else:
+            checks.append(CheckResult("profile-analyze", "trace_manifest role enum valid", "pass"))
+    else:
+        checks.append(CheckResult("profile-analyze", "trace_manifest traces list", "fail",
+                                  f"Expected list, got {type(traces).__name__}"))
+
+    if isinstance(manifest.get("phase_split_inputs_ready"), bool):
+        checks.append(CheckResult("profile-analyze", "trace_manifest phase_split_inputs_ready bool", "pass",
+                                  str(manifest["phase_split_inputs_ready"])))
+    else:
+        checks.append(CheckResult("profile-analyze", "trace_manifest phase_split_inputs_ready bool", "fail",
+                                  f"Got {type(manifest.get('phase_split_inputs_ready')).__name__}"))
+
+    return checks
+
+
 def check_profile_analyze(output_dir, config):
     checks = []
+    mode = config.get("MODE", "optimize") if config else "optimize"
+    profile_expected = mode in {"profile", "full", "optimize"}
+    progress_path = os.path.join(output_dir, "progress.json")
+    if os.path.isfile(progress_path):
+        try:
+            with open(progress_path) as f:
+                completed = json.load(f).get("phases_completed", [])
+            profile_expected = profile_expected or ("profile-analyze" in completed)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    if profile_expected:
+        checks.extend(_check_trace_manifest(output_dir))
+    else:
+        checks.append(CheckResult("profile-analyze", "trace_manifest.json exists", "skip",
+                                  f"profile-analyze not expected for mode={mode}"))
+
     gap_path = os.path.join(output_dir, "results", "gap_analysis", "gap_analysis.json")
     if not os.path.isfile(gap_path):
         checks.append(CheckResult("profile-analyze", "gap_analysis.json exists", "skip"))
@@ -799,7 +937,6 @@ def check_integration(output_dir, config):
             checks.append(CheckResult("integration", f"{plugin_dir_name} manifest valid", "pass",
                                       f"{len(ops)} {ops_key}"))
         else:
-            # Check if there are winning kernels that should have been registered
             winners = [n for n, s in geak_speedups.items() if s is not None and s > 1.0]
             detail = f"Empty {ops_key}"
             if winners:
@@ -807,12 +944,9 @@ def check_integration(output_dir, config):
             checks.append(CheckResult("integration", f"{plugin_dir_name} manifest valid", "warning",
                                       detail))
 
-        # Cross-check: no regressed kernel in manifest
         for reg in registered:
             kernel_file = reg.get("kernel", "")
-            # Extract kernel name from filename like "problem_fused_rmsnorm_opt.py"
             kernel_name = kernel_file.replace("problem_", "").replace("_opt.py", "").replace("_opt", "")
-            # Find matching geak entry
             matched_speedup = None
             for geak_name, spd in geak_speedups.items():
                 if kernel_name in geak_name or geak_name in kernel_name:
@@ -836,24 +970,325 @@ def check_integration(output_dir, config):
 
         validated = comparison.get("validated", False)
         speedup = comparison.get("speedup")
+        artifacts_valid = comparison.get("artifacts_valid")
+        performance_valid = comparison.get("performance_valid")
+        performance_gate = comparison.get("performance_gate")
+        e2e_speedup = comparison.get("e2e_speedup")
+        ttft_regression_pct = comparison.get("ttft_regression_pct")
+        expected_gate = expected_performance_gate(speedup, ttft_regression_pct)
 
-        if validated and speedup is not None:
-            checks.append(CheckResult("integration", "optimization_comparison validated", "pass",
-                                      f"speedup={speedup:.3f}x"))
-            if speedup < 1.0:
-                bl = comparison.get("baseline", {}).get("total_token_throughput", "?")
-                opt = comparison.get("optimized", {}).get("total_token_throughput", "?")
-                checks.append(CheckResult("integration", "E2E performance not degraded", "fail",
-                                          f"speedup={speedup:.3f}x < 1.0 (baseline={bl}, optimized={opt})"))
-            else:
-                checks.append(CheckResult("integration", "E2E performance not degraded", "pass",
-                                          f"speedup={speedup:.3f}x"))
+        # Check tri-state validation fields
+        if "artifacts_valid" not in comparison:
+            checks.append(CheckResult("integration", "artifacts_valid field present", "fail"))
+        elif artifacts_valid:
+            checks.append(CheckResult("integration", "artifacts_valid is true", "pass"))
         else:
-            detail = f"validated={validated}, speedup={speedup}"
-            checks.append(CheckResult("integration", "optimization_comparison validated", "fail",
-                                      detail))
+            checks.append(CheckResult("integration", "artifacts_valid is true", "fail",
+                                      "Baseline or optimized JSON failed to load"))
+
+        if "performance_gate" not in comparison:
+            checks.append(CheckResult("integration", "performance_gate field present", "fail"))
+        elif speedup is None:
+            checks.append(CheckResult("integration", "performance_gate matches speedup band", "fail",
+                                      "speedup missing"))
+        elif performance_gate == expected_gate:
+            checks.append(CheckResult("integration", "performance_gate matches speedup band", "pass",
+                                      f"speedup={speedup:.3f}x, gate={performance_gate}"))
+        else:
+            checks.append(CheckResult("integration", "performance_gate matches speedup band", "fail",
+                                      f"speedup={speedup}, expected={expected_gate}, got={performance_gate}"))
+
+        if "e2e_speedup" not in comparison:
+            checks.append(CheckResult("integration", "e2e_speedup field present", "fail"))
+        elif speedup is None:
+            checks.append(CheckResult("integration", "e2e_speedup matches speedup", "fail",
+                                      f"e2e_speedup={e2e_speedup}, speedup missing"))
+        elif abs(e2e_speedup - speedup) < 1e-9:
+            checks.append(CheckResult("integration", "e2e_speedup matches speedup", "pass",
+                                      f"{e2e_speedup:.3f}x"))
+        else:
+            checks.append(CheckResult("integration", "e2e_speedup matches speedup", "fail",
+                                      f"e2e_speedup={e2e_speedup}, speedup={speedup}"))
+
+        if "performance_valid" not in comparison:
+            checks.append(CheckResult("integration", "performance_valid field present", "fail"))
+        elif expected_gate is None:
+            checks.append(CheckResult("integration", "performance_valid matches gate", "fail",
+                                      f"performance_valid={performance_valid}, speedup={speedup}"))
+        else:
+            expected_performance_valid = expected_gate == "pass"
+            if performance_valid == expected_performance_valid:
+                checks.append(CheckResult("integration", "performance_valid matches gate", "pass",
+                                          f"performance_valid={performance_valid}, gate={expected_gate}"))
+            else:
+                checks.append(CheckResult("integration", "performance_valid matches gate", "fail",
+                                          f"performance_valid={performance_valid}, expected={expected_performance_valid}"))
+
+        if "validated" not in comparison:
+            checks.append(CheckResult("integration", "validated field present", "fail"))
+        elif expected_gate is None or artifacts_valid is None:
+            checks.append(CheckResult("integration", "validated matches outcome", "fail",
+                                      f"validated={validated}, speedup={speedup}, artifacts_valid={artifacts_valid}"))
+        else:
+            expected_validated = bool(artifacts_valid and expected_gate == "pass")
+            if validated == expected_validated:
+                checks.append(CheckResult("integration", "validated matches outcome", "pass",
+                                          f"validated={validated}, gate={expected_gate}"))
+            else:
+                checks.append(CheckResult("integration", "validated matches outcome", "fail",
+                                          f"validated={validated}, expected={expected_validated}"))
+
+        gate_for_outcome = performance_gate or expected_gate
+        if gate_for_outcome == "pass" and speedup is not None:
+            checks.append(CheckResult("integration", "optimization_comparison outcome", "pass",
+                                      f"speedup={speedup:.3f}x"))
+        elif gate_for_outcome == "warn" and speedup is not None:
+            checks.append(CheckResult("integration", "optimization_comparison outcome", "warning",
+                                      f"speedup={speedup:.3f}x (accepted 0.97-1.0 warn band)"))
+        elif speedup is not None:
+            bl = comparison.get("baseline", {}).get("total_token_throughput", "?")
+            opt = comparison.get("optimized", {}).get("total_token_throughput", "?")
+            checks.append(CheckResult("integration", "optimization_comparison outcome", "fail",
+                                      f"speedup={speedup:.3f}x (baseline={bl}, optimized={opt})"))
+
+        # Check TTFT regression using shared threshold
+        ttft_pct = comparison.get("ttft_regression_pct")
+        if ttft_pct is not None and ttft_pct > SEVERE_TTFT_REGRESSION_PCT:
+            checks.append(CheckResult("integration", "TTFT regression acceptable", "warning",
+                                      f"ttft_regression_pct={ttft_pct:.1f}% (threshold={SEVERE_TTFT_REGRESSION_PCT}%)"))
     else:
         checks.append(CheckResult("integration", "optimization_comparison.json exists", "skip"))
+
+    return checks
+
+
+def check_integration_manifest(output_dir, config):
+    """Validate results/integration_manifest.json — required when integration completes."""
+    checks = []
+    manifest_path = os.path.join(output_dir, "results", "integration_manifest.json")
+    if not os.path.isfile(manifest_path):
+        progress_path = os.path.join(output_dir, "progress.json")
+        completed = []
+        if os.path.isfile(progress_path):
+            with open(progress_path) as f:
+                completed = json.load(f).get("phases_completed", [])
+        if "integration" in completed:
+            checks.append(CheckResult("integration", "integration_manifest.json exists", "fail",
+                                      "Integration completed but manifest missing — hard contract"))
+        return checks
+
+    try:
+        manifest = load_json(manifest_path)
+    except (json.JSONDecodeError, IOError) as exc:
+        checks.append(CheckResult("integration", "integration_manifest.json readable", "fail",
+                                  str(exc)))
+        return checks
+
+    required = {"schema_version", "targets", "plugin_type", "comparison_file", "summary"}
+    missing = required - set(manifest.keys())
+    if missing:
+        checks.append(CheckResult("integration", "integration_manifest.json schema valid", "fail",
+                                  f"Missing: {sorted(missing)}"))
+    else:
+        checks.append(CheckResult("integration", "integration_manifest.json schema valid", "pass"))
+
+    summary = manifest.get("summary", {})
+    if isinstance(summary, dict):
+        summary_required = {"total_targets", "integrated", "blocked", "coverage_pct"}
+        summary_missing = summary_required - set(summary.keys())
+        if summary_missing:
+            checks.append(CheckResult("integration", "integration_manifest summary fields", "fail",
+                                      f"Missing: {sorted(summary_missing)}"))
+        else:
+            checks.append(CheckResult("integration", "integration_manifest summary fields", "pass",
+                                      f"coverage_pct={summary.get('coverage_pct')}"))
+            cov = summary.get("coverage_pct")
+            if not isinstance(cov, (int, float)) or cov < 0 or cov > 1:
+                checks.append(CheckResult("integration", "integration_manifest coverage_pct range",
+                                          "fail", f"Expected 0..1 float, got {cov}"))
+            else:
+                checks.append(CheckResult("integration", "integration_manifest coverage_pct range",
+                                          "pass", f"{cov}"))
+    else:
+        checks.append(CheckResult("integration", "integration_manifest summary is dict", "fail",
+                                  f"Expected dict, got {type(summary).__name__}"))
+
+    targets = manifest.get("targets", [])
+    if isinstance(targets, list):
+        checks.append(CheckResult("integration", "integration_manifest targets list", "pass",
+                                  f"{len(targets)} target(s)"))
+        valid_statuses = {"integrated", "blocked", "skipped"}
+        for i, t in enumerate(targets):
+            if not isinstance(t, dict):
+                checks.append(CheckResult("integration", f"integration_manifest target[{i}] valid",
+                                          "fail", f"Expected dict, got {type(t).__name__}"))
+                continue
+            t_required = {"name", "status", "strategy"}
+            t_missing = t_required - set(t.keys())
+            if t_missing:
+                checks.append(CheckResult("integration", f"integration_manifest target[{i}] schema",
+                                          "fail", f"Missing: {sorted(t_missing)}"))
+            t_status = t.get("status")
+            if t_status and t_status not in valid_statuses:
+                checks.append(CheckResult("integration",
+                                          f"integration_manifest target[{i}] status enum",
+                                          "fail", f"Invalid status '{t_status}', expected {valid_statuses}"))
+            if t_status == "blocked" and not t.get("blocker_classification"):
+                checks.append(CheckResult("integration",
+                                          f"integration_manifest target[{i}] blocked has classification",
+                                          "warning", "blocked target missing blocker_classification"))
+    else:
+        checks.append(CheckResult("integration", "integration_manifest targets list", "fail",
+                                  f"Expected list, got {type(targets).__name__}"))
+
+    return checks
+
+
+def check_phase08_result_scalars(output_dir, config):
+    """Validate Phase 08 result-doc scalar fields used by monitoring and reporting."""
+    checks = []
+    result_path = os.path.join(output_dir, "agent-results", "phase-08-result.md")
+    if not os.path.isfile(result_path):
+        progress_path = os.path.join(output_dir, "progress.json")
+        completed = []
+        if os.path.isfile(progress_path):
+            with open(progress_path) as f:
+                completed = json.load(f).get("phases_completed", [])
+        if "integration" in completed:
+            checks.append(CheckResult("integration", "phase-08-result.md exists", "fail",
+                                      "Integration completed but result doc missing"))
+        return checks
+
+    with open(result_path) as f:
+        content = f.read()
+
+    key_findings_match = re.search(r"## Key Findings\s*\n(.*?)(?:\n##|\Z)", content, re.DOTALL)
+    if not key_findings_match:
+        checks.append(CheckResult("integration", "phase-08-result.md has Key Findings section",
+                                  "fail", "Missing ## Key Findings"))
+        return checks
+
+    findings_text = key_findings_match.group(1)
+
+    required_scalars = {
+        "baseline_file": r"baseline_file:\s*(\S+)",
+        "optimized_file": r"optimized_file:\s*(\S+)",
+        "validation_status": r"validation_status:\s*(pass|warn|fail)",
+        "coverage_pct": r"coverage_pct:\s*([\d.]+)",
+        "blocked_target_count": r"blocked_target_count:\s*(\d+)",
+        "critical_blocker_count": r"critical_blocker_count:\s*(\d+)",
+    }
+
+    for field_name, pattern in required_scalars.items():
+        match = re.search(pattern, findings_text)
+        if match:
+            checks.append(CheckResult("integration",
+                                      f"phase-08-result scalar: {field_name}", "pass",
+                                      match.group(1)))
+        else:
+            checks.append(CheckResult("integration",
+                                      f"phase-08-result scalar: {field_name}", "fail",
+                                      f"Missing or malformed {field_name} in Key Findings"))
+
+    validation_status_match = re.search(r"validation_status:\s*(\S+)", findings_text)
+    comparison_path = os.path.join(output_dir, "results", "optimization_comparison.json")
+    if validation_status_match and os.path.isfile(comparison_path):
+        doc_status = validation_status_match.group(1)
+        try:
+            with open(comparison_path) as f:
+                comp = json.load(f)
+            comp_gate = comp.get("performance_gate")
+            if doc_status == comp_gate:
+                checks.append(CheckResult("integration",
+                                          "phase-08 validation_status matches comparison gate",
+                                          "pass", f"{doc_status} == {comp_gate}"))
+            else:
+                checks.append(CheckResult("integration",
+                                          "phase-08 validation_status matches comparison gate",
+                                          "fail", f"doc={doc_status}, comparison={comp_gate}"))
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return checks
+
+
+def check_rca_artifacts(output_dir, config):
+    """Verify *_root_cause.json files exist when the corresponding phase had reruns."""
+    checks = []
+    progress_path = os.path.join(output_dir, "progress.json")
+    if not os.path.isfile(progress_path):
+        return checks
+
+    with open(progress_path) as f:
+        progress = json.load(f)
+
+    retry_counts = progress.get("retry_counts", {})
+    results_dir = os.path.join(output_dir, "results")
+
+    rca_map = {
+        "benchmark": "benchmark_root_cause.json",
+        "profile-analyze": "profile_root_cause.json",
+        "kernel-optimize": "kernel_opt_root_cause.json",
+        "integration": "integration_root_cause.json",
+    }
+
+    for phase_key, rca_file in rca_map.items():
+        retries = retry_counts.get(phase_key, 0)
+        rca_path = os.path.join(results_dir, rca_file)
+        if retries > 0:
+            if os.path.isfile(rca_path):
+                try:
+                    with open(rca_path) as f:
+                        rca = json.load(f)
+                    required_fields = {"phase", "failure_type", "summary", "terminal_action"}
+                    missing = required_fields - set(rca.keys())
+                    if missing:
+                        checks.append(CheckResult("rca", f"{rca_file} schema valid", "warning",
+                                                  f"Missing fields: {missing}"))
+                    else:
+                        checks.append(CheckResult("rca", f"{rca_file} exists and valid", "pass",
+                                                  f"terminal_action={rca.get('terminal_action')}"))
+                except (json.JSONDecodeError, IOError) as e:
+                    checks.append(CheckResult("rca", f"{rca_file} readable", "fail", str(e)))
+            else:
+                checks.append(CheckResult("rca", f"{rca_file} exists for retried phase", "warning",
+                                          f"{phase_key} retried {retries} time(s) but no RCA artifact"))
+        elif os.path.isfile(rca_path):
+            checks.append(CheckResult("rca", f"{rca_file} present (no retries)", "pass",
+                                      "RCA artifact exists even without retries (preemptive)"))
+
+    return checks
+
+
+def check_pipeline_blockers(output_dir, config):
+    """Verify results/pipeline_blockers.json schema when present."""
+    checks = []
+    blockers_path = os.path.join(output_dir, "results", "pipeline_blockers.json")
+    if not os.path.isfile(blockers_path):
+        return checks
+
+    try:
+        with open(blockers_path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        checks.append(CheckResult("blockers", "pipeline_blockers.json readable", "fail", str(e)))
+        return checks
+
+    blockers = data.get("blockers", [])
+    checks.append(CheckResult("blockers", "pipeline_blockers.json valid", "pass",
+                              f"{len(blockers)} blocker(s)"))
+
+    valid_phases = {"benchmark", "profile-analyze", "kernel-optimize", "integration"}
+    for i, blocker in enumerate(blockers):
+        phase = blocker.get("phase", "")
+        if phase not in valid_phases:
+            checks.append(CheckResult("blockers", f"blocker[{i}] phase valid", "fail",
+                                      f"Invalid phase: {phase}"))
+        required = {"phase", "summary", "terminal_action"}
+        missing = required - set(blocker.keys())
+        if missing:
+            checks.append(CheckResult("blockers", f"blocker[{i}] schema valid", "warning",
+                                      f"Missing fields: {missing}"))
 
     return checks
 
@@ -869,6 +1304,36 @@ def check_report(output_dir, config):
         else:
             checks.append(CheckResult("report", "optimization_report.md valid", "warning",
                                       f"Only {size} bytes (may be incomplete)"))
+
+        with open(report_md) as f:
+            content = f.read()
+
+        # Check for new template sections
+        blockers_path = os.path.join(output_dir, "results", "pipeline_blockers.json")
+        has_blockers = os.path.isfile(blockers_path)
+
+        if "## Pipeline Status" in content:
+            checks.append(CheckResult("report", "report has Pipeline Status section", "pass"))
+        else:
+            checks.append(CheckResult("report", "report has Pipeline Status section", "warning",
+                                      "Missing ## Pipeline Status section"))
+
+        if has_blockers and "## Blockers" in content:
+            checks.append(CheckResult("report", "report has Blockers section (blockers exist)", "pass"))
+        elif has_blockers:
+            checks.append(CheckResult("report", "report has Blockers section (blockers exist)", "warning",
+                                      "pipeline_blockers.json exists but ## Blockers not in report"))
+
+        if "## Deferred Work" in content:
+            checks.append(CheckResult("report", "report has Deferred Work section", "pass"))
+        elif not has_blockers:
+            checks.append(CheckResult("report", "report has Deferred Work section", "warning",
+                                      "No blockers but ## Deferred Work missing"))
+
+        # Check that old-style ## Recommendations is gone when new sections exist
+        if "## Recommendations" in content and "## Pipeline Status" in content:
+            checks.append(CheckResult("report", "report uses new template (no old Recommendations)", "warning",
+                                      "Both ## Recommendations and ## Pipeline Status present"))
     else:
         checks.append(CheckResult("report", "optimization_report.md exists", "skip"))
 
@@ -881,6 +1346,67 @@ def check_report(output_dir, config):
         else:
             checks.append(CheckResult("report", "optimization_summary.json valid", "fail",
                                       f"Missing config_key. Keys: {list(summary.keys())}"))
+
+        # Check new summary fields
+        if "pipeline_status" in summary:
+            checks.append(CheckResult("report", "summary has pipeline_status", "pass",
+                                      summary["pipeline_status"]))
+
+            # Cross-check pipeline_status against blockers and report
+            blockers_path = os.path.join(output_dir, "results", "pipeline_blockers.json")
+            has_blockers = os.path.isfile(blockers_path)
+            ps = summary["pipeline_status"]
+
+            if has_blockers and ps == "completed":
+                checks.append(CheckResult("report", "pipeline_status consistent with blockers",
+                                          "fail",
+                                          "pipeline_blockers.json exists but status is 'completed'"))
+            elif not has_blockers and ps == "completed with blockers":
+                comp_path = os.path.join(output_dir, "results", "optimization_comparison.json")
+                has_fail_gate = False
+                if os.path.isfile(comp_path):
+                    try:
+                        comp = load_json(comp_path)
+                        has_fail_gate = comp.get("performance_gate") == "fail"
+                    except (json.JSONDecodeError, IOError):
+                        pass
+                if not has_fail_gate:
+                    checks.append(CheckResult("report", "pipeline_status consistent with blockers",
+                                              "fail",
+                                              "No blockers file and no fail gate but status is 'completed with blockers'"))
+                else:
+                    checks.append(CheckResult("report", "pipeline_status consistent with blockers",
+                                              "pass", "fail gate justifies 'completed with blockers'"))
+            else:
+                checks.append(CheckResult("report", "pipeline_status consistent with blockers",
+                                          "pass", ps))
+
+            # Cross-check against report completion line
+            report_md = os.path.join(output_dir, "report", "optimization_report.md")
+            if os.path.isfile(report_md):
+                with open(report_md) as f:
+                    report_content = f.read()
+                completion_match = re.search(
+                    r"\*\*Completion\*\*:\s*(.+)",
+                    report_content)
+                if completion_match:
+                    report_status = completion_match.group(1).strip()
+                    if report_status == ps:
+                        checks.append(CheckResult("report",
+                                                  "summary pipeline_status matches report completion",
+                                                  "pass", ps))
+                    else:
+                        checks.append(CheckResult("report",
+                                                  "summary pipeline_status matches report completion",
+                                                  "warning",
+                                                  f"summary='{ps}', report='{report_status}'"))
+
+        if "blocker_count" in summary:
+            checks.append(CheckResult("report", "summary has blocker_count", "pass",
+                                      f"blocker_count={summary['blocker_count']}"))
+        if "all_phases_completed" in summary:
+            checks.append(CheckResult("report", "summary has all_phases_completed", "pass",
+                                      f"all_phases_completed={summary['all_phases_completed']}"))
     else:
         checks.append(CheckResult("report", "optimization_summary.json exists", "skip"))
 
@@ -913,10 +1439,49 @@ def check_progress_consistency(output_dir, config):
     else:
         expected = OPTIMIZE_PHASES
 
+    # Check for pipeline blockers that explain missing phases
+    blockers_path = os.path.join(output_dir, "results", "pipeline_blockers.json")
+    blocker_phases = set()
+    if os.path.isfile(blockers_path):
+        try:
+            with open(blockers_path) as f:
+                blockers_data = json.load(f)
+            for b in blockers_data.get("blockers", []):
+                blocker_phases.add(b.get("phase", ""))
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # terminal_policy: stop phases (benchmark, profile-analyze) block all downstream
+    stop_phases = {"benchmark", "profile-analyze"}
+    allow_partial_phases = {"kernel-optimize", "integration"}
+
     missing = [p for p in expected if p not in completed]
     if missing:
-        checks.append(CheckResult("progress", "all expected phases completed", "fail",
-                                  f"Missing: {missing}"))
+        # Check if missing phases are explained by blockers + terminal_policy
+        explained = []
+        unexplained = []
+        for m in missing:
+            if m in blocker_phases:
+                explained.append(m)
+            elif any(bp in stop_phases and bp in blocker_phases for bp in stop_phases):
+                explained.append(m)
+            elif any(bp in allow_partial_phases and bp in blocker_phases for bp in allow_partial_phases):
+                if m not in ("report-generate",):
+                    explained.append(m)
+                else:
+                    unexplained.append(m)
+            else:
+                unexplained.append(m)
+
+        if unexplained:
+            checks.append(CheckResult("progress", "all expected phases completed", "fail",
+                                      f"Missing: {unexplained}"))
+        elif explained:
+            checks.append(CheckResult("progress", "all expected phases completed", "warning",
+                                      f"Missing but explained by blockers: {explained}"))
+        else:
+            checks.append(CheckResult("progress", "all expected phases completed", "pass",
+                                      f"{len(completed)}/{len(expected)} phases"))
     else:
         checks.append(CheckResult("progress", "all expected phases completed", "pass",
                                   f"{len(completed)}/{len(expected)} phases"))
@@ -1023,20 +1588,23 @@ def scan_for_issues(output_dir):
     if os.path.isfile(comparison_path):
         with open(comparison_path) as f:
             comp = json.load(f)
-        if comp.get("validated") and comp.get("speedup") is not None:
-            if comp["speedup"] < 1.0:
-                bl = comp.get("baseline", {}).get("total_token_throughput", "?")
-                opt = comp.get("optimized", {}).get("total_token_throughput", "?")
-                issues.append(Issue(
-                    source="results/optimization_comparison.json",
-                    severity="error",
-                    pattern="E2E performance degradation",
-                    context=f"speedup={comp['speedup']:.3f}x, baseline={bl}, optimized={opt}",
-                    suggested_phase="08-integration.md",
-                    analysis="Optimized E2E throughput is lower than baseline. Possible causes: "
-                             "torch.compile/CUDAGraph masking kernel-level gains, plugin import "
-                             "overhead, incorrect kernel dispatch, or regression in fused ops.",
-                ))
+        speedup = comp.get("speedup")
+        ttft_pct = comp.get("ttft_regression_pct")
+        performance_gate = comp.get("performance_gate", expected_performance_gate(speedup, ttft_pct))
+        if speedup is not None and performance_gate in {"warn", "fail"}:
+            bl = comp.get("baseline", {}).get("total_token_throughput", "?")
+            opt = comp.get("optimized", {}).get("total_token_throughput", "?")
+            issues.append(Issue(
+                source="results/optimization_comparison.json",
+                severity="warning" if performance_gate == "warn" else "error",
+                pattern="E2E performance warning band" if performance_gate == "warn" else "E2E performance degradation",
+                context=f"speedup={speedup:.3f}x, baseline={bl}, optimized={opt}, gate={performance_gate}",
+                suggested_phase="08-integration.md",
+                analysis="Optimized E2E throughput did not land in the clean pass band. Possible causes: "
+                         "torch.compile/CUDAGraph masking kernel-level gains, plugin import overhead, "
+                         "incorrect kernel dispatch, or regression in fused ops. Warn-band results are "
+                         "allowed but should be reported honestly; fail-band results need recovery.",
+            ))
 
     # Check kernel→integration leakage: regressed kernels must not be in optimized/ or plugin
     geak_path = os.path.join(output_dir, "problems", "geak_results.json")
@@ -1229,7 +1797,11 @@ def validate_output_dir(output_dir):
     checks.extend(check_problem_generate(output_dir, config))
     checks.extend(check_kernel_optimize(output_dir, config))
     checks.extend(check_integration(output_dir, config))
+    checks.extend(check_integration_manifest(output_dir, config))
+    checks.extend(check_phase08_result_scalars(output_dir, config))
     checks.extend(check_report(output_dir, config))
+    checks.extend(check_rca_artifacts(output_dir, config))
+    checks.extend(check_pipeline_blockers(output_dir, config))
     checks.extend(check_progress_consistency(output_dir, config))
     checks.extend(check_multi_agent_workspace(output_dir, config))
 

@@ -62,7 +62,7 @@ Claude Code will execute all 10 phases in order:
 | 2 | benchmark | Runs baseline benchmark in Docker container |
 | 3 | benchmark-analyze | Produces `benchmark_summary.json` |
 | 4 | profile | Runs profiling benchmark with torch profiler |
-| 5 | profile-analyze | Parses trace, generates `gap_analysis.json` with top kernels |
+| 5 | profile-analyze | Parses trace, generates `gap_analysis.json` and `trace_manifest.json` |
 | 6 | problem-generate | Creates `problem_*.py` files for each bottleneck kernel |
 | 7 | kernel-optimize | Writes optimized Triton kernels, tests accuracy + speedup |
 | 8 | integration | Builds framework plugin, runs optimized E2E benchmark |
@@ -156,7 +156,7 @@ python3 ~/inference-skill/tests/e2e_optimize_test.py --target vllm
 | 6 problem-gen | Problem files have `class Model`, `get_inputs`, `get_init_inputs`; manifest exists |
 | 7 kernel-opt | `geak_results.json` with speedup data; winner/regression staging cross-check |
 | 8 integration | Plugin manifest exists; registered kernels cross-checked against geak speedups |
-| 8 integration | `optimization_comparison.json` validated with speedup >= 1.0 |
+| 8 integration | `optimization_comparison.json` has consistent tri-state fields; `performance_gate=pass` passes, `performance_gate=warn` warns, `performance_gate=fail` fails |
 | 9 report | Report markdown (> 500 bytes) and summary JSON exist |
 | progress | All expected phases completed in correct order |
 
@@ -180,7 +180,7 @@ Scans all logs and artifacts for any failures (not pattern-matched to known issu
 - Error patterns in log files (ERROR, FAIL, Traceback, RuntimeError, OOM, HIP/CUDA errors, TimeoutError, 404, SIGKILL)
 - False positives filtered: `error_rate`, `error_count`, `FAILED (accuracy)` in optimization history logs
 - Truncated gzip trace files
-- E2E performance degradation (speedup < 1.0)
+- E2E warn-band results (`0.97 <= speedup < 1.0`) vs fail-band regressions (`speedup < 0.97`)
 - Regressed kernel leakage into `optimized/` or plugin manifest
 
 Each issue includes: source file/line, severity, matched pattern, context, suggested phase doc, analysis.

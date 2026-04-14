@@ -145,11 +145,11 @@ python3 "{{SCRIPTS_DIR}}/report/validate_optimization.py" --results-dir "{{RESUL
 
 `validate_optimization.py` writes `{{RESULTS_DIR}}/optimization_comparison.json` containing baseline vs optimized throughput, computed speedup, and validation flags — attach this file to the Phase 9 bundle.
 
-Keep the baseline + optimized JSON filenames referenced in the validator logs; if validation fails, capture stderr and re-run the benchmark with smaller `CONC` before declaring the integration unsuccessful.
+Keep the baseline + optimized JSON filenames referenced in the validator logs. Treat `artifacts_valid = false` or `performance_gate = fail` as validation failure. A `performance_gate = warn` result is still a usable measured outcome: record it honestly, preserve the comparison JSON, and let the monitor/reporting flow decide whether it should remain a WARN or trigger a retry because of other blockers.
 
 When reporting externally, quote **total token throughput** fields exactly as emitted by the benchmark JSON (do not normalize to per-GPU rates unless the baseline file already does). If multiple JSON files match the optimized filename pattern, prefer the newest mtime and archive the others under `{{RESULTS_DIR}}/archive/` to avoid validator ambiguity.
 
-Spot-check `optimization_comparison.json` manually: `speedup` should be `optimized / baseline` within floating-point tolerance, and `validated` should be `true` before you tell downstream consumers the run succeeded.
+Spot-check `optimization_comparison.json` manually: `speedup` should be `optimized / baseline` within floating-point tolerance, and `performance_gate` should match the measured band. `validated = true` is required only for a clean pass; a `warn` gate is acceptable, but it must never be reported as a passing E2E win.
 
 ### 7. Clean Up
 ```bash
@@ -157,7 +157,62 @@ cd {{REPO_DIR}} && git checkout -- "$BENCHMARK_SCRIPT" benchmarks/benchmark_lib.
 docker stop "$CONTAINER_NAME" 2>/dev/null; docker rm "$CONTAINER_NAME" 2>/dev/null
 ```
 
+### 7b. Write Integration Manifest
+
+After validation, write `{{RESULTS_DIR}}/integration_manifest.json` summarizing every integration target and its outcome:
+
+```json
+{
+  "schema_version": "1.0",
+  "plugin_type": "sglang_plugin",
+  "comparison_file": "optimization_comparison.json",
+  "targets": [
+    {
+      "name": "fused_moe",
+      "kernel_file": "problem_fused_moe_opt.py",
+      "strategy": "plugin",
+      "status": "integrated",
+      "kernel_speedup": 1.35,
+      "blocker_classification": null
+    },
+    {
+      "name": "rope_forward",
+      "kernel_file": "problem_rope_forward_opt.py",
+      "strategy": "skipped",
+      "status": "blocked",
+      "kernel_speedup": 1.0,
+      "blocker_classification": "true_kernel_parity"
+    }
+  ],
+  "summary": {
+    "total_targets": 2,
+    "integrated": 1,
+    "blocked": 1,
+    "skipped": 0,
+    "coverage_pct": 0.5
+  }
+}
+```
+
+Populate from `geak_results.json` (kernel speedups) and the plugin `manifest.json` (which kernels were actually registered). For targets not integrated, record the `blocker_classification` from RCA context or Phase 07 metadata.
+
 ### Completion
-Write `agent-results/phase-08-result.md` with baseline_throughput, optimized_throughput, speedup, plugin_type (for quality check: include "validation passed" or "validation failed" string).
+Write `agent-results/phase-08-result.md` with baseline_throughput, optimized_throughput, speedup, plugin_type.
+
+Include these scalar fields in `## Key Findings` for monitor consumption:
+- `baseline_file`: filename of the baseline JSON used
+- `optimized_file`: filename of the optimized JSON used
+- `validation_status`: pass | warn | fail (mirrors `performance_gate` from `optimization_comparison.json`)
+- `coverage_pct`: float — fraction of Phase 07 winners that were integrated
+- `blocked_target_count`: integer — targets with a structured blocker classification
+- `critical_blocker_count`: integer — subset of blocked targets where classification is not `true_kernel_parity`
+
+Reference `results/optimization_comparison.json` and `results/integration_manifest.json` in `## Artifacts`. The monitor reads `artifacts_valid`, `performance_valid`, `performance_gate`, `e2e_speedup`, and `ttft_regression_pct` from the comparison file via detection rules (pre-extracted into the monitor context JSON by the orchestrator).
+
+If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact and adjust your approach based on the retry recommendation and blocker classifications:
+- Targets classified as `true_kernel_parity`: skip integration for these targets.
+- Targets classified as `adapter_overhead`: rewrite the adapter to reduce overhead.
+- Targets classified as `needs_source_patch` or `needs_model_adapter`: spawn the coding agent for those specific targets.
+- Targets classified as `framework_limit`: document as a structured blocker rather than retrying.
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

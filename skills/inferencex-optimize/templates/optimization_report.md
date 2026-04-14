@@ -89,7 +89,24 @@ torch.compile/CUDAGraphs are masking kernel-level improvements at the graph leve
 - E2E comparison: {{RESULTS_DIR}}/optimization_comparison.json
 - This report: {{REPORT_DIR}}/optimization_report.md
 
-## Recommendations
-1. <data-driven recommendation based on bottleneck analysis>
-2. <recommendation about what to optimize next>
-3. <recommendation about production deployment considerations>
+## Pipeline Status
+- **Completion**: <completed | completed with warnings | completed with blockers | pipeline incomplete>
+  - `completed`: all phases passed, integration gate = pass, no blockers
+  - `completed with warnings`: integration gate = warn (0.97 ≤ speedup < 1.0), no blockers
+  - `completed with blockers`: integration gate = fail OR late-phase blockers present (no `pipeline_blockers.json` required when the fail gate alone drives the status)
+  - `pipeline incomplete`: early-phase blockers (`benchmark`, `profile-analyze`) OR integration expected but comparison missing
+- **Phases completed**: N of M
+- **Terminal blockers**: N
+
+## Blockers
+<!-- populated from results/pipeline_blockers.json when present; omitted when empty -->
+
+| Phase | Target | Blocker | Classification | Terminal Action |
+|-------|--------|---------|----------------|----------------|
+| ... | ... | ... | ... | ... |
+
+## Deferred Work
+<!-- only populated when the pipeline has no blockers; warn-band caveats should still be called out above -->
+1. <data-driven recommendation based on remaining optimization headroom>
+2. <recommendation grounded in profiling or gap analysis findings>
+3. <production deployment consideration if applicable>

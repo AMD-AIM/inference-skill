@@ -1,6 +1,6 @@
 # Rerun Protocol
 
-Defines failure handling, retry logic, and escalation for the multi-agent pipeline.
+Defines failure handling, retry logic, RCA-first recovery, and escalation for the multi-agent pipeline.
 
 ## Failure Taxonomy
 
@@ -32,25 +32,96 @@ Missing expected output files, metrics outside plausible range, empty traces, tr
 
 ## Retry Limits
 
-- `max_reruns_per_phase`: 2
+- `max_reruns_per_phase`: 2 (two re-dispatches after the original attempt)
 - `max_total_reruns`: 5
 
-## Rerun Flow
+## RCA-First Recovery Flow
+
+Every critical phase uses the same orchestrator-managed recovery loop. The RCA step is inserted **between** the monitor FAIL and the phase retry.
 
 1. Monitor returns FAIL verdict with `failure_type` and rerun guidance.
-2. Orchestrator increments retry counters.
-3. If within limits:
-   a. Orchestrator rewrites `handoff/to-phase-{NN}.md` with `## Prior Attempt Feedback`
-   b. For infrastructure failures, add `## Environment Check` section
-   c. Spawn a fresh phase agent (never reuse failed agents)
-4. If per-phase limit exceeded:
-   a. Check `fallback_target` in registry
-   b. If available and not yet attempted: rollback to the fallback phase, invalidate all outputs from the fallback phase forward, restart from there
-   c. If no fallback or fallback already attempted: escalate to user
-5. If total limit exceeded:
-   a. Stop pipeline
-   b. Report failure with full monitor review history
-   c. Suggest manual intervention points
+2. **Spawn RCA agent** (does NOT increment counters):
+   a. Orchestrator reads `phases[phase_key].rca_artifact` from the registry.
+   b. Orchestrator constructs an `analyzer_manifest` from `rca_artifact.analysis_context`.
+   c. Analysis agent writes `rca_artifact.output` (e.g. `results/integration_root_cause.json`).
+3. **Increment retry counters** (`phase_reruns` and `total_reruns`).
+4. **Check budget limits** (`max_per_phase`, `max_total`). Because the counters were incremented for the rerun that is about to be dispatched, the budget is exhausted only when a counter becomes **greater than** its configured limit.
+5. If budget remains and RCA does not recommend `stop_with_blocker`:
+   a. Rewrite handoff with `## Prior Attempt Feedback` and `## Root Cause Analysis`.
+   b. For infrastructure failures, also add `## Environment Check` section.
+   c. Spawn a fresh phase agent (never reuse failed agents).
+6. If budget exhausted:
+   a. Check `fallback_target` in registry.
+   b. If available and not yet attempted: rollback to the fallback phase, invalidate all outputs from the fallback phase forward, restart from there.
+   c. If no fallback or fallback already attempted: write structured blocker entry to `results/pipeline_blockers.json`, then apply `terminal_policy` (`stop` or `allow_partial_report`).
+7. If RCA recommends `stop_with_blocker` even when budget remains:
+   a. Write structured blocker entry.
+   b. Apply `terminal_policy`.
+
+### RCA Budget Rules
+
+- Spawning the RCA agent does **not** increment `phase_reruns` or `total_reruns`.
+- Only the subsequent phase re-dispatch increments the retry counters.
+- Equality with the configured limit still allows that re-dispatch. Exhaustion starts on the next failure, when `phase_reruns > max_reruns_per_phase` or `total_reruns > max_total_reruns`.
+- If the RCA agent fails (timeout, crash): record an RCA failure note in the handoff, allow one plain retry if budget remains.
+- If RCA repeatedly fails and no retry budget remains: emit a structured blocker, apply normal fallback/stop.
+
+## Common RCA Schema
+
+Every `*_root_cause.json` written by the analysis agent includes:
+
+- `phase` — string, the phase key
+- `failure_type` — string, monitor-assigned failure type
+- `summary` — 1-3 sentence plain-text summary
+- `evidence` — array of `{ "file": "<path>", "finding": "<observation>" }`
+- `root_causes` — array of `{ "cause": "<description>", "confidence": "high | medium | low" }`
+- `retry_recommendation` — freeform guidance for the retrying phase agent
+- `terminal_action` — one of: `retry_phase`, `fallback_target`, `stop_with_blocker`, `allow_partial_report`
+- `suggested_fallback_target` — string or null
+- `blocker_classifications` — array of `{ "target": "<name>", "classification": "<enum>" }`
+
+### Phase-Specific RCA Fields
+
+**Benchmark** (`results/benchmark_root_cause.json`):
+- `missing_artifacts`, `harness_issue`, `environment_issue`
+
+**Profile** (`results/profile_root_cause.json`):
+- `trace_integrity_failures`, `missing_phase_split_inputs`, `tracelens_readiness`
+
+**Kernel-optimize** (`results/kernel_opt_root_cause.json`):
+- `failed_kernels`, `missing_winners`, `expected_improvement_status`, `next_attempt_mode`
+
+**Integration** (`results/integration_root_cause.json`):
+- `failed_targets`, `integration_strategy_by_target`, `dispatch_failures`, `adapter_overhead_findings`
+
+### Blocker Classification Enums
+
+Integration blockers: `needs_source_patch`, `needs_model_adapter`, `framework_limit`, `true_kernel_parity`, `adapter_overhead`
+
+## Terminal Blocker Behavior
+
+When RCA-informed retry still fails and retry/fallback options are exhausted, the orchestrator writes a structured entry to `results/pipeline_blockers.json`.
+
+### Stop versus Partial Report
+
+Early prerequisite phases (`benchmark`, `profile-analyze`):
+- `terminal_policy: stop` — halt the pipeline, do not generate a normal optimization report.
+
+Later optimization phases (`kernel-optimize`, `integration`):
+- `terminal_policy: allow_partial_report` — allow Phase 09 to run; report states `completed with blockers` or `pipeline incomplete`.
+
+### Pipeline Status Derivation
+
+`integration_outcome.pipeline_status()` is the single source of truth for the four status strings. All consumers (report template, summary JSON, E2E validator) must use the same function or its output:
+
+| Condition | `pipeline_status` |
+|-----------|-------------------|
+| No blockers, integration gate = pass | `completed` |
+| No blockers, integration gate = warn | `completed with warnings` |
+| No blockers, integration gate = fail **or** late-phase blockers present | `completed with blockers` |
+| Early-phase blockers (`benchmark`, `profile-analyze`) **or** integration expected but comparison missing | `pipeline incomplete` |
+
+When `pipeline_blockers.json` is absent and `performance_gate = fail`, the fail gate alone is sufficient to set `completed with blockers` — a separate blocker file is not required. Conversely, when `performance_gate = warn` and no blocker file exists, the status is `completed with warnings`, not `completed with blockers`.
 
 ## Rollback Procedure
 
@@ -69,5 +140,7 @@ When stopping due to limits exceeded, provide the user:
 
 - Which phase failed and how many attempts were made
 - The failure type and monitor's analysis
+- The RCA summary and blocker classifications (when available)
 - The full sequence of monitor reviews for this phase
+- Contents of `results/pipeline_blockers.json` (when present)
 - Suggested next steps (manual fix, config change, environment check)

@@ -164,6 +164,19 @@ Always drive manual attempts through the same `kernel_test_runner.py` entrypoint
 - For every attempt: test with `kernel_test_runner.py`, iterate up to **5** rounds, then run `kernel_finalize.py` on the surviving candidate just like the automated path.
 
 ### Completion
-Write `agent-results/phase-07-result.md` with kernels_attempted, kernels_improved, geak_mode used, per-kernel speedups (for quality check: `compiled_count`, `best_speedup`).
+Write `agent-results/phase-07-result.md` with kernels_attempted, kernels_improved, geak_mode used, per-kernel speedups.
+
+Include these scalar fields in `## Key Findings` for monitor consumption:
+- `compiled_count`: integer count of compiled kernels
+- `best_speedup`: float (best kernel-level speedup achieved)
+- `winning_kernel_count`: integer count of kernels with speedup > 1.0
+- `optimization_coverage_status`: complete | partial | none
+- `expected_improvement_status`: improvable | parity_or_blocked (summarize across hot targets)
+
+For targets that are inherently unimprovable (at parity with baseline, or blocked by framework/vendor limits), classify them as `parity_or_blocked` rather than leaving them as unexplained failures. This distinction prevents the monitor from triggering endless retries on targets that cannot be improved. Document the reason per target in `geak_results.json` (e.g., `true_kernel_parity`, `framework_limit`).
+
+Report the measured `best_speedup` honestly even when it is `<= 1.0`. The monitor uses `expected_improvement_status` plus the structured blocker reasons to decide WARN versus FAIL; do not inflate or coerce the scalar just to satisfy a gate.
+
+If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact path and adjust your approach based on the retry recommendation. Use `next_attempt_mode` from the RCA to decide between GEAK retry, manual fallback, or coding-agent help. Targets classified as `true_kernel_parity` in the RCA's `blocker_classifications` should be skipped on retry.
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

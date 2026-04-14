@@ -27,8 +27,14 @@
         "checks": [
           { "name": "results_exist", "type": "file_exists", "path": "results/" },
           { "name": "runs_completed", "type": "metric_threshold", "field": "benchmarks_succeeded", "min": 1 }
-        ]
-      }
+        ],
+        "detection_rules": "Fail benchmark when any of: expected result JSONs are missing; benchmarks_succeeded < 1; throughput artifacts are present but invalid or clearly incomplete; the benchmark phase reports an environment or harness issue that makes downstream comparison unsafe."
+      },
+      "rca_artifact": {
+        "output": "results/benchmark_root_cause.json",
+        "analysis_context": ["results/", "agent-results/phase-02-result.md"]
+      },
+      "terminal_policy": "stop"
     },
     "benchmark-analyze": {
       "index": 3,
@@ -55,10 +61,17 @@
       "quality": {
         "checks": [
           { "name": "traces_valid", "type": "file_exists", "path": "profiles/" },
-          { "name": "analysis_produced", "type": "file_exists", "path": "results/profile_analysis.json" }
-        ]
+          { "name": "analysis_produced", "type": "file_exists", "path": "results/profile_analysis.json" },
+          { "name": "trace_manifest_exists", "type": "file_exists", "path": "results/trace_manifest.json" }
+        ],
+        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable. Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag."
       },
-      "fallback_target": "profile"
+      "rca_artifact": {
+        "output": "results/profile_root_cause.json",
+        "analysis_context": ["profiles/", "results/trace_manifest.json", "agent-results/phase-05-result.md"]
+      },
+      "fallback_target": "profile",
+      "terminal_policy": "stop"
     },
     "problem-generate": {
       "index": 6,
@@ -80,11 +93,16 @@
       "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GPUS", "CONFIG_KEY"],
       "quality": {
         "checks": [
-          { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 },
-          { "name": "speedup_positive", "type": "metric_threshold", "field": "best_speedup", "min": 1.0 }
-        ]
+          { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 }
+        ],
+        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation. Warn instead of FAIL when expected_improvement_status = parity_or_blocked and the blockers are structured (for example true_kernel_parity or framework_limit), so inherently unimprovable targets are captured instead of retried blindly."
       },
-      "fallback_target": "problem-generate"
+      "rca_artifact": {
+        "output": "results/kernel_opt_root_cause.json",
+        "analysis_context": ["problems/geak_results.json", "optimized/", "agent-results/phase-07-result.md"]
+      },
+      "fallback_target": "problem-generate",
+      "terminal_policy": "allow_partial_report"
     },
     "integration": {
       "index": 8,
@@ -95,10 +113,17 @@
       "quality": {
         "checks": [
           { "name": "plugin_generated", "type": "file_exists", "path": "optimized/" },
-          { "name": "validation_passed", "type": "pattern_match", "file": "agent-results/phase-08-result.md", "pattern": "validation.*pass" }
-        ]
+          { "name": "comparison_exists", "type": "file_exists", "path": "results/optimization_comparison.json" },
+          { "name": "integration_manifest_exists", "type": "file_exists", "path": "results/integration_manifest.json" }
+        ],
+        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; a top-priority winner is still unintegrated without a structured blocker. Warn when validation_status = warn and the only performance issue is the accepted 0.97 <= speedup < 1.0 band. Performance policy: pass when speedup >= 1.0; warn when 0.97 <= speedup < 1.0; fail when speedup < 0.97. Severe TTFT regression should upgrade a weak result from warn to fail. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json."
       },
-      "fallback_target": "kernel-optimize"
+      "rca_artifact": {
+        "output": "results/integration_root_cause.json",
+        "analysis_context": ["problems/geak_results.json", "results/optimization_comparison.json", "optimized/", "agent-results/phase-08-result.md"]
+      },
+      "fallback_target": "kernel-optimize",
+      "terminal_policy": "allow_partial_report"
     },
     "report-generate": {
       "index": 9,
