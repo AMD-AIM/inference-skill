@@ -12,7 +12,7 @@ import sys
 
 # Peak theoretical dense TFLOPS per GPU (no sparsity). Sources:
 # MI300X: AMD datasheet + Hot Chips 2024 (CDNA3, gfx942, 750W)
-# MI325X: same CDNA3 die as MI300X at higher clocks, 256GB HBM3E (CDNA3, gfx942, 1000W)
+# MI325X: same CDNA3 die as MI300X, 256GB HBM3E (CDNA3, gfx942, 1000W)
 # MI350X: AMD MI350X GPU datasheet June 2025 (CDNA4, gfx950, 1000W air-cooled)
 # MI355X: AMD press specs (CDNA4, gfx950, 1400W liquid-cooled, ~8% higher clocks than MI350X)
 # H100:   NVIDIA H100 datasheet (Hopper, sm_90, 700W)
@@ -110,12 +110,22 @@ def detect_gpu():
             result = subprocess.run(
                 ["rocminfo"], capture_output=True, text=True, timeout=10
             )
+            smi_name = ""
+            try:
+                smi_result = subprocess.run(
+                    ["rocm-smi", "--showproductname"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                smi_name = smi_result.stdout if smi_result.returncode == 0 else ""
+            except Exception:
+                pass
             for line in result.stdout.splitlines():
                 if "gfx" in line.lower():
                     if "gfx942" in line.lower():
                         gpu_name = "MI300X"
                     elif "gfx950" in line.lower():
-                        gpu_name = "MI355X"
+                        # Both MI350X and MI355X use gfx950; disambiguate via product name
+                        gpu_name = "MI350X" if "350" in smi_name else "MI355X"
                     break
         except Exception:
             pass

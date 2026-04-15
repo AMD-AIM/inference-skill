@@ -39,7 +39,7 @@ KERNEL_TYPES = [
                           "label": "Communication",     "default_spec": None,
                           "compute_class": None,         "geak": ("skip", None),
                           "skip": True}),
-    ("ck",               {"patterns": ["ck_fmha", "ck_tile", "_zn7ck_tile"],
+    ("ck",               {"patterns": ["ck_fmha", "ck_tile", "_zn7ck_tile"],  # ck_fmha captured here (first-match-wins)
                           "label": "CK Kernel",         "default_spec": "matrix_bf16",
                           "compute_class": "matrix",    "geak": ("kernel-url", "mini_kernel.yaml")}),
     ("hip",              {"patterns": ["wvsplitk", "wvsplit", "_rocm_c"],
@@ -50,7 +50,7 @@ KERNEL_TYPES = [
                           "label": "Triton",            "default_spec": "matrix_bf16",
                           "compute_class": "matrix",    "geak": ("simple", "geak.yaml")}),
     ("attention",        {"patterns": ["attention", "flash_attn", "paged_attention", "sdpa",
-                                      "mla_pfl", "mla_reduce", "mla_prefill", "ck_fmha"],
+                                      "mla_pfl", "mla_reduce", "mla_prefill"],
                           "label": "Attention",         "default_spec": "matrix_fp8",
                           "compute_class": "matrix",    "geak": ("kernel-url", "mini_kernel.yaml")}),
     ("normalization",    {"patterns": ["rmsnorm", "layernorm", "layer_norm"],

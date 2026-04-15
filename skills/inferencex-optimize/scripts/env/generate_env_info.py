@@ -8,6 +8,7 @@ Reads GEAK_AVAILABLE, GEAK_OE_AVAILABLE, LLM_API_KEY_SET from environment.
 import argparse
 import json
 import os
+import re
 import subprocess
 
 
@@ -17,7 +18,6 @@ def _detect_gpu_count(vendor):
         if vendor == "amd":
             result = subprocess.run(["rocminfo"], capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
-                import re
                 return len(re.findall(r"Name:\s+(gfx\w+)", result.stdout))
         else:
             result = subprocess.run(
@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--geak-dir", default="")
     parser.add_argument("--gpu-arch-json", default="")
+    parser.add_argument("--geak-mode", default="auto")
     args = parser.parse_args()
 
     gpu_vendor = "unknown"
@@ -53,7 +54,6 @@ def main():
         try:
             result = subprocess.run(["rocminfo"], capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
-                import re
                 arches = re.findall(r"Name:\s+(gfx\w+)", result.stdout)
                 if arches:
                     gpu_vendor = "amd"
@@ -90,6 +90,7 @@ def main():
         "geak_oe_available": os.environ.get("GEAK_OE_AVAILABLE", "false").lower() == "true",
         "llm_api_key_set": os.environ.get("LLM_API_KEY_SET", "false").lower() == "true",
         "runtime_type": "docker",
+        "effective_geak_mode": args.geak_mode,
     }
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)

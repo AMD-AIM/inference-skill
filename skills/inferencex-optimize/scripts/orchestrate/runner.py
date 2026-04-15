@@ -11,7 +11,7 @@ overriding it. Set USE_RUNNER=true to make this the active path.
 
 Usage:
     python3 runner.py --config <config.json> --registry <phase-registry.json> \
-                      --output-dir <dir> [--shadow]
+                      --output-dir <dir>
 """
 
 import argparse
@@ -141,9 +141,9 @@ class DeterministicRunner:
 
     def __init__(self, config, registry, output_dir, shadow=False):
         self.config = config
+        self.shadow = shadow
         self.registry = registry
         self.output_dir = output_dir
-        self.shadow = shadow
         self.max_context_lines = registry.get("max_context_lines", MAX_CONTEXT_LINES_DEFAULT)
         self.phases = registry["phases"]
         self.modes = registry["modes"]
@@ -203,7 +203,7 @@ class DeterministicRunner:
                 context[var] = self.config.get(var, "")
         return context
 
-    def build_handoff(self, phase_key, context, attempt, prior_feedback=None):
+    def build_handoff(self, phase_key, context, attempt, prior_feedback=None, dep_overrides=None):
         """Generate a handoff document."""
         phase = self.phases[phase_key]
         lines = [
@@ -220,7 +220,11 @@ class DeterministicRunner:
             val = str(v) if not isinstance(v, str) else v
             lines.append(f"- **{k}**: {val}")
 
-        lines.extend(["", "## Instructions"])
+        deps = phase.get("deps", [])
+        if dep_overrides and phase_key in dep_overrides:
+            deps = dep_overrides[phase_key]
+        lines.extend(["", f"## Dependencies: {', '.join(deps) if deps else 'none'}", ""])
+        lines.extend(["## Instructions"])
         lines.append(f"Execute phase {phase_key} (index {phase['index']}).")
         lines.append(f"Write results to agent-results/phase-{phase['index']:02d}-result.md.")
 
@@ -323,7 +327,7 @@ class DeterministicRunner:
                 if phase_reruns > 0:
                     feedback = f"Attempt {attempt} after {phase_reruns} prior failure(s)."
 
-                handoff = self.build_handoff(phase_key, context, attempt, feedback)
+                handoff = self.build_handoff(phase_key, context, attempt, feedback, dep_overrides)
                 handoff_path = self.write_handoff(phase_key, handoff)
 
                 if dispatch_fn:
@@ -444,12 +448,13 @@ def main():
     parser.add_argument("--config", required=True, help="Path to config.json")
     parser.add_argument("--registry", required=True, help="Path to phase-registry.json")
     parser.add_argument("--output-dir", required=True, help="Run output directory")
-    parser.add_argument("--shadow", action="store_true", help="Shadow mode (no real dispatch)")
     args = parser.parse_args()
 
     config = load_json(args.config)
     registry = load_json(args.registry)
-    runner = DeterministicRunner(config, registry, args.output_dir, shadow=args.shadow)
+    runner = DeterministicRunner(config, registry, args.output_dir)
+    # CLI mode is always shadow (no real dispatch/monitor/rca) — callbacks
+    # are provided by the LLM orchestrator layer, not this entry point.
     state = runner.run()
 
     print(f"Runner finished: status={state.status}, "

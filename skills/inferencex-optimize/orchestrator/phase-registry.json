@@ -15,7 +15,7 @@
       "agent": "phase-01-config-parse.md",
       "deps": ["env"],
       "critical": false,
-      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "REPO_DIR", "SCRIPTS_DIR", "FILTER_EP"],
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "REPO_DIR", "SCRIPTS_DIR", "FILTER_EP", "FILTER_TP", "FILTER_CONC_START", "FILTER_CONC_END", "FILTER_SEQ"],
       "sticky": ["tp_size", "ep_size", "seq_lengths", "concurrency_levels"]
     },
     "benchmark": {
@@ -221,6 +221,9 @@
     "optimize": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "integration", "report-generate"],
     "optimize-only": ["env", "config", "problem-generate", "kernel-optimize", "integration", "report-generate"]
   },
+  "_mode_notes": {
+    "optimize-only": "Requires prior profiling run — expects results/gap_analysis/gap_analysis.json and results/profile_analysis.json"
+  },
   "parallel_groups": {
     "full": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]],
     "optimize": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
@@ -235,10 +238,10 @@
       "integration": 60
     }
   },
-  "_reserved_fields": {
-    "monitor_context_fields": "Activated in Commit 3 — structured context extraction for monitor",
-    "detection_rules_structured": "Activated in Commit 5 — typed predicates replacing prose detection_rules",
-    "parallel_groups": "Activated in Commit 6 — concurrent phase execution groups"
+  "_schema_notes": {
+    "monitor_context_fields": "Active — structured context extraction for monitor, used by critical phases",
+    "detection_rules_structured": "Active — typed predicates for verdict automation on critical phases",
+    "parallel_groups": "Active — concurrent phase execution groups for full and optimize modes"
   },
   "context_sources": {
     "CONFIG_KEY":                { "source": "config" },

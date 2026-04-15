@@ -70,8 +70,7 @@ def patch_{class_name.lower()}():
             try:
                 opt.weight.data.copy_(self.weight.data)
                 if residual is not None:
-                    hidden = x + residual
-                    return opt(hidden), hidden
+                    return opt(x, residual)
                 return opt(x)
             except Exception:
                 return super().forward(x, residual)

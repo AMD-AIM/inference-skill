@@ -62,13 +62,6 @@ def generate_adapter_code(kernel_file: str, module_path: str, class_name: str,
     """Generate the Python code for a CustomOp adapter."""
     module_name = kernel_file.replace(".py", "")
 
-    # Determine init_args forwarding
-    if init_params:
-        # Common case: hidden_size is the first param
-        init_from_self = "self.weight.shape[0]" if "hidden_size" in str(init_params) or len(init_params) == 1 else "self.weight.shape[0]"
-    else:
-        init_from_self = None
-
     if adapter_type == "rmsnorm_fused":
         return f'''
 class Optimized{class_name}({class_name}):
@@ -93,8 +86,7 @@ class Optimized{class_name}({class_name}):
         try:
             opt.weight.data.copy_(self.weight.data)
             if residual is not None:
-                hidden = x + residual
-                return opt(hidden), hidden
+                return opt(x, residual)
             return opt(x)
         except Exception:
             return super().forward_hip(x, residual)

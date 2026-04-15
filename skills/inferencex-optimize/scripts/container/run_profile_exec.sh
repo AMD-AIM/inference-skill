@@ -51,9 +51,14 @@ done
 
 DOCKER_LOG="${DOCKER_LOG:-/tmp/${CONTAINER}_profile.log}"
 GPU_ENV=""
+GPU_VENDOR="${GPU_VENDOR:-}"
 if [ -n "$GPUS" ] && [ "$GPUS" != "auto" ]; then
-    GPU_ENV="-e CUDA_VISIBLE_DEVICES=$GPUS"
-    echo "Using manually specified GPUs: $GPUS"
+    if [ "$GPU_VENDOR" = "amd" ]; then
+        GPU_ENV="-e ROCR_VISIBLE_DEVICES=$GPUS"
+    else
+        GPU_ENV="-e CUDA_VISIBLE_DEVICES=$GPUS"
+    fi
+    echo "Using manually specified GPUs: $GPUS (vendor=${GPU_VENDOR:-auto})"
 else
     echo "Using all available GPUs"
 fi
@@ -118,7 +123,7 @@ fi
 echo "Waiting for trace files to finish writing..."
 PROF_DIR="$REPO_DIR/profiles"
 STABLE_COUNT=0
-PREV_SIZE=""
+PREV_SIZE=-1
 MAX_WAIT=60
 WAITED=0
 while [ $STABLE_COUNT -lt 3 ] && [ $WAITED -lt $MAX_WAIT ]; do

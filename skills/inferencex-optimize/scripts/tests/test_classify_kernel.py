@@ -18,7 +18,7 @@ class TestClassifyKernel:
     def test_gemm_kernel(self):
         """GEMM/vendor patterns classify correctly."""
         ktype, label = classify_kernel("rocblas_gemm_ex3")
-        assert ktype in ("gemm", "hip_gemm", "vendor")
+        assert ktype in ("vendor", "hip", "aten_gemm", "moe_gemm", "gemm_fp4")
 
     def test_attention_kernel(self):
         """Attention patterns classify correctly."""

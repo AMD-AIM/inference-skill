@@ -37,8 +37,13 @@ class TestProgressJsonSingleWriter:
         )
 
     def test_phase_agents_do_not_import_progress_writer(self):
-        """Stub: once the runner exists, scan phase agent code for progress.json writes."""
-        assert True
+        """Phase agent docs must not instruct agents to write progress.json directly."""
+        agents_dir = SKILL_ROOT / "agents"
+        for agent_file in agents_dir.glob("phase-*.md"):
+            text = agent_file.read_text()
+            assert "progress.json" not in text or "Do NOT write to" in text, (
+                f"{agent_file.name} must not instruct agents to write progress.json"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +110,15 @@ class TestAttemptArtifactImmutability:
         )
 
     def test_runner_appends_not_mutates(self):
-        """Stub: once runner.py exists, verify append-only behavior."""
-        assert True
+        """Runner uses atomic_write_json for progress writes — never partial mutations."""
+        runner_path = SKILL_ROOT / "scripts" / "orchestrate" / "runner.py"
+        text = runner_path.read_text()
+        assert "atomic_write_json" in text, (
+            "runner.py must use atomic_write_json for progress writes"
+        )
+        assert "write_progress" in text, (
+            "runner.py must have a write_progress method"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +228,16 @@ class TestNoDormantFields:
                         f"parallel_groups phase {phase_key} not in phases"
                     )
 
-    def test_no_detection_rules_structured_yet(self):
-        """Covered by TestVerdictAuthority.test_structured_predicates_not_active_yet."""
-        assert True
+    def test_structured_predicates_have_valid_ops(self):
+        """All detection_rules_structured entries use valid predicate operators."""
+        reg = _load_registry()
+        valid_ops = {"eq", "lt", "le", "gt", "ge", "ne"}
+        for key, phase in reg["phases"].items():
+            rules = phase.get("quality", {}).get("detection_rules_structured", [])
+            for rule in rules:
+                assert rule.get("op") in valid_ops, (
+                    f"Phase {key}: invalid op '{rule.get('op')}' in detection_rules_structured"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +307,11 @@ class TestSchemaFiles:
                     "timeout", "budget_exhausted", "manual_intervention_required"}
         assert set(error_types) == expected
 
-    def test_reserved_fields_documented(self):
+    def test_schema_notes_documented(self):
         reg = _load_registry()
-        reserved = reg.get("_reserved_fields", {})
+        notes = reg.get("_schema_notes", {})
         for field in ["monitor_context_fields", "detection_rules_structured", "parallel_groups"]:
-            assert field in reserved, f"Reserved field {field} not documented"
+            assert field in notes, f"Schema note for {field} not documented"
 
 
 class TestRegistryStructure:

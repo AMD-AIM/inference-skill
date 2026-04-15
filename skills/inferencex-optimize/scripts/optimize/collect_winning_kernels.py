@@ -19,14 +19,17 @@ def main():
     parser.add_argument("--optimized-dir", required=True)
     args = parser.parse_args()
 
+    args.optimized_dir = os.path.abspath(args.optimized_dir)
     os.chdir(args.problems_dir)
 
-    manifest = json.load(open("optimization_manifest.json"))
+    with open("optimization_manifest.json") as f:
+        manifest = json.load(f)
     opt_lookup = {o["name"]: o for o in manifest.get("optimizations", [])}
 
     results = []
     for best_file in sorted(glob.glob("*_opt_best.json")):
-        tracker = json.load(open(best_file))
+        with open(best_file) as f:
+            tracker = json.load(f)
         name = best_file.replace("_opt_best.json", "")
         speedup = tracker.get("best_speedup", 0)
         opt_info = opt_lookup.get(name, {})

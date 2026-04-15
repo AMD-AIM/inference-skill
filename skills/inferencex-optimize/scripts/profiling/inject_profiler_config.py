@@ -83,6 +83,15 @@ def inject_sglang(target, enforce_eager):
         content = fh.read()
     original = content
 
+    # Profiler config: set SGLANG_TORCH_PROFILER_DIR for trace collection
+    prof_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR", "/workspace/profiles")
+    if f"SGLANG_TORCH_PROFILER_DIR" not in content:
+        content = re.sub(
+            r"(python3\s+-m\s+sglang\.launch_server)",
+            f"SGLANG_TORCH_PROFILER_DIR={prof_dir} \\1",
+            content, count=1,
+        )
+
     if enforce_eager:
         content = re.sub(r"--disable-cuda-graph\s*", "", content)
         content = re.sub(r"--cuda-graph-max-bs\s+\S+\s*", "", content)

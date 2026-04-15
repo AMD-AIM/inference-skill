@@ -14,12 +14,23 @@ def inject_vllm(target):
     with open(target) as f:
         content = f.read()
 
-    plugin_import = (
-        '\n# Optimized kernel plugin (auto-injected by inferencex-optimize Phase 8)\n'
-        'export PYTHONPATH=/workspace/optimized:$PYTHONPATH\n'
-        'python3 -c "import sys; sys.path.insert(0, \'/workspace/optimized\'); '
-        'import vllm_plugin" 2>/dev/null || echo "[WARNING] vllm_plugin import failed"\n'
-    )
+    is_python = target.endswith('.py') or (content.lstrip().startswith('#!') and 'python' in content.split('\n')[0])
+
+    if is_python:
+        plugin_import = (
+            '\n# Optimized kernel plugin (auto-injected by inferencex-optimize Phase 8)\n'
+            'import os, sys\n'
+            'os.environ["PYTHONPATH"] = "/workspace/optimized:" + os.environ.get("PYTHONPATH", "")\n'
+            'sys.path.insert(0, "/workspace/optimized")\n'
+            'try:\n    import vllm_plugin\nexcept Exception:\n    print("[WARNING] vllm_plugin import failed")\n'
+        )
+    else:
+        plugin_import = (
+            '\n# Optimized kernel plugin (auto-injected by inferencex-optimize Phase 8)\n'
+            'export PYTHONPATH=/workspace/optimized:$PYTHONPATH\n'
+            'python3 -c "import sys; sys.path.insert(0, \'/workspace/optimized\'); '
+            'import vllm_plugin" 2>/dev/null || echo "[WARNING] vllm_plugin import failed"\n'
+        )
     new_content = content.replace("vllm serve ", plugin_import + "vllm serve ", 1)
     if new_content != content:
         with open(target, "w") as f:

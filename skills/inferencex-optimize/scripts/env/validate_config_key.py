@@ -34,7 +34,7 @@ def suggest_keys(config_key, available_keys, limit):
         config_key, available_keys, n=limit, cutoff=0.4
     )
 
-    return [key for key in close_matches if key != config_key][:limit]
+    return [key for key in close_matches if key != config_key]
 
 
 def main():

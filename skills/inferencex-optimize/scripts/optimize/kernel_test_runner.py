@@ -84,7 +84,8 @@ def main():
 
     # Read target code snapshot, then load
     try:
-        target_code = open(tgt_path).read()
+        with open(tgt_path) as f:
+            target_code = f.read()
         tgt_mod = load_module(tgt_path, "tgt_module")
         for name in dir(tgt_mod):
             if not name.startswith("_"):
@@ -161,6 +162,12 @@ def main():
             import traceback; traceback.print_exc()
             sys.exit(1)
 
+    # Handle multi-output models (e.g., fused kernels returning tuples)
+    if isinstance(out_ref, (tuple, list)):
+        out_ref = out_ref[0]
+    if isinstance(out_new, (tuple, list)):
+        out_new = out_new[0]
+
     # Tolerance
     if has_quantized:
         rtol, atol = 5e-2, 5e-2
@@ -168,6 +175,14 @@ def main():
         rtol, atol = 1e-2, 1e-3
     else:
         rtol, atol = 1e-5, 1e-6
+
+    if out_ref.shape != out_new.shape:
+        print(f"FAIL: shape mismatch ref={out_ref.shape} vs opt={out_new.shape}")
+        _log_attempt(log_path, attempt, failed=True)
+        tracker["attempt"] = attempt
+        with open(tracker_path, "w") as f:
+            json.dump(tracker, f, indent=2)
+        sys.exit(1)
 
     max_diff = (out_ref - out_new).abs().max().item()
     denom = out_ref.abs() + 1e-8
@@ -247,13 +262,16 @@ def main():
               "accuracy": "PASSED", "is_best": is_best, "attempt": attempt}
     print(f"\nRESULT_JSON: {json.dumps(result)}")
 
-    return speedup
+    print(f"SPEEDUP={speedup:.4f}")
+    return 0
 
 
 def _log_attempt(log_path, attempt, failed=False, **kwargs):
     entry = f"\n## Attempt {attempt} - {time.strftime('%Y-%m-%dT%H:%M:%S')}"
     if failed:
-        entry += f" - FAILED (accuracy)\nMax abs: {kwargs.get('max_diff', '?'):.2e}, Rel: {kwargs.get('rel_diff', '?'):.2e}\n"
+        max_d = kwargs.get('max_diff')
+        rel_d = kwargs.get('rel_diff')
+        entry += f" - FAILED (accuracy)\nMax abs: {f'{max_d:.2e}' if max_d is not None else '?'}, Rel: {f'{rel_d:.2e}' if rel_d is not None else '?'}\n"
     else:
         entry += f"{'  *** BEST ***' if kwargs.get('is_best') else ''}\n"
         entry += f"Speedup: {kwargs.get('speedup', 0):.2f}x\n"
@@ -263,5 +281,5 @@ def _log_attempt(log_path, attempt, failed=False, **kwargs):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 

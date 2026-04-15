@@ -21,9 +21,11 @@ Usage:
 Part of the inferencex-optimize skill. Can be used standalone.
 """
 import argparse
+import ast
 import csv
 import json
 import os
+import re
 import sys
 
 csv.field_size_limit(sys.maxsize)
@@ -80,7 +82,8 @@ def get_init_inputs():
 """,
     }
 
-    fusions = json.load(open(fusions_path))
+    with open(fusions_path) as f:
+        fusions = json.load(f)
     generated = 0
     print(f"Fusion opportunities: {len(fusions)}")
     for f in fusions:
@@ -107,14 +110,12 @@ def _extract_gpu_kernel_name(kernel_details_str):
     if not kernel_details_str:
         return ""
     # kernel_details contains a Python list repr with 'name': 'Cijk_...' entries
-    import re
     match = re.search(r"'name':\s*'([^']+)'", kernel_details_str)
     return match.group(1) if match else ""
 
 
 def _extract_ck_tile_params(kernel_name):
     """Extract CK tile parameters from a Cijk_* kernel name."""
-    import re
     params = {}
     for key in ["MT", "MI", "WG", "ISA", "SK", "WS"]:
         match = re.search(rf"{key}(\d+(?:x\d+)*)", kernel_name)
@@ -139,7 +140,6 @@ def _extract_kernel_family(kernel_names):
 
     Returns the family name string.
     """
-    import re
     names = [n for n in kernel_names if n]
     if not names:
         return "unknown_kernel"
@@ -394,7 +394,6 @@ def _parse_traced_dims(dims_str):
     Example: '((705, 7168), (7168, 2112))' -> [(705, 7168), (7168, 2112)]
     Handles nested tuples, scalars, and empty dims.
     """
-    import ast
     if not dims_str or not dims_str.strip():
         return []
     try:
@@ -418,7 +417,7 @@ def _dtype_to_torch(dtype_str):
         "c10::Float": "torch.float32",
         "c10::Float8_e4m3fn": "torch.float8_e4m3fn",
         "c10::Float8_e8m0fnu": "torch.float8_e8m0fnu",
-        "c10::Float4_e2m1fn_x2": "torch.float8_e4m3fn",  # approximate: fp4 packed
+        "c10::Float4_e2m1fn_x2": "torch.uint8",  # FP4 packed (2 values per byte)
         "float": "torch.float32",
         "int": "torch.int32",
         "unsigned char": "torch.uint8",
@@ -434,7 +433,6 @@ def _extract_base_kernel_name(full_name):
 
     Discovered dynamically from whatever kernel names appear in traces.
     """
-    import re
     name = full_name.strip()
     # Strip 'void ' prefix
     if name.startswith("void "):
@@ -484,7 +482,6 @@ def _parse_op_trace_dims(trace_info):
         fp8_tensors: [(shape_tuple, dtype_str, arg_idx), ...]
         scalars: [(value_str, arg_idx), ...]
     """
-    import ast
     result = {"bf16_tensors": [], "fp4_tensors": [], "fp8_tensors": [], "scalars": []}
     dims_raw = trace_info.get("input_dims", "")
     types_raw = trace_info.get("input_types", "")
@@ -885,7 +882,6 @@ def generate_kernel_family_problems(kernel_summary_csv, ops_unique_args_csv,
             dims = _parse_traced_dims(ti.get("input_dims", ""))
             types_raw = ti.get("input_types", "")
             # Parse types list
-            import ast
             try:
                 types_list = list(ast.literal_eval(types_raw)) if types_raw else []
             except (ValueError, SyntaxError):
@@ -1004,7 +1000,9 @@ def generate_manifest(output_dir, fusions_path, bottlenecks_path, framework,
 
     # Add fusion problems — check already_fused flag to set correct geak_mode
     if os.path.isfile(fusions_path):
-        for f in json.load(open(fusions_path)):
+        with open(fusions_path) as _fh:
+            _fusions_data = json.load(_fh)
+        for f in _fusions_data:
             name = f.get("name", "")
             problem_file = f"problem_{name}.py"
             if os.path.isfile(os.path.join(output_dir, problem_file)):
@@ -1095,7 +1093,9 @@ def generate_manifest(output_dir, fusions_path, bottlenecks_path, framework,
     # Add bottleneck-driven problems (individual ops not covered by fusion or GEMM)
     if os.path.isfile(bottlenecks_path):
         existing_files = {o["file"] for o in manifest["optimizations"]}
-        for b in json.load(open(bottlenecks_path)):
+        with open(bottlenecks_path) as _fh:
+            _bottleneck_data = json.load(_fh)
+        for b in _bottleneck_data:
             if not b.get("optimizable", False):
                 continue
             safe_name = b["name"][:40].replace("::", "_").replace(" ", "_").replace(",", "")
@@ -1206,7 +1206,8 @@ def generate_roofline_gated_problems(roofline_path, gemm_csv_path, threshold=80.
     """
     if not roofline_path or not os.path.isfile(roofline_path):
         return []
-    bottlenecks = json.load(open(roofline_path))
+    with open(roofline_path) as f:
+        bottlenecks = json.load(f)
     has_gemm_csv = gemm_csv_path and os.path.isfile(gemm_csv_path)
 
     entries = []
@@ -1229,7 +1230,7 @@ def generate_roofline_gated_problems(roofline_path, gemm_csv_path, threshold=80.
         if pct < pct_threshold:
             continue
 
-        geak_mode, geak_config = GEAK_MODE_MAP.get(kernel_type, ("simple", "geak.yaml"))
+        geak_mode, geak_config = GEAK_MODE_MAP.get(kernel_type, ("kernel-url", "mini_kernel.yaml"))
         if geak_mode == "skip":
             continue
 
@@ -1279,8 +1280,10 @@ def enrich_manifest_with_kernel_types(manifest_path, kernel_types_path):
         print(f"WARNING: kernel_type_classification.json not found at {kernel_types_path}")
         return
 
-    manifest = json.load(open(manifest_path))
-    kernel_types = json.load(open(kernel_types_path))
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    with open(kernel_types_path) as f:
+        kernel_types = json.load(f)
 
     # Build lookup by kernel name (normalized)
     kt_lookup = {}
@@ -1394,13 +1397,15 @@ def main():
     # Load model shapes
     model_shapes = {}
     if args.model_shapes and os.path.isfile(args.model_shapes):
-        model_shapes = json.load(open(args.model_shapes))
+        with open(args.model_shapes) as f:
+            model_shapes = json.load(f)
     print(f"Model shapes: {model_shapes}")
 
     # Load GPU arch
     gpu_arch = None
     if args.gpu_arch and os.path.isfile(args.gpu_arch):
-        gpu_arch = json.load(open(args.gpu_arch))
+        with open(args.gpu_arch) as f:
+            gpu_arch = json.load(f)
         print(f"GPU arch: {gpu_arch.get('name', 'unknown')}")
 
     # Generate fusion problems

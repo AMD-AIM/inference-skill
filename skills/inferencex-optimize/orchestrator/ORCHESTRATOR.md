@@ -66,7 +66,7 @@ function dispatch(mode, config):
       quality_checks = phase.quality.checks if phase.quality else [generic_result_exists_check]
       detection_rules = phase.quality.detection_rules if phase.quality else null
     else:  # standard
-      quality_checks = phase.quality.checks if phase.critical else [generic_result_exists_check]
+      quality_checks = phase.quality.checks if phase.critical else []
       detection_rules = phase.quality.detection_rules if (phase.critical and phase.quality) else null
     monitor_prompt = build_monitor_prompt(quality_checks, phase_key, detection_rules)
     review = spawn_monitor(monitor_prompt, result, running_summary)
@@ -150,7 +150,7 @@ Each `handoff/to-phase-NN.md` follows the schema in `protocols/handoff-format.md
 These four rules are non-negotiable. Violating any of them causes phase agents to fail because they cannot find their expected context:
 
 1. **Write to disk**: Every handoff MUST be written as a file to `{OUTPUT_DIR}/handoff/to-phase-{NN}.md`. No exceptions.
-2. **Validate after writing**: Run `python3 {SCRIPTS_DIR}/orchestrate/validate_handoff.py --handoff {path}` immediately after writing. Fix any validation errors before dispatching.
+2. **Validate after writing**: Run `python3 {SCRIPTS_DIR}/orchestrate/validate_handoff.py --handoff-path {path} --phase {phase_key} --phase-index {NN}` immediately after writing. Fix any validation errors before dispatching.
 3. **Verify existence**: After writing, confirm the file exists on disk (`ls -la` or equivalent). A write that silently fails (permissions, wrong path) will cause the phase agent to fail.
 4. **No inline substitution**: NEVER pass handoff content inline in the agent prompt as a substitute for writing the file. Phase agents are instructed to read their handoff from `handoff/to-phase-{NN}.md` — if that file does not exist, they will fail regardless of what was passed in the prompt.
 

@@ -122,7 +122,7 @@ def discover_traces(trace_dir):
             )
 
             if merged_match:
-                trace_role = "secondary"
+                trace_role = "merged"
                 if not merged_trace:
                     merged_trace = f
             elif tp_phase_match:
@@ -300,7 +300,7 @@ def main():
     print(f"TRACE_MANIFEST={manifest_path}")
 
     if args.output:
-        os.makedirs(os.path.dirname(args.output), exist_ok=True)
+        os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
         with open(args.output, "w") as f:
             json.dump(result, f, indent=2)
         print(f"MANIFEST_JSON={args.output}")

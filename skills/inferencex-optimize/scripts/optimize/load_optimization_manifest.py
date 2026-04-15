@@ -17,13 +17,14 @@ def main():
     parser.add_argument("--optimize-scope", default="all", choices=["all", "fused_only"])
     args = parser.parse_args()
 
-    manifest = json.load(open(args.manifest))
+    with open(args.manifest) as f:
+        manifest = json.load(f)
 
     enabled = [o for o in manifest["optimizations"] if o.get("optimize", False)]
     if not enabled:
         enabled = [o for o in manifest["optimizations"] if o.get("enabled")]
-        enabled = [o for o in enabled if o.get("profiling_pct", 100) >= 1.0]
 
+    enabled = [o for o in enabled if o.get("profiling_pct", 100) >= 1.0]
     enabled = [o for o in enabled if o.get("geak_mode", "simple") != "skip"]
 
     if args.optimize_scope == "fused_only":

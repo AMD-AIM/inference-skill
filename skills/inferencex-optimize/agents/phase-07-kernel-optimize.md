@@ -102,7 +102,7 @@ Source tracing required before GEAK — confirm the on-disk source matches the p
 For each kernel:
 1. Prepare isolated workspace: copy source, `git init && git add -A && git commit -m init`
 2. Build task description with roofline data: include `compute_spec`, `tflops_s`, `roofline_efficiency`, and `peak_tflops` when available from profiling artifacts
-3. Launch GEAK: `mini -m claude-opus-4.6 --config mini_kernel.yaml --repo /workspace/${NAME}_opt --gpu-ids 0,1 --yolo -t '${TASK_DESC}' -o traj_${NAME}.json`
+3. Launch GEAK: `mini -m claude-opus-4.6 --config mini_kernel.yaml --repo /workspace/${NAME}_opt --gpu-ids $GPU_IDS --yolo -t '${TASK_DESC}' -o traj_${NAME}.json` (where `GPU_IDS` is read from `HIP_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES` env var)
 4. **Vendor GEMM (no external source tree):** copy **only** the problem `.py` into the isolated workspace — avoid copying multi-megabyte generated trees that produce unusable mega-patches
 5. If the winning build measurably speeds up the kernel (`speedup > 1.0x`), install it back into the environment the benchmark uses via `AITER_REBUILD=1` (rebuild aiter) or `pip install -e .` from the component root, matching how the stack is consumed in this image
 
