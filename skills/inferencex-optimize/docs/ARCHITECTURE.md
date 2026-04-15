@@ -76,7 +76,7 @@ Every artifact in the evidence plane follows these rules.
 
 ### Cleanup
 
-- `scripts/orchestrate/cleanup.py` removes parity manifests older than 7 days from completed runs.
+- `scripts/orchestrate/cleanup.py` <!-- planned: not yet implemented --> removes parity manifests older than 7 days from completed runs.
 - No automatic deletion of attempt artifacts.
 
 ### Index

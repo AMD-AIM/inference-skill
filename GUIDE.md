@@ -139,11 +139,11 @@ The `inferencex-optimize` skill now supports a multi-agent orchestration model:
 - **Monitor agent** verifies phase output quality and maintains a rolling summary
 - **Coder/Analyzer subagents** handle specialized tasks within phases
 
-The markdown-based communication protocol (handoffs, results, reviews) is platform-agnostic. Only the agent spawning mechanism differs:
-- Claude Code / OpenCode: `Agent` tool
-- Cursor: `Task` tool with `subagent_type="generalPurpose"`
+The file-based communication protocol (handoffs, results, reviews) is platform-agnostic. Only the agent spawning mechanism differs:
+- Claude Code / OpenCode: `Agent` tool with path-based handoffs
+- Cursor: `Task` tool with `subagent_type` per the dispatch table (phase/monitor/RCA = `generalPurpose`, containers = `shell`)
 
-See `orchestrator/ORCHESTRATOR.md` for the full dispatch loop protocol.
+See `protocols/platform-dispatch.md` for the full adapter contract and `orchestrator/ORCHESTRATOR.md` for the dispatch loop protocol.
 
 ## 8. Duplicate install note
 

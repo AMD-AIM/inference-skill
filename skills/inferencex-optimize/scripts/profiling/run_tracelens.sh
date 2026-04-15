@@ -20,6 +20,7 @@ COLLECTIVE_MODE="unavailable"
 PHASE_SPLIT_TRACE=""
 PHASE_SPLIT_ROLE=""
 GPU_ARCH_JSON=""
+TRACELENS_DIR="${TRACELENS_DIR:-$HOME/TraceLens-internal}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
         --phase-split-trace) PHASE_SPLIT_TRACE="$2"; shift 2 ;;
         --phase-split-role)  PHASE_SPLIT_ROLE="$2"; shift 2 ;;
         --gpu-arch-json)   GPU_ARCH_JSON="$2"; shift 2 ;;
+        --tracelens-dir)   TRACELENS_DIR="$2"; shift 2 ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -109,8 +111,8 @@ else
 fi
 
 # --- Phase-split roofline analysis ---
-SPLIT_SCRIPT="$HOME/TraceLens-internal/examples/custom_workflows/split_vllm_trace_annotation.py"
-INFERENCE_REPORT_SCRIPT="$HOME/TraceLens-internal/TraceLens/Reporting/generate_perf_report_pytorch_inference.py"
+SPLIT_SCRIPT="$TRACELENS_DIR/examples/custom_workflows/split_vllm_trace_annotation.py"
+INFERENCE_REPORT_SCRIPT="$TRACELENS_DIR/TraceLens/Reporting/generate_perf_report_pytorch_inference.py"
 PHASE_SPLIT_DIR="$RESULTS_DIR/phase_split"
 
 if [ -n "$PHASE_SPLIT_TRACE" ] && [ -f "$PHASE_SPLIT_TRACE" ] && [ -f "$SPLIT_SCRIPT" ]; then

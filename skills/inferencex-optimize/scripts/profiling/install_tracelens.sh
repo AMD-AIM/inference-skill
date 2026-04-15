@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Install TraceLens if not already available.
-# Usage: bash install_tracelens.sh [TARBALL_DIR]
+# Usage: bash install_tracelens.sh [TARBALL_DIR] [TRACELENS_DIR]
 #   TARBALL_DIR: directory containing TraceLens-internal.tar.gz (optional)
+#   TRACELENS_DIR: installation directory (default: $TRACELENS_DIR)
 #
 # Outputs TRACELENS_INSTALL_FAILED=true on failure.
 set -euo pipefail
 
 TARBALL_DIR="${1:-}"
+TRACELENS_DIR="${2:-$TRACELENS_DIR}"
 
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -19,11 +21,11 @@ if tracelens_cli_ready; then
     exit 0
 fi
 
-if [ ! -d "$HOME/TraceLens-internal" ]; then
+if [ ! -d "$TRACELENS_DIR" ]; then
     echo "Cloning TraceLens-internal..."
-    if ! git clone git@github.com:AMD-AGI/TraceLens-internal.git "$HOME/TraceLens-internal"; then
+    if ! git clone git@github.com:AMD-AGI/TraceLens-internal.git "$TRACELENS_DIR"; then
         echo "Git clone failed, extracting from bundled tarball..."
-        rm -rf "$HOME/TraceLens-internal"
+        rm -rf "$TRACELENS_DIR"
         TARBALL="${TARBALL_DIR:+$TARBALL_DIR/}TraceLens-internal.tar.gz"
         if [ -f "$TARBALL" ]; then
             if tar xzf "$TARBALL" -C "$HOME"; then
@@ -41,15 +43,15 @@ if [ ! -d "$HOME/TraceLens-internal" ]; then
     fi
 fi
 
-if [ -d "$HOME/TraceLens-internal" ]; then
+if [ -d "$TRACELENS_DIR" ]; then
     echo "Installing TraceLens (this may take a few minutes)..."
-    pip install --no-build-isolation "$HOME/TraceLens-internal" 2>&1 | tail -10
+    pip install --no-build-isolation "$TRACELENS_DIR" 2>&1 | tail -10
     hash -r
     if tracelens_cli_ready; then
         echo "TraceLens CLI installed successfully"
     else
         echo "First install attempt failed — retrying..."
-        pip install --no-build-isolation "$HOME/TraceLens-internal" 2>&1 | tail -10
+        pip install --no-build-isolation "$TRACELENS_DIR" 2>&1 | tail -10
         hash -r
         if tracelens_cli_ready; then
             echo "TraceLens CLI installed successfully on retry"

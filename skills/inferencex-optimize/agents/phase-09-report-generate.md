@@ -20,6 +20,7 @@ Read from `{{OUTPUT_DIR}}`:
 - `problems/kernel_type_classification.json` (Phase 6)
 - `problems/fusion_opportunities.json` (Phase 6)
 - `problems/geak_results.json` (Phase 7)
+- `problems/manual_attempts.md` (Phase 7, if GEAK_MODE=manual — optional)
 - `results/optimization_comparison.json` (Phase 8)
 - `results/integration_manifest.json` (Phase 8 — per-target integration outcomes)
 - `results/pipeline_blockers.json` (optional — terminal blockers from failed phases)
@@ -110,5 +111,9 @@ If your team tracks git commits per optimization attempt, record the `CONFIG_KEY
 
 ### Completion
 Write `agent-results/phase-09-result.md` with report path and summary path.
+
+Include these sticky fields in `## Key Findings`:
+- `final_speedup`: float (end-to-end speedup from optimization_summary.json)
+- `report_path`: string (path to the generated optimization_report.md)
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

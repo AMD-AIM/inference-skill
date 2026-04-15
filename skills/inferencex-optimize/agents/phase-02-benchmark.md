@@ -45,7 +45,7 @@ bash "{{SCRIPTS_DIR}}/container/start_profile_container.sh" \
 {{DRY_RUN_NOTE}}
 
 ### 5. Run Each Benchmark
-**CRITICAL — device visibility:** Use **`CUDA_VISIBLE_DEVICES`** for GPU selection inside the exec wrapper. **Never** use `ROCR_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES` for this purpose on AMD: they re-index devices and cause mismatches with what the stack expects.
+**CRITICAL — device visibility:** Use **`CUDA_VISIBLE_DEVICES`** for GPU selection inside the exec wrapper. **Never** use `ROCR_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES` **for inference server processes** (vLLM / SGLang) on AMD: they re-index devices and cause mismatches with what the stack expects. (GEAK and kernel microbenchmark contexts use `HIP_VISIBLE_DEVICES` normally — this restriction applies only to inference server processes.)
 
 ```bash
 bash "{{SCRIPTS_DIR}}/container/run_profile_exec.sh" \
@@ -77,6 +77,10 @@ docker stop "$CONTAINER_NAME"; docker rm "$CONTAINER_NAME"
 
 ### Completion
 Write `agent-results/phase-02-result.md` with benchmarks_run, benchmarks_succeeded, result file paths.
+
+Include these sticky fields in `## Data for Next Phase`:
+- `baseline_tpot`: float (time per output token in ms at best concurrency)
+- `baseline_throughput`: float (total token throughput at best concurrency)
 
 Include these scalar fields in `## Key Findings` for monitor consumption:
 - `benchmark_result_status`: completed | failed | partial

@@ -88,6 +88,13 @@ fi
 DOCKER_RUN_LOG="${PROFILE_DIR}/${CONTAINER_NAME}_docker_run.log"
 echo "DOCKER_RUN_LOG: $DOCKER_RUN_LOG"
 
+# Clean up stale container with the same name from prior runs
+if docker inspect "$CONTAINER_NAME" &>/dev/null; then
+    echo "Removing stale container: $CONTAINER_NAME"
+    docker stop "$CONTAINER_NAME" 2>/dev/null || true
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+fi
+
 set +e
 docker run -d \
     --name "$CONTAINER_NAME" \

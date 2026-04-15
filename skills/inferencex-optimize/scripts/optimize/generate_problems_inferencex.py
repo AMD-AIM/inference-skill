@@ -195,13 +195,16 @@ def generate_gemm_problems(gemm_csv_path, gpu_arch, output_dir, priority_thresho
         return 0, []
 
     # Load GPU specs for ridge point and roofline calculation
-    ridge_point = 245.4  # default MI300X: 1307 TFLOPS / 5.325 TB/s
-    peak_tflops = 1307  # default MI300X BF16 dense (peak theoretical)
+    ridge_point = None
+    peak_tflops = None
     if gpu_arch:
-        mem_bw_tbps = gpu_arch.get("mem_bw_gbps", 5325) / 1000
-        peak_tflops = gpu_arch.get("max_achievable_tflops", {}).get("matrix_bf16", 1307)
-        if mem_bw_tbps > 0:
-            ridge_point = peak_tflops / mem_bw_tbps
+        mem_bw_gbps = gpu_arch.get("mem_bw_gbps")
+        peak_tflops_val = gpu_arch.get("max_achievable_tflops", {}).get("matrix_bf16")
+        if mem_bw_gbps and peak_tflops_val:
+            peak_tflops = peak_tflops_val
+            ridge_point = peak_tflops / (mem_bw_gbps / 1000)
+    if ridge_point is None:
+        print("WARNING: gpu_arch missing or incomplete — skipping roofline gating for GEMM problems")
 
     # Parse GEMM.csv — collect all shapes with their GPU kernel names
     all_shapes = []
@@ -218,8 +221,10 @@ def generate_gemm_problems(gemm_csv_path, gpu_arch, output_dir, priority_thresho
                 pct_roofline_raw = row.get("Pct Roofline_mean", "")
                 if pct_roofline_raw and pct_roofline_raw.strip():
                     pct_roofline = float(pct_roofline_raw)
+                elif peak_tflops and peak_tflops > 0 and tflops_s > 0:
+                    pct_roofline = tflops_s / peak_tflops * 100.0
                 else:
-                    pct_roofline = (tflops_s / peak_tflops * 100.0) if peak_tflops > 0 and tflops_s > 0 else 100
+                    pct_roofline = 100
             except (ValueError, TypeError):
                 continue
             if M == 0 or N == 0 or K == 0:
@@ -231,7 +236,7 @@ def generate_gemm_problems(gemm_csv_path, gpu_arch, output_dir, priority_thresho
                 or row.get("trunc_kernel_details", "")
             )
             ck_params = _extract_ck_tile_params(gpu_kernel) if gpu_kernel else {}
-            bound = "memory" if flops_byte < ridge_point else "compute"
+            bound = "memory" if ridge_point is not None and flops_byte < ridge_point else "compute" if ridge_point is not None else "unknown"
 
             all_shapes.append({
                 "M": M, "N": N, "K": K,
@@ -805,9 +810,15 @@ def generate_kernel_family_problems(kernel_summary_csv, ops_unique_args_csv,
 
     # Group kernels by parent_op (natural grouping from traces)
     # Then compute kernel family from base kernel names within each group
-    parent_groups = {}  # parent_op -> list of kernel dicts
+    parent_groups = {}
     for k in all_kernels:
-        parent_groups.setdefault(k["parent_op"], []).append(k)
+        # When parent is hipGraphLaunch (CUDA graph), group by base kernel
+        # name instead — all graph children share the same parent_op.
+        if k["parent_op"] == "hipGraphLaunch":
+            group_key = k["base_kernel_name"]
+        else:
+            group_key = k["parent_op"]
+        parent_groups.setdefault(group_key, []).append(k)
 
     # Merge parent_ops that share the same base kernel family
     # e.g., ck_moe_stage1 and ck_moe_stage2 both dispatch kernel_moe_mxgemm_2lds
@@ -1109,6 +1120,11 @@ def generate_manifest(output_dir, fusions_path, bottlenecks_path, framework,
             if "original_kernel" in o:
                 existing_kernels.add(o["original_kernel"])
             existing_kernels.add(o.get("name", ""))
+            # Also exclude sub-kernels already covered by a kernel_family entry
+            for gk in o.get("gpu_kernels", []):
+                existing_kernels.add(gk)
+                base = _extract_base_kernel_name(gk)
+                existing_kernels.add(base)
         for entry in roofline_entries:
             orig = entry.get("original_kernel", "")
             if orig in existing_kernels or entry["name"] in existing_kernels:

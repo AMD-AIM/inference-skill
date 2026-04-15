@@ -79,6 +79,14 @@ Suggested contents (adapt keys to your pipeline): top-level `config_key`, `resul
 ### Completion
 Write `agent-results/phase-03-result.md` with results_analyzed count, bottlenecks_found count, report path, and `report_summary.json` path.
 
+Include these scalar fields in `## Key Findings` for monitor consumption:
+- `results_analyzed`: integer count of benchmark results analyzed
+- `bottlenecks_found`: integer count of bottleneck entries written
+
+Include these sticky fields in `## Data for Next Phase`:
+- `gap_analysis_summary`: string (one-line description of primary bottleneck)
+- `best_concurrency`: integer (concurrency level with highest throughput)
+
 Sanity-check JSON outputs before handoff: `benchmark_summary.json` includes both raw throughput/latency numbers **and** the derived fields from step 3; `bottlenecks.json` entries reference specific configs (concurrency / sequence / framework) they apply to; `report_summary.json` is valid JSON and its paths exist on disk.
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

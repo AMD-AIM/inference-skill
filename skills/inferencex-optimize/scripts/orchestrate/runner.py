@@ -159,15 +159,16 @@ class DeterministicRunner:
 
     def resolve_phase_list(self, mode):
         phase_list = list(self.modes[mode])
+        dep_overrides = {}
         skip_integration = str(self.config.get("SKIP_INTEGRATION", "false")).lower() == "true"
         if skip_integration:
             phase_list = [p for p in phase_list if p != "integration"]
             for p_key in phase_list:
                 p = self.phases.get(p_key, {})
                 cdeps = p.get("conditional_deps")
-                if cdeps and cdeps.get("when_absent") == "integration":
-                    pass
-        return phase_list
+                if cdeps and cdeps.get("when_absent") not in phase_list:
+                    dep_overrides[p_key] = [cdeps["fallback_dep"]]
+        return phase_list, dep_overrides
 
     def check_prerequisites(self, phase_key):
         phase = self.phases[phase_key]
@@ -256,14 +257,49 @@ class DeterministicRunner:
         overrides = self.timeouts.get("overrides", {})
         return overrides.get(phase_key, self.timeouts.get("default_minutes", 30))
 
-    def run(self, dispatch_fn=None):
+    def get_agent_doc_path(self, phase_key):
+        """Return the path to the phase agent's markdown doc."""
+        agent_file = self.phases[phase_key].get("agent", "")
+        return os.path.join(self.output_dir, "..", "agents", agent_file) if agent_file else ""
+
+    def build_cursor_prompt(self, phase_key, handoff_content, agent_doc_root=None):
+        """Assemble a full Cursor Task prompt: agent doc + handoff, truncated."""
+        agent_file = self.phases[phase_key].get("agent", "")
+        doc_content = ""
+        if agent_doc_root and agent_file:
+            doc_path = os.path.join(agent_doc_root, agent_file)
+            if os.path.isfile(doc_path):
+                with open(doc_path) as f:
+                    doc_content = f.read()
+        parts = []
+        if doc_content:
+            parts.append(doc_content)
+        parts.append(handoff_content)
+        combined = "\n\n---\n\n".join(parts)
+        lines = combined.split("\n")
+        lines = truncate_context(lines, self.max_context_lines)
+        return "\n".join(lines)
+
+    def write_pipeline_blockers(self, state):
+        """Persist state.blockers_emitted to results/pipeline_blockers.json."""
+        blockers_path = os.path.join(self.output_dir, "results", "pipeline_blockers.json")
+        atomic_write_json(blockers_path, {
+            "schema_version": SCHEMA_VERSION,
+            "blockers": list(state.blockers_emitted),
+        })
+
+    def run(self, dispatch_fn=None, monitor_fn=None, rca_fn=None):
         """Execute the dispatch loop.
 
         dispatch_fn: callable(phase_key, handoff_path) -> verdict_dict
-            If None (shadow mode), simulates PASS for all phases.
+            Spawns phase agent. If None (shadow mode), simulates PASS.
+        monitor_fn: callable(phase_key, result_path, summary_path, checks) -> verdict_dict
+            Spawns monitor agent. If None, returns the dispatch verdict directly.
+        rca_fn: callable(phase_key, manifest_dict) -> rca_dict
+            Spawns RCA/analysis agent. If None, skips RCA on FAIL.
         """
         mode = self.resolve_mode()
-        phase_list = self.resolve_phase_list(mode)
+        phase_list, dep_overrides = self.resolve_phase_list(mode)
         state = RunnerState(self.output_dir, mode, phase_list)
         state.write_progress()
 
@@ -291,9 +327,21 @@ class DeterministicRunner:
                 handoff_path = self.write_handoff(phase_key, handoff)
 
                 if dispatch_fn:
-                    verdict = dispatch_fn(phase_key, handoff_path)
+                    dispatch_verdict = dispatch_fn(phase_key, handoff_path)
                 else:
-                    verdict = {"verdict": "PASS", "attempt": attempt}
+                    dispatch_verdict = {"verdict": "PASS", "attempt": attempt}
+
+                if monitor_fn:
+                    result_path = os.path.join(
+                        self.output_dir, "agent-results",
+                        f"phase-{self.phases[phase_key]['index']:02d}-result.md",
+                    )
+                    summary_path = os.path.join(self.output_dir, "monitor", "running-summary.md")
+                    phase_meta = self.phases[phase_key]
+                    checks = phase_meta.get("quality", {}).get("checks", []) if phase_meta.get("critical") else []
+                    verdict = monitor_fn(phase_key, result_path, summary_path, checks)
+                else:
+                    verdict = dispatch_verdict
 
                 state.verdict_sequence.append({
                     "phase": phase_key,
@@ -307,13 +355,23 @@ class DeterministicRunner:
                     state.retry_counts[phase_key] = phase_reruns
                     break
 
+                # FAIL path: RCA first (does not increment counters)
+                rca_result = None
+                phase_meta = self.phases[phase_key]
+                if rca_fn and phase_meta.get("rca_artifact"):
+                    rca_manifest = {
+                        "phase": phase_key,
+                        "rca_artifact": phase_meta["rca_artifact"],
+                        "failure_type": verdict.get("failure_type", "unknown"),
+                    }
+                    rca_result = rca_fn(phase_key, rca_manifest)
+
                 state.total_reruns += 1
                 phase_reruns += 1
 
                 if (phase_reruns > self.rerun_limits["max_per_phase"]
                         or state.total_reruns > self.rerun_limits["max_total"]):
-                    phase = self.phases[phase_key]
-                    ft = phase.get("fallback_target")
+                    ft = phase_meta.get("fallback_target")
                     already_used = any(
                         f["phase_key"] == phase_key and f["fallback_target"] == ft
                         for f in state.fallbacks_used
@@ -334,9 +392,13 @@ class DeterministicRunner:
                             "terminal_action": "budget_exhausted",
                             "blocker_classifications": [],
                         })
-                        tp = phase.get("terminal_policy")
+                        self.write_pipeline_blockers(state)
+                        tp = phase_meta.get("terminal_policy")
                         if tp == "allow_partial_report" and "report-generate" in phase_list:
-                            state.phases_completed.append(phase_key)
+                            report_idx = phase_list.index("report-generate")
+                            current_idx = phase_list.index(phase_key)
+                            for skip_key in phase_list[current_idx + 1:report_idx]:
+                                state.phases_completed.append(skip_key)
                             break
                         else:
                             self.write_runner_failure("budget_exhausted", f"Budget exhausted for {phase_key}", phase_key)
@@ -344,6 +406,28 @@ class DeterministicRunner:
                             state.write_progress()
                             state.write_parity_manifest()
                             return state
+
+                # RCA terminal_action check
+                if rca_result and rca_result.get("terminal_action") == "stop_with_blocker":
+                    state.blockers_emitted.append({
+                        "phase": phase_key,
+                        "terminal_action": "stop_with_blocker",
+                        "blocker_classifications": rca_result.get("blocker_classifications", []),
+                    })
+                    self.write_pipeline_blockers(state)
+                    tp = phase_meta.get("terminal_policy")
+                    if tp == "allow_partial_report" and "report-generate" in phase_list:
+                        report_idx = phase_list.index("report-generate")
+                        current_idx = phase_list.index(phase_key)
+                        for skip_key in phase_list[current_idx + 1:report_idx]:
+                            state.phases_completed.append(skip_key)
+                        break
+                    else:
+                        self.write_runner_failure("manual_intervention_required", f"RCA stop for {phase_key}", phase_key)
+                        state.status = "failed"
+                        state.write_progress()
+                        state.write_parity_manifest()
+                        return state
 
             state.write_progress()
             state.write_parity_manifest()

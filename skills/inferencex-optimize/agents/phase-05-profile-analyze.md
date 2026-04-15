@@ -36,7 +36,7 @@ Timeout: 600s minimum.
 ### 3. TraceLens Analysis
 **3a. Install:**
 ```bash
-bash "{{SCRIPTS_DIR}}/profiling/install_tracelens.sh" "{{RESOURCES_DIR}}"
+bash "{{SCRIPTS_DIR}}/profiling/install_tracelens.sh" "{{RESOURCES_DIR}}" "$HOME/TraceLens-internal"
 ```
 
 The install script receives `{{RESOURCES_DIR}}` so TraceLens wheels or archives bundled with the skill can be found for offline or pinned installs. Timeout: 300s minimum. If, after retry, the script prints `TRACELENS_INSTALL_FAILED=true`, treat TraceLens as unavailable: skip steps 3b–3e and continue with step 4 using gap analysis and any benchmark context only.
@@ -55,7 +55,8 @@ bash "{{SCRIPTS_DIR}}/profiling/run_tracelens.sh" \
     --world-size "$WORLD_SIZE" --collective-mode "$COLLECTIVE_TRACE_MODE" \
     --phase-split-trace "$PHASE_SPLIT_INPUT_TRACE" \
     --phase-split-role "$PHASE_SPLIT_INPUT_ROLE" \
-    --gpu-arch-json "{{OUTPUT_DIR}}/results/gpu_arch.json"
+    --gpu-arch-json "{{OUTPUT_DIR}}/results/gpu_arch.json" \
+    --tracelens-dir "$HOME/TraceLens-internal"
 ```
 
 Substitute shell variables from step 1 output. Full `run_tracelens.sh` flag set: `--primary-trace` (primary roofline/trace input path), `--primary-role` (role string for that trace), `--output-dir` (workspace/results root), `--profile-dir` (directory containing trace files), `--world-size` (number of unique rank IDs), `--collective-mode` (how collective traces are interpreted), `--phase-split-trace` and `--phase-split-role` (merged or full trace used for prefill vs decode split), `--gpu-arch-json` (hardware roofline inputs from step 3b). Together this runs the primary single-trace report, optional multi-rank collective analysis when `WORLD_SIZE > 1`, and phase-split roofline when inputs allow.
@@ -98,6 +99,8 @@ Merge gap analysis, TraceLens, and phase-split roofline findings into `{{OUTPUT_
 ### 5. Generate Report
 Create `{{REPORT_DIR}}/profiling_report.md` using `{{TEMPLATES_DIR}}/profiling_report.md`.
 
+When roofline columns (TFLOPS/s, FLOPS/Byte, Pct Roofline) show N/A for the majority of top-by-time kernels, add a note immediately below the affected table explaining: these kernels execute inside `hipGraphLaunch` (CUDA graph replay) so TraceLens cannot observe per-kernel FLOPS or memory traffic. Optimization falls back to profiling time percentage.
+
 ### Completion
 Write `agent-results/phase-05-result.md` with gap_analysis status, tracelens status, GPU arch, report path, and top kernel findings (for sticky: `top_kernels`, `kernel_time_pct`).
 
@@ -107,6 +110,8 @@ Include these scalar fields in `## Key Findings` for monitor consumption:
 - `phase_split_status`: completed | skipped | unavailable
 - `trace_count`: integer
 - `world_size`: integer
+- `phase_split_inputs_ready`: boolean. True when decode-only trace + phase-split script both exist. Source from trace_manifest.json.
+- `roofline_coverage_pct`: float (0-100). Sum of time for ops with non-null TFLOPS/s in unified_perf_summary.csv divided by total time, times 100. Report 0 if no roofline CSVs exist.
 
 Reference `results/trace_manifest.json` in `## Artifacts`.
 

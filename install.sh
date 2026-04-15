@@ -136,20 +136,15 @@ install_skill() {
   # Extract SKILL.md body (everything after the closing --- of frontmatter)
   SKILL_BODY="$(awk '/^---/{if(++c==2){found=1;next}} found' "${DEST_DIR}/SKILL.md")"
 
-  # Rewrite relative markdown links to absolute paths into the installed skill dir
+  # Rewrite all relative markdown links to absolute paths.
+  # Matches ](path) where path does not start with http, #, /, or mailto:
   SKILL_BODY_ABS="$(printf '%s\n' "$SKILL_BODY" \
-    | sed "s|](INTAKE.md)|](${DEST_DIR}/INTAKE.md)|g" \
-    | sed "s|](RUNTIME.md)|](${DEST_DIR}/RUNTIME.md)|g" \
-    | sed "s|](README.md)|](${DEST_DIR}/README.md)|g" \
-    | sed "s|](EXAMPLES.md)|](${DEST_DIR}/EXAMPLES.md)|g" \
-    | sed "s|](tests/E2E_TEST.md)|](${DEST_DIR}/tests/E2E_TEST.md)|g" \
-    | sed "s|](tests/e2e_optimize_test.py)|](${DEST_DIR}/tests/e2e_optimize_test.py)|g" \
-    | sed "s|](phases/|](${DEST_DIR}/phases/|g" \
-    | sed "s|](orchestrator/|](${DEST_DIR}/orchestrator/|g" \
-    | sed "s|](agents/|](${DEST_DIR}/agents/|g" \
-    | sed "s|](protocols/|](${DEST_DIR}/protocols/|g")"
+    | sed -E "s|]\(([^)#/h][^)]*)\)|](${DEST_DIR}/\1)|g")"
 
-  local DESC="InferenceX benchmark and profiling workflow skill. Use this rule when the user asks to benchmark, profile, or optimize a model with InferenceX, names a config key, or asks to run any phase of the InferenceX pipeline."
+  # Derive rule description from SKILL.md frontmatter
+  local BASE_DESC
+  BASE_DESC="$(awk '/^description:/{sub(/^description: *"?/,""); sub(/"$/,""); print; exit}' "${DEST_DIR}/SKILL.md")"
+  local DESC="${BASE_DESC} Use this rule when the user names a config key or asks to run any phase of the InferenceX pipeline."
 
   MDC_CONTENT="---
 description: >-
@@ -223,12 +218,66 @@ verify_skill() {
   return $ERRORS
 }
 
+verify_installed_targets() {
+  local SKILL_NAME="$1"
+  local BASE="${CURSOR_PROJECT:-$HOME}"
+  local CLAUDE_DIR="${HOME}/.claude/skills/${SKILL_NAME}"
+  local CURSOR_LINK="${BASE}/.cursor/skills/${SKILL_NAME}"
+  local CURSOR_RULE="${BASE}/.cursor/rules/${SKILL_NAME}.mdc"
+  local ERRORS=0
+
+  echo "Verifying installed targets for $SKILL_NAME..."
+
+  # Claude Code / OpenCode skill directory
+  if [[ -d "$CLAUDE_DIR" ]] && [[ -f "$CLAUDE_DIR/SKILL.md" ]]; then
+    echo "  OK  Claude skill: $CLAUDE_DIR"
+  elif [[ -L "$CLAUDE_DIR" ]] && [[ -f "$CLAUDE_DIR/SKILL.md" ]]; then
+    echo "  OK  Claude skill (symlink): $CLAUDE_DIR"
+  else
+    echo "  MISSING  Claude skill: $CLAUDE_DIR"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  # Cursor skill symlink
+  if [[ -L "$CURSOR_LINK" ]] && [[ -d "$CURSOR_LINK" ]]; then
+    echo "  OK  Cursor skill symlink: $CURSOR_LINK"
+  else
+    echo "  MISSING  Cursor skill symlink: $CURSOR_LINK"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  # Cursor rule file
+  if [[ -f "$CURSOR_RULE" ]]; then
+    if grep -q "^description:" "$CURSOR_RULE" 2>/dev/null || grep -q "^  description:" "$CURSOR_RULE" 2>/dev/null; then
+      echo "  OK  Cursor rule: $CURSOR_RULE"
+    else
+      echo "  WARN  Cursor rule exists but missing description field: $CURSOR_RULE"
+      ERRORS=$((ERRORS + 1))
+    fi
+  else
+    echo "  MISSING  Cursor rule: $CURSOR_RULE"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  if [[ $ERRORS -eq 0 ]]; then
+    echo "  PASSED: all install targets verified"
+  else
+    echo "  FAILED: $ERRORS install target(s) missing or invalid"
+  fi
+  return $ERRORS
+}
+
 if [[ "$VERIFY_ONLY" == "true" ]]; then
   TOTAL_ERRORS=0
   for SKILL_NAME in "${SKILL_NAMES[@]}"; do
     echo ""
-    echo "=== $SKILL_NAME ==="
+    echo "=== Source Tree: $SKILL_NAME ==="
     if ! verify_skill "$SKILL_NAME"; then
+      TOTAL_ERRORS=$((TOTAL_ERRORS + 1))
+    fi
+    echo ""
+    echo "=== Installed Targets: $SKILL_NAME ==="
+    if ! verify_installed_targets "$SKILL_NAME"; then
       TOTAL_ERRORS=$((TOTAL_ERRORS + 1))
     fi
   done

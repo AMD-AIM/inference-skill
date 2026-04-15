@@ -77,4 +77,10 @@ Print: total configs from the generator (before filtering), count after filterin
 ### Completion
 Write `agent-results/phase-01-result.md` with total/filtered config counts, benchmark script path, and saved sweep config path.
 
+Include these sticky fields in `## Data for Next Phase`:
+- `tp_size`: integer (tensor parallelism from sweep config)
+- `ep_size`: integer (expert parallelism, default 1)
+- `seq_lengths`: string (comma-separated ISL/OSL pairs)
+- `concurrency_levels`: string (comma-separated concurrency values)
+
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

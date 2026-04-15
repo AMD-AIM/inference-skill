@@ -75,7 +75,7 @@ docker exec "$CONTAINER_NAME" python3 /tmp/patch_benchmark_lib.py
 This patch **disables `move_profile_trace_for_relay()`** (CI/CD relay staging, not needed for local profiling) and **lifts the `num_prompts` cap tied to `max_concurrency`**, preserving the full prompt count for steady-state profiling across prefill-decode and decode-only phases.
 
 ### 4. Run Profiling Benchmark
-**CRITICAL:** Use **`CUDA_VISIBLE_DEVICES`** for GPU selection. **Never** `ROCR_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES` — ROCm re-indexes GPUs and triggers HIP device mismatch errors.
+**CRITICAL:** Use **`CUDA_VISIBLE_DEVICES`** for GPU selection. **Never** use `ROCR_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES` **for inference server processes** (vLLM / SGLang) — ROCm re-indexes GPUs and triggers HIP device mismatch errors. (GEAK and kernel microbenchmark contexts use `HIP_VISIBLE_DEVICES` normally — this restriction applies only to inference server processes.)
 
 ```bash
 bash "{{SCRIPTS_DIR}}/container/run_profile_exec.sh" \

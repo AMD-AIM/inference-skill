@@ -98,4 +98,9 @@ python3 "{{SCRIPTS_DIR}}/env/generate_env_info.py" --output "{{ENV_INFO_FILE}}" 
 ### Completion
 Write `agent-results/phase-00-result.md` with status, artifacts (`env_info.json`), and key findings (GPU arch, GEAK availability, geak-oe detection, LLM key presence).
 
+Include these sticky fields in `## Data for Next Phase`:
+- `gpu_arch`: string (e.g. "gfx942", "sm_90")
+- `gpu_count`: integer
+- `container_image`: string (Docker image used for benchmarks)
+
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

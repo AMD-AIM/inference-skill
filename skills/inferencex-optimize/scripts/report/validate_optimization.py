@@ -133,7 +133,29 @@ def select_result_pair(results_dir):
     ]
 
 
-def build_comparison(baseline_entry, optimized_entry):
+def detect_no_improvements(problems_dir):
+    """Return True when geak_results.json exists but no kernel has speedup > 1.0."""
+    if not problems_dir:
+        return False
+    results_path = os.path.join(problems_dir, "geak_results.json")
+    if not os.path.isfile(results_path):
+        return False
+    try:
+        raw = load_json(results_path)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if isinstance(raw, dict):
+        results = raw.get("kernels", [])
+    elif isinstance(raw, list):
+        results = raw
+    else:
+        return False
+    if not results:
+        return True
+    return all(r.get("speedup", 0) <= 1.0 for r in results)
+
+
+def build_comparison(baseline_entry, optimized_entry, no_improvements=False):
     """Build the full comparison dict.  This is the single source of truth
     for E2E health — every downstream consumer reads this JSON."""
     baseline = baseline_entry["payload"]
@@ -154,7 +176,8 @@ def build_comparison(baseline_entry, optimized_entry):
     if bl_ttft and bl_ttft > 0 and opt_ttft and opt_ttft > 0:
         ttft_regression_pct = round((opt_ttft - bl_ttft) / bl_ttft * 100, 2)
 
-    fields = derive_fields(speedup, artifacts_valid, ttft_regression_pct)
+    fields = derive_fields(speedup, artifacts_valid, ttft_regression_pct,
+                           no_improvements=no_improvements)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -188,9 +211,11 @@ def build_comparison(baseline_entry, optimized_entry):
 def main():
     parser = argparse.ArgumentParser(description="Validate optimization results")
     parser.add_argument("--results-dir", required=True)
+    parser.add_argument("--problems-dir", default="")
     args = parser.parse_args()
 
     results_dir = args.results_dir
+    no_improvements = detect_no_improvements(args.problems_dir)
 
     baseline_entry, optimized_entry, errors = select_result_pair(results_dir)
 
@@ -200,7 +225,7 @@ def main():
             print(f"  - {e}")
         return 1
 
-    comparison = build_comparison(baseline_entry, optimized_entry)
+    comparison = build_comparison(baseline_entry, optimized_entry, no_improvements)
 
     gate = comparison["performance_gate"]
     speedup = comparison["speedup"]
@@ -219,6 +244,8 @@ def main():
         print("VALIDATION FAILED (performance regression)")
         exit_code = 1
 
+    if no_improvements:
+        print("  NOTE: no kernel improvements detected — performance delta treated as run-to-run noise")
     if comparison["ttft_upgraded"]:
         print("  NOTE: gate upgraded from warn to fail due to severe TTFT regression")
 

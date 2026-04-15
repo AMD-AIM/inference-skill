@@ -22,6 +22,8 @@ import os
 import sys
 from pathlib import Path
 
+from plugin_utils import detect_kernel_name, find_matching_op
+
 # Mapping from kernel problem name patterns to vLLM CustomOp targets.
 # Each entry: pattern → (vllm_module, class_name, adapter_type)
 KERNEL_MAP = {
@@ -37,20 +39,6 @@ KERNEL_MAP = {
     "fused_rope":             ("vllm.model_executor.layers.rotary_embedding", "RotaryEmbeddingBase", "rope"),
     "rope":                   ("vllm.model_executor.layers.rotary_embedding", "RotaryEmbeddingBase", "rope"),
 }
-
-
-def detect_kernel_name(filename: str) -> str | None:
-    """Extract kernel name from filename like problem_fused_rmsnorm_opt.py."""
-    base = filename.replace("problem_", "").replace("_opt.py", "").replace("_opt", "")
-    return base if base else None
-
-
-def find_matching_op(kernel_name: str) -> tuple | None:
-    """Find the vLLM CustomOp that matches this kernel."""
-    for pattern, target in KERNEL_MAP.items():
-        if pattern in kernel_name or kernel_name in pattern:
-            return target
-    return None
 
 
 def load_model_new(filepath: str):
@@ -238,7 +226,7 @@ def generate_plugin(kernel_dir: str, output_dir: str | None = None) -> dict:
             skipped.append((opt_file, "could not parse name"))
             continue
 
-        match = find_matching_op(kernel_name)
+        match = find_matching_op(kernel_name, KERNEL_MAP)
         if not match:
             skipped.append((opt_file, f"no vLLM CustomOp mapping for '{kernel_name}'"))
             continue

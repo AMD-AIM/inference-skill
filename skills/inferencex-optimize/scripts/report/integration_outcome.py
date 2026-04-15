@@ -11,13 +11,16 @@ SPEEDUP_WARN_THRESHOLD = 0.97
 SEVERE_TTFT_REGRESSION_PCT = 20.0
 
 
-def performance_gate(speedup, ttft_regression_pct=None):
+def performance_gate(speedup, ttft_regression_pct=None, no_improvements=False):
     """Return the tri-state gate string and whether TTFT caused an upgrade.
 
     Returns (gate, ttft_upgraded):
         gate            -- "pass" | "warn" | "fail"
         ttft_upgraded   -- True when the gate was raised from warn to fail
                            because of a severe TTFT regression
+
+    When no_improvements is True (zero winning kernels), any performance delta
+    is run-to-run noise — cap the gate at "warn" and skip TTFT upgrade logic.
     """
     if speedup is None:
         return "fail", False
@@ -29,9 +32,14 @@ def performance_gate(speedup, ttft_regression_pct=None):
     else:
         base = "fail"
 
+    # With no improvements, optimized == baseline software; any delta is noise.
+    if no_improvements and base == "fail":
+        base = "warn"
+
     ttft_upgraded = False
     if (
-        base == "warn"
+        not no_improvements
+        and base == "warn"
         and ttft_regression_pct is not None
         and ttft_regression_pct > SEVERE_TTFT_REGRESSION_PCT
     ):
@@ -41,13 +49,16 @@ def performance_gate(speedup, ttft_regression_pct=None):
     return base, ttft_upgraded
 
 
-def derive_fields(speedup, artifacts_valid, ttft_regression_pct=None):
+def derive_fields(speedup, artifacts_valid, ttft_regression_pct=None,
+                   no_improvements=False):
     """Compute every gating field from raw inputs.
 
     Returns a dict with: performance_gate, performance_valid, validated,
     ttft_upgraded.
     """
-    gate, ttft_upgraded = performance_gate(speedup, ttft_regression_pct)
+    gate, ttft_upgraded = performance_gate(
+        speedup, ttft_regression_pct, no_improvements=no_improvements,
+    )
     perf_valid = gate == "pass"
     return {
         "performance_gate": gate,

@@ -138,7 +138,7 @@ The `computed_at` timestamp is metadata and is itself excluded from the hash com
 
 ## Parity Verification
 
-Parity is verified by computing the hash over the included fields from both the runner path and the legacy path and asserting equality. The verification script is `scripts/orchestrate/verify_parity.py` (added in Commit 4).
+Parity is verified by computing the hash over the included fields from both the runner path and the legacy path and asserting equality. The verification script is `scripts/orchestrate/verify_parity.py` <!-- planned: not yet implemented --> (added in Commit 4).
 
 ### Failure Modes
 

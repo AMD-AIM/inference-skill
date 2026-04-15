@@ -15,7 +15,7 @@ metadata:
 - Treat a bare model/config key as enough to start. Do not require the user to spell out a full command.
 - If the user says `use inferencex-optimize skill for <model-or-config-key>`, start guided setup immediately.
 - Do not dump raw parameter names in the first reply; translate to a short setup conversation.
-- Prefer the native `question` tool for multiple-choice prompts when the runtime provides it.
+- Use the platform's question tool for multiple-choice prompts: `AskQuestion` on Cursor, `question` on Claude Code / OpenCode.
 - If the runtime does not provide a question tool, ask concise numbered choices in normal chat.
 - Ask questions in grouped batches, not as a drip-feed of one question at a time.
 - Keep explicit progress updates so the user always knows current stage and next step.
@@ -87,6 +87,16 @@ After intake and bootstrap, the orchestrator dispatches work to specialized agen
 
 Communication schemas are in `protocols/`. The orchestrator never reads phase docs or runbooks directly.
 
+## Platform notes
+
+The file-based communication protocol (handoffs, results, reviews) is identical across all platforms. Only the agent spawning mechanism differs. See `protocols/platform-dispatch.md` for the full adapter contract.
+
+- **Cursor**: Discovered via `~/.cursor/skills/` symlink and `~/.cursor/rules/*.mdc` (agent-requested rule). Use `Task` tool with `subagent_type` per the dispatch table. Use `AskQuestion` for guided setup. Monitor agents can use `model: "fast"`.
+- **Claude Code**: Discovered via `~/.claude/skills/`. Use `Agent` tool with path-based handoffs. Use `question` tool for guided setup.
+- **OpenCode**: Same as Claude Code. Verify discovery with `opencode debug skill`. For non-interactive runs, set `"question": "allow"` in `.opencode/opencode.jsonc`.
+
+The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical control plane for all platforms. It accepts platform-specific `dispatch_fn`, `monitor_fn`, and `rca_fn` callbacks.
+
 ## Modes
 
 - `full`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze`
@@ -120,6 +130,7 @@ To revert from the deterministic runner to the legacy LLM orchestrator, set `USE
 - [`EXAMPLES.md`](EXAMPLES.md)
 
 ### Protocols
+- [Platform Dispatch](protocols/platform-dispatch.md) — cross-platform adapter contract
 - [Phase Result Schema](protocols/phase-result.schema.md)
 - [Monitor Feedback Schema](protocols/monitor-feedback.schema.md)
 - [Handoff Format](protocols/handoff-format.md)

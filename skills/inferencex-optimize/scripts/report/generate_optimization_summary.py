@@ -37,7 +37,7 @@ def main():
         with open(args.env_info) as f:
             env = json.load(f)
         summary["gpu_arch"] = env.get("gpu_arch", "unknown")
-        summary["geak_mode"] = "auto" if env.get("geak_available") else "manual"
+        summary["geak_mode"] = env.get("effective_geak_mode", "manual")
 
     integration_gate = None
     comp_path = os.path.join(args.results_dir, "optimization_comparison.json") if args.results_dir else ""
@@ -86,7 +86,13 @@ def main():
     results_path = os.path.join(args.problems_dir, "geak_results.json") if args.problems_dir else ""
     if results_path and os.path.isfile(results_path):
         with open(results_path) as f:
-            results = json.load(f)
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            results = raw.get("kernels", [])
+        elif isinstance(raw, list):
+            results = raw
+        else:
+            results = []
         summary["kernels_attempted"] = len(results)
         summary["kernels_improved"] = sum(1 for r in results if r.get("speedup", 0) > 1.0)
         summary["patches_recovered"] = sum(1 for r in results if r.get("patch_recovered", False))

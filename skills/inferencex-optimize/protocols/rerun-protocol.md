@@ -32,8 +32,8 @@ Missing expected output files, metrics outside plausible range, empty traces, tr
 
 ## Retry Limits
 
-- `max_reruns_per_phase`: 2 (two re-dispatches after the original attempt)
-- `max_total_reruns`: 5
+- `max_per_phase`: 2 (two re-dispatches after the original attempt)
+- `max_total`: 5
 
 ## RCA-First Recovery Flow
 
@@ -62,7 +62,7 @@ Every critical phase uses the same orchestrator-managed recovery loop. The RCA s
 
 - Spawning the RCA agent does **not** increment `phase_reruns` or `total_reruns`.
 - Only the subsequent phase re-dispatch increments the retry counters.
-- Equality with the configured limit still allows that re-dispatch. Exhaustion starts on the next failure, when `phase_reruns > max_reruns_per_phase` or `total_reruns > max_total_reruns`.
+- Equality with the configured limit still allows that re-dispatch. Exhaustion starts on the next failure, when `phase_reruns > max_per_phase` or `total_reruns > max_total`.
 - If the RCA agent fails (timeout, crash): record an RCA failure note in the handoff, allow one plain retry if budget remains.
 - If RCA repeatedly fails and no retry budget remains: emit a structured blocker, apply normal fallback/stop.
 

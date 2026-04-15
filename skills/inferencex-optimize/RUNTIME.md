@@ -7,7 +7,7 @@ Use this file after guided intake and before phase execution.
 Use only the files bundled next to this skill:
 
 **Phase docs:**
-- `phases/00-env-setup.md` through `phases/09-report-generate.md`
+- `agents/phase-00-env-setup.md` through `agents/phase-09-report-generate.md`
 
 **Scripts (organized by category):**
 
@@ -49,12 +49,16 @@ Use only the files bundled next to this skill:
 - `generate_sglang_plugin.py` — SGLang plugin generation (Phase 8)
 - `inject_plugin.py` — Plugin injection into benchmark (Phase 8)
 
+`scripts/orchestrate/`:
+- `predicate_engine.py` — Structured detection rule evaluation (monitor)
+- `validate_handoff.py` — Handoff file validation (orchestrator)
+
 `scripts/report/`:
 - `validate_optimization.py` — Baseline vs optimized comparison (Phase 8)
+- `integration_outcome.py` — Shared outcome derivation (imported by validate_optimization.py and generate_optimization_summary.py)
 - `generate_optimization_summary.py` — Summary JSON generation (Phase 9)
 
 **Templates:**
-- `templates/agent-config.md`
 - `templates/benchmark_report.md` — Phase 3 report template
 - `templates/dispatch_plugin_example.py` — Reference shape-aware dispatch plugin template (Phase 8 Step 1.5)
 - `templates/profiling_report.md` — Phase 5 report template
@@ -133,7 +137,6 @@ Resolve these before loading any phase doc:
 - Replace `{{VAR}}` placeholders in phase docs using the resolved variable map.
 - Ignore `{{SKIP_LABEL}}` markers. They are compiler annotations from the built-in OpenCode command path.
 - If a phase doc references `{{DRY_RUN_NOTE}}`, resolve it from `DRY_RUN`: empty for real runs, or a short note that benchmark/profile commands should be printed and validated without being executed.
-- If a phase doc references `{{PROFILE_SKIP_NOTE}}` or `{{PROFILE_ANALYSIS_NOTE}}`, resolve them from the selected mode before execution.
 
 ## Workspace bootstrap
 
@@ -187,6 +190,13 @@ When running in multi-agent mode, the orchestrator manages the execution loop:
 - Monitor writes reviews to `monitor/phase-NN-review.md` and updates `monitor/running-summary.md`
 - Phase agents write results to `agent-results/phase-NN-result.md`
 - Communication schemas are defined in `protocols/`
+
+## Platform dispatch
+
+The runner accepts platform-specific callbacks (`dispatch_fn`, `monitor_fn`, `rca_fn`). See `protocols/platform-dispatch.md` for the full adapter contract.
+
+- **Cursor**: `Task` tool with `subagent_type` per dispatch table. Handoff content is inlined in the prompt. Use `AskQuestion` for guided setup.
+- **Claude Code / OpenCode**: `Agent` tool with file-path handoffs. Use `question` tool for guided setup.
 
 ## Execution status updates
 

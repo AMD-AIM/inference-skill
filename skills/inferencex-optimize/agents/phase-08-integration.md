@@ -207,7 +207,7 @@ Include these scalar fields in `## Key Findings` for monitor consumption:
 - `blocked_target_count`: integer — targets with a structured blocker classification
 - `critical_blocker_count`: integer — subset of blocked targets where classification is not `true_kernel_parity`
 
-Reference `results/optimization_comparison.json` and `results/integration_manifest.json` in `## Artifacts`. The monitor reads `artifacts_valid`, `performance_valid`, `performance_gate`, `e2e_speedup`, and `ttft_regression_pct` from the comparison file via detection rules (pre-extracted into the monitor context JSON by the orchestrator).
+Reference `results/optimization_comparison.json` and `results/integration_manifest.json` in `## Artifacts`. The monitor reads `artifacts_valid`, `performance_gate`, `e2e_speedup`, `ttft_regression_pct`, and `ttft_upgraded` from the comparison file via detection rules (pre-extracted into the monitor context JSON by the orchestrator).
 
 If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact and adjust your approach based on the retry recommendation and blocker classifications:
 - Targets classified as `true_kernel_parity`: skip integration for these targets.

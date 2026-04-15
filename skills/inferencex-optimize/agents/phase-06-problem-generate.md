@@ -115,4 +115,12 @@ List generated `problem_*.py` files and `optimization_manifest.json`.
 ### Completion
 Write `agent-results/phase-06-result.md` with problems_generated count, fusion_opportunities count, manifest_entries count.
 
+Include these sticky fields in `## Data for Next Phase`:
+- `optimization_targets`: integer (count of manifest entries targeted for optimization)
+- `problem_count`: integer (same as problems_generated)
+
+Include these scalar fields in `## Key Findings` for monitor consumption:
+- `problems_generated`: integer count of problem files written
+- `max_kernel_types_per_problem`: integer. For each problem file, count distinct `kernel_type` values among its kernels (using classify_kernel on each kernel name). Report the maximum across all files. Values > 2 indicate bad grouping.
+
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

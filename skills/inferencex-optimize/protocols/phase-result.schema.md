@@ -52,13 +52,15 @@ Phase agents MUST include these fields in `## Key Findings` so the monitor can e
 - `phase_split_status`: completed | skipped | unavailable
 - `trace_count`: integer
 - `world_size`: integer
+- `phase_split_inputs_ready`: boolean (true when decode-only trace + phase-split script both exist)
+- `roofline_coverage_pct`: float (0-100)
 
 ### Phase 07 (kernel-optimize)
 - `compiled_count`: integer count of compiled kernels
 - `best_speedup`: float (best kernel-level speedup achieved)
 - `winning_kernel_count`: integer count of kernels with speedup > 1.0
 - `optimization_coverage_status`: complete | partial | none
-- `expected_improvement_status`: improvable | parity_or_blocked (per hot target, summarize)
+- `expected_improvement_status`: improvable | parity_or_blocked | not_attempted (per hot target, summarize)
 
 ### Phase 08 (integration)
 

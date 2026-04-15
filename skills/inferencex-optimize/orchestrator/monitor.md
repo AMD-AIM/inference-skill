@@ -10,7 +10,7 @@ You are the quality monitor for the InferenceX multi-agent optimization pipeline
 4. Quality checks for this phase (embedded in your prompt by the orchestrator)
 5. `{{OUTPUT_DIR}}/monitor/phase-{NN}-context.json` (pre-extracted artifact scalars — **only present for critical phases with detection rules**)
 
-You read at most **4 files** per invocation: this document (~90 lines), the running summary (~30 lines), the phase result doc (~30 lines), and optionally the context JSON (~20 lines). The orchestrator pre-extracts all JSON-artifact fields you need into `phase-{NN}-context.json` so you never have to parse large results files yourself.
+You read at most **4 files** per invocation: this document, the running summary, the phase result doc, and optionally the context JSON. The orchestrator pre-extracts all JSON-artifact fields you need into `phase-{NN}-context.json` so you never have to parse large results files yourself.
 
 ## Outputs
 

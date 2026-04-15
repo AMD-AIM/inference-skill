@@ -63,7 +63,8 @@ CLI_MULTI_RANK_COLLECTIVE = "TraceLens_generate_multi_rank_collective_report_pyt
 CLI_COMPARE_REPORTS = "TraceLens_compare_perf_reports_pytorch"
 TRACELENS_INSTALL_URL = "git+https://github.com/AMD-AIG-AIMA/TraceLens.git"
 TRACELENS_INTERNAL_REPO = "git@github.com:AMD-AGI/TraceLens-internal.git"
-TRACELENS_LOCAL_DIR = os.path.join(os.path.expanduser("~"), "TraceLens-internal")
+TRACELENS_LOCAL_DIR = os.environ.get("TRACELENS_DIR",
+    os.path.join(os.path.expanduser("~"), "TraceLens-internal"))
 
 
 # ---------------------------------------------------------------------------

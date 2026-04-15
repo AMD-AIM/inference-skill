@@ -11,6 +11,13 @@ You are a phase agent responsible for optimizing bottleneck GPU kernels using GE
 
 ## Runbook
 
+### Progress Reporting
+This phase can run up to 90 minutes. Print a one-line status update before each major step:
+- Before GEAK mode resolution: `[phase-07] Resolving GEAK mode...`
+- Before each kernel target: `[phase-07] Optimizing kernel N/M: <name> (<pct>% GPU time)...`
+- After each kernel: `[phase-07] Kernel <name>: speedup=<X>x (attempt <i>/<max>)`
+- Before collecting results: `[phase-07] Collecting winning kernels...`
+
 ### Prerequisites
 - Problem files and metadata from Phase 6 under `{{PROBLEMS_DIR}}/`
 - `{{PROBLEMS_DIR}}/optimization_manifest.json` (with kernel types and profiling metadata)
@@ -53,7 +60,8 @@ bash "{{SCRIPTS_DIR}}/container/start_profile_container.sh" \
     --mount "{{SCRIPTS_DIR}}:/workspace/scripts" \
     --mount "{{GEAK_DIR}}:/workspace/geak" \
     --env "AMD_LLM_API_KEY=${AMD_LLM_API_KEY:-}" \
-    --env "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
+    --env "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
+    --env "LLM_GATEWAY_KEY=${LLM_GATEWAY_KEY:-}"
 ```
 
 **Container bind mounts (reference):**
@@ -105,6 +113,17 @@ For each kernel:
 1. Build task description with shapes and roofline data
 2. `git init && git add -A && git commit -m init` in problems dir
 3. Launch GEAK: `mini -m claude-opus-4.6 --config geak.yaml --gpu-ids 0 --yolo -t '${TASK_DESC}' -o traj_${NAME}.json`
+
+### 3c. Mandatory Attempt Rule
+
+**A target MUST NOT be classified as `parity_or_blocked` unless at least one GEAK or manual optimization attempt has been made and a measured speedup recorded.** Specifically:
+
+1. A target without a trajectory file (`traj_*.json`) or a manual attempt entry in `manual_attempts.md` has **zero attempts** and cannot be classified as `parity_or_blocked`.
+2. Targets with zero attempts MUST be classified as `not_attempted`. A `not_attempted` classification triggers a monitor FAIL verdict — the phase will be retried with explicit instructions to attempt these targets.
+3. Valid `parity_or_blocked` requires: at least 1 attempt + measured speedup <= 1.0 + a documented reason (`true_kernel_parity`, `framework_limit`, `vendor_binary_only`, etc.).
+4. High-priority targets (top 3 by `profiling_pct`) require at least **two** attempts before `parity_or_blocked` is allowed — one GEAK and one manual/alternative approach.
+
+This rule exists because skipping high-value targets (e.g., MoE GEMM at 83% of GPU time) without even attempting optimization is the single biggest source of value loss in the pipeline.
 
 ### 3.5. Patch Recovery (CRITICAL)
 Run after EVERY GEAK attempt. GEAK's `[SelectPatch]` agent frequently fails.
@@ -171,9 +190,9 @@ Include these scalar fields in `## Key Findings` for monitor consumption:
 - `best_speedup`: float (best kernel-level speedup achieved)
 - `winning_kernel_count`: integer count of kernels with speedup > 1.0
 - `optimization_coverage_status`: complete | partial | none
-- `expected_improvement_status`: improvable | parity_or_blocked (summarize across hot targets)
+- `expected_improvement_status`: improvable | parity_or_blocked | not_attempted (summarize across hot targets; `not_attempted` triggers monitor FAIL)
 
-For targets that are inherently unimprovable (at parity with baseline, or blocked by framework/vendor limits), classify them as `parity_or_blocked` rather than leaving them as unexplained failures. This distinction prevents the monitor from triggering endless retries on targets that cannot be improved. Document the reason per target in `geak_results.json` (e.g., `true_kernel_parity`, `framework_limit`).
+For targets that are inherently unimprovable (at parity with baseline, or blocked by framework/vendor limits), classify them as `parity_or_blocked` **ONLY after at least one GEAK or manual attempt has been made and the measured speedup is <= 1.0**. Targets with zero attempts MUST be classified as `not_attempted` — this triggers a monitor FAIL so the phase retries with those targets attempted. Document the reason per target in `geak_results.json` (e.g., `true_kernel_parity`, `framework_limit`). This distinction prevents the monitor from triggering endless retries on targets that genuinely cannot be improved, while ensuring high-value targets are never skipped without trying.
 
 Report the measured `best_speedup` honestly even when it is `<= 1.0`. The monitor uses `expected_improvement_status` plus the structured blocker reasons to decide WARN versus FAIL; do not inflate or coerce the scalar just to satisfy a gate.
 

@@ -15,7 +15,7 @@
       "agent": "phase-01-config-parse.md",
       "deps": ["env"],
       "critical": false,
-      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "REPO_DIR", "SCRIPTS_DIR"],
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "REPO_DIR", "SCRIPTS_DIR", "FILTER_EP"],
       "sticky": ["tp_size", "ep_size", "seq_lengths", "concurrency_levels"]
     },
     "benchmark": {
@@ -53,14 +53,28 @@
       "deps": ["benchmark"],
       "critical": false,
       "required_context": ["OUTPUT_DIR", "SCRIPTS_DIR", "REPORT_DIR", "TEMPLATES_DIR"],
-      "sticky": ["gap_analysis_summary", "best_concurrency"]
+      "sticky": ["gap_analysis_summary", "best_concurrency"],
+      "monitor_context_fields": {
+        "source_artifacts": ["results/benchmark_summary.json"],
+        "scalars": ["results_analyzed", "bottlenecks_found"]
+      },
+      "quality": {
+        "checks": [
+          { "name": "summary_exists", "type": "file_exists", "path": "results/benchmark_summary.json" },
+          { "name": "results_analyzed", "type": "metric_threshold", "field": "results_analyzed", "min": 1 }
+        ],
+        "detection_rules": "Fail when benchmark_summary.json is missing or results_analyzed < 1.",
+        "detection_rules_structured": [
+          {"field": "results_analyzed", "op": "lt", "value": 1, "verdict": "FAIL"}
+        ]
+      }
     },
     "profile": {
       "index": 4,
       "agent": "phase-04-profile.md",
       "deps": ["config"],
       "critical": false,
-      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "SCRIPTS_DIR", "REPO_DIR", "HF_CACHE", "PROFILE_DIR", "GPUS", "DRY_RUN_NOTE", "ENFORCE_EAGER_FLAG", "FILTER_TP", "FILTER_CONC_START", "FILTER_CONC_END", "FILTER_SEQ"]
+      "required_context": ["CONFIG_KEY", "OUTPUT_DIR", "SCRIPTS_DIR", "REPO_DIR", "HF_CACHE", "PROFILE_DIR", "GPUS", "DRY_RUN_NOTE", "ENFORCE_EAGER_FLAG", "FILTER_EP", "FILTER_TP", "FILTER_CONC_START", "FILTER_CONC_END", "FILTER_SEQ"]
     },
     "profile-analyze": {
       "index": 5,
@@ -71,7 +85,7 @@
       "sticky": ["top_kernels", "kernel_time_pct"],
       "monitor_context_fields": {
         "source_artifacts": ["results/trace_manifest.json"],
-        "scalars": ["trace_integrity_status", "tracelens_status", "phase_split_status", "trace_count", "world_size", "phase_split_inputs_ready"]
+        "scalars": ["trace_integrity_status", "tracelens_status", "phase_split_status", "trace_count", "world_size", "phase_split_inputs_ready", "roofline_coverage_pct"]
       },
       "quality": {
         "checks": [
@@ -79,12 +93,13 @@
           { "name": "analysis_produced", "type": "file_exists", "path": "results/profile_analysis.json" },
           { "name": "trace_manifest_exists", "type": "file_exists", "path": "results/trace_manifest.json" }
         ],
-        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable. Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag.",
+        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable. Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag. Warn when roofline_coverage_pct < 50 (majority of top kernel time lacks roofline data, typically due to CUDA graph wrapping).",
         "detection_rules_structured": [
           {"field": "trace_integrity_status", "op": "eq", "value": "corrupt", "verdict": "FAIL"},
           {"field": "trace_integrity_status", "op": "eq", "value": "missing", "verdict": "FAIL"},
           {"field": "trace_count", "op": "lt", "value": 1, "verdict": "FAIL"},
-          {"field": "phase_split_inputs_ready", "op": "eq", "value": false, "verdict": "WARN"}
+          {"field": "phase_split_inputs_ready", "op": "eq", "value": false, "verdict": "WARN"},
+          {"field": "roofline_coverage_pct", "op": "lt", "value": 50, "verdict": "WARN"}
         ]
       },
       "rca_artifact": {
@@ -102,16 +117,36 @@
         "results/gap_analysis/gap_analysis.json",
         "results/profile_analysis.json"
       ],
-      "critical": false,
+      "critical": true,
       "required_context": ["OUTPUT_DIR", "GPU_ARCH", "TOP_KERNELS", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "FRAMEWORK", "PRECISION", "OPTIMIZE_PRIORITY_THRESHOLD"],
-      "sticky": ["optimization_targets", "problem_count"]
+      "sticky": ["optimization_targets", "problem_count"],
+      "monitor_context_fields": {
+        "source_artifacts": ["problems/optimization_manifest.json"],
+        "scalars": ["problems_generated", "max_kernel_types_per_problem"]
+      },
+      "quality": {
+        "checks": [
+          { "name": "manifest_exists", "type": "file_exists", "path": "problems/optimization_manifest.json" },
+          { "name": "problems_generated", "type": "metric_threshold", "field": "problems_generated", "min": 1 }
+        ],
+        "detection_rules": "Fail when optimization_manifest.json is missing or problems_generated < 1. Warn when max_kernel_types_per_problem > 2 (a single problem file mixes unrelated kernel types, indicating bad grouping — e.g. MoE GEMM + RMSNorm + attention in one file).",
+        "detection_rules_structured": [
+          {"field": "problems_generated", "op": "lt", "value": 1, "verdict": "FAIL"},
+          {"field": "max_kernel_types_per_problem", "op": "gt", "value": 2, "verdict": "WARN"}
+        ]
+      },
+      "rca_artifact": {
+        "output": "results/problem_gen_root_cause.json",
+        "analysis_context": ["problems/optimization_manifest.json", "results/profile_analysis.json", "agent-results/phase-06-result.md"]
+      },
+      "terminal_policy": "stop"
     },
     "kernel-optimize": {
       "index": 7,
       "agent": "phase-07-kernel-optimize.md",
       "deps": ["problem-generate"],
       "critical": true,
-      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GPUS", "CONFIG_KEY"],
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GEAK_OE_DIR", "GPUS", "CONFIG_KEY"],
       "monitor_context_fields": {
         "source_artifacts": [],
         "scalars": ["compiled_count", "best_speedup", "winning_kernel_count", "optimization_coverage_status", "expected_improvement_status"]
@@ -120,10 +155,11 @@
         "checks": [
           { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 }
         ],
-        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation. Warn instead of FAIL when expected_improvement_status = parity_or_blocked and the blockers are structured (for example true_kernel_parity or framework_limit), so inherently unimprovable targets are captured instead of retried blindly.",
+        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; expected_improvement_status = not_attempted (high-value targets were skipped without any optimization attempt); winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation. Warn instead of FAIL when expected_improvement_status = parity_or_blocked and the blockers are structured (for example true_kernel_parity or framework_limit), so inherently unimprovable targets are captured instead of retried blindly.",
         "detection_rules_structured": [
           {"field": "compiled_count", "op": "lt", "value": 1, "verdict": "FAIL"},
           {"field": "best_speedup", "op": "le", "value": 1.0, "verdict": "FAIL", "condition": "expected_improvement_status != parity_or_blocked"},
+          {"field": "expected_improvement_status", "op": "eq", "value": "not_attempted", "verdict": "FAIL"},
           {"field": "expected_improvement_status", "op": "eq", "value": "parity_or_blocked", "verdict": "WARN"}
         ]
       },
@@ -225,19 +261,17 @@
     "RESOURCES_DIR":             { "source": "config" },
     "TEMPLATES_DIR":             { "source": "config" },
     "REPORT_DIR":                { "source": "config" },
-    "FRAMEWORK":                 { "source": "config" },
-    "PRECISION":                 { "source": "config" },
+    "FRAMEWORK":                 { "source": "artifact", "path": "results/sweep_configs.json", "field": "framework" },
+    "PRECISION":                 { "source": "artifact", "path": "results/sweep_configs.json", "field": "precision" },
     "GPUS":                      { "source": "config" },
     "DRY_RUN_NOTE":              { "source": "config" },
     "ENFORCE_EAGER_FLAG":        { "source": "config" },
+    "FILTER_EP":                 { "source": "config" },
     "FILTER_TP":                 { "source": "config" },
     "FILTER_CONC_START":         { "source": "config" },
     "FILTER_CONC_END":           { "source": "config" },
     "FILTER_SEQ":                { "source": "config" },
     "GPU_ARCH":                  { "source": "artifact", "path": "env_info.json", "field": "gpu_arch" },
-    "TP_SIZE":                   { "source": "artifact", "path": "results/sweep_configs.json", "field": "tp" },
-    "SEQ_LENGTHS":               { "source": "artifact", "path": "results/sweep_configs.json", "field": "seq_lengths" },
-    "CONCURRENCY_LEVELS":        { "source": "artifact", "path": "results/sweep_configs.json", "field": "concurrency_levels" },
     "TOP_KERNELS":               { "source": "artifact", "path": "results/gap_analysis/gap_analysis.json", "field": "top_kernels" }
   }
 }

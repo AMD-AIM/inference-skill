@@ -51,9 +51,11 @@ done
 
 DOCKER_LOG="${DOCKER_LOG:-/tmp/${CONTAINER}_profile.log}"
 GPU_ENV=""
-if [ -n "$GPUS" ]; then
+if [ -n "$GPUS" ] && [ "$GPUS" != "auto" ]; then
     GPU_ENV="-e CUDA_VISIBLE_DEVICES=$GPUS"
     echo "Using manually specified GPUs: $GPUS"
+else
+    echo "Using all available GPUs"
 fi
 
 # Pre-run cleanup: kill stale servers

@@ -46,11 +46,16 @@ function dispatch(mode, config):
         if not file_exists(OUTPUT_DIR / artifact_path):
           STOP with error: "Missing artifact {artifact_path}. Run profile mode first."
 
-    # 2. Generate handoff mechanically from required_context
+    # 2. MANDATORY: Generate handoff and write to disk
+    #    The handoff file MUST be written to OUTPUT_DIR/handoff/ BEFORE dispatching.
+    #    Passing context inline in the agent prompt is FORBIDDEN — phase agents
+    #    read their handoff from the file path. Run validate_handoff.py after writing.
     handoff = generate_handoff(phase, config, prior_results)
     write(OUTPUT_DIR/handoff/to-phase-{index}.md, handoff)
+    validate(OUTPUT_DIR/handoff/to-phase-{index}.md)  # scripts/orchestrate/validate_handoff.py
+    assert file_exists(OUTPUT_DIR/handoff/to-phase-{index}.md)
 
-    # 3. Spawn phase agent
+    # 3. Spawn phase agent — pass the handoff FILE PATH, never inline content
     result = spawn_agent(phase.agent, handoff)
 
     # 4. Spawn monitor
@@ -133,9 +138,23 @@ The `generate_handoff` function resolves `required_context` values using `contex
 
 1. If a variable has `"source": "config"`, read from `config.json`.
 2. If a variable has `"source": "artifact"`, read from the specified file path relative to `OUTPUT_DIR`.
-3. If a variable has `"source": "sticky"`, read from `running-summary.md` YAML frontmatter. Note: no `context_sources` entry currently uses this source type. Sticky values are maintained by the monitor in `running-summary.md` frontmatter and are available for handoff generation, but the orchestrator resolves them implicitly from the running summary rather than through an explicit registry mapping.
+3. If a variable has `"source": "sticky"`, read from `running-summary.md` YAML frontmatter.
+4. Sort resolved variables alphabetically and write as `- **KEY**: value` bullets under `## Context`.
+5. Add `## Instructions` with phase-specific execution directives.
+6. On reruns, append `## Prior Attempt Feedback` and optionally `## Root Cause Analysis`.
 
-Each `handoff/to-phase-NN.md` follows the schema in `protocols/handoff-format.md`.
+Each `handoff/to-phase-NN.md` follows the schema in `protocols/handoff-format.md`. The runner's `build_handoff()` method is the canonical implementation.
+
+### CRITICAL: Handoff File Writing Contract
+
+These four rules are non-negotiable. Violating any of them causes phase agents to fail because they cannot find their expected context:
+
+1. **Write to disk**: Every handoff MUST be written as a file to `{OUTPUT_DIR}/handoff/to-phase-{NN}.md`. No exceptions.
+2. **Validate after writing**: Run `python3 {SCRIPTS_DIR}/orchestrate/validate_handoff.py --handoff {path}` immediately after writing. Fix any validation errors before dispatching.
+3. **Verify existence**: After writing, confirm the file exists on disk (`ls -la` or equivalent). A write that silently fails (permissions, wrong path) will cause the phase agent to fail.
+4. **No inline substitution**: NEVER pass handoff content inline in the agent prompt as a substitute for writing the file. Phase agents are instructed to read their handoff from `handoff/to-phase-{NN}.md` — if that file does not exist, they will fail regardless of what was passed in the prompt.
+
+The deterministic `runner.py` already implements `build_handoff()` and `write_handoff()` correctly. When operating as an LLM orchestrator (without runner.py), you MUST replicate this file-writing behavior exactly.
 
 ## RCA Manifest Construction
 
@@ -257,8 +276,8 @@ Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-o
 
 ## Rerun Rules
 
-- `max_reruns_per_phase`: 2 (two re-dispatches after the original attempt)
-- `max_total_reruns`: 5
+- `max_per_phase`: 2 (two re-dispatches after the original attempt)
+- `max_total`: 5
 - Retry counters increment immediately before the budget check for the rerun that is about to be dispatched, so the budget is exhausted only when a counter becomes **greater than** its limit, not when it is merely equal.
 - On FAIL: write a new handoff that appends `## Prior Attempt Feedback` with the monitor's failure comments, `failure_type`, and remediation guidance
 - Infrastructure failures get an additional `## Environment Check` section
@@ -286,9 +305,33 @@ Update `progress.json` after each monitor review (PASS, WARN, or FAIL). On FAIL+
 
 ## Platform Spawning
 
-**Cursor**: Use `Task` tool with `subagent_type="generalPurpose"` for phase and monitor agents. Use `subagent_type="shell"` for container operations. Pass the handoff document content as the task prompt.
+Full protocol details and context-budget rules are in `protocols/platform-dispatch.md`.
 
-**Claude Code / OpenCode**: Use `Agent` tool. Pass the handoff document path for the agent to read.
+### Cursor
+
+| Agent Role | `subagent_type` | `model` | Prompt Shape |
+|---|---|---|---|
+| Phase agent | `generalPurpose` | inherit | Agent doc + handoff content inlined |
+| Monitor agent | `generalPurpose` | `fast` | `monitor.md` + result + summary inlined |
+| Analysis/RCA agent | `generalPurpose` | inherit | Manifest + context files inlined |
+| Coding agent | `generalPurpose` | inherit | Task from parent phase agent |
+| Container ops | `shell` | `fast` | Shell commands only |
+
+`inherit` = omit the `model` parameter; the subagent runs on the parent session's model.
+
+Prompt assembly for phase agents: read `agents/phase-NN-*.md` content and `handoff/to-phase-NN.md` content, concatenate with `---` separator, truncate to `max_context_lines`, pass as `Task` `prompt`. Use `AskQuestion` tool for guided setup.
+
+### Claude Code / OpenCode
+
+| Agent Role | Tool | Prompt Shape |
+|---|---|---|
+| Phase agent | `Agent` | **Step 1**: Write handoff to `handoff/to-phase-NN.md`. **Step 2**: Validate with `validate_handoff.py`. **Step 3**: Spawn agent with path to handoff file. Agent reads from disk — NEVER inline content. |
+| Monitor agent | `Agent` | Paths to monitor docs + result + summary |
+| Analysis/RCA agent | `Agent` | Path to manifest file |
+| Coding agent | `Agent` | Spawned by parent phase agent |
+| Container ops | `bash` | Direct shell commands |
+
+Use `question` tool for guided setup.
 
 ## Status Updates
 
@@ -297,6 +340,18 @@ Emit a visible status update to the user:
 - After each monitor review (with verdict)
 - On any rerun attempt
 - On workflow completion or failure
+
+### Subagent Progress Visibility
+
+When dispatching phase agents via the `Agent` tool, the subagent's output is only visible
+after it completes. To provide progress visibility:
+
+1. Set the `description` field of the Agent tool call to a human-readable phase status,
+   e.g., `"Phase 7/9: optimizing GPU kernels (~60-90 min)"`.
+2. In each phase agent's handoff `## Instructions`, include:
+   `Emit a one-line progress update to stdout before each major runbook step.`
+3. For phases with timeout > 30 min (benchmark, profile, kernel-optimize, integration),
+   add: `Print a brief status line every ~5 minutes during container operations.`
 
 ## Interrupt and Resume
 
