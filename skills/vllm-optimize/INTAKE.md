@@ -1,77 +1,203 @@
-# vLLM Optimize - Intake
+# Guided Intake
 
-## Configuration Options
+Use this file to control the user interaction flow.
 
-### Model Selection
+## Goal
 
-Any HuggingFace model that vLLM supports:
-- Llama variants: `meta-llama/Llama-3.1-8B-Instruct`
-- Qwen variants: `Qwen/Qwen3.5-35B-A3B`
-- Mistral variants: `mistralai/Mistral-7B-Instruct-v0.3`
-- Custom models: path to local model or HF model ID
+Target UX:
 
-### Benchmark Parameters
+1. User names a model (e.g., `Qwen/Qwen3.5-4B`).
+2. Agent asks 2-3 short setup rounds (batched when possible).
+3. Agent summarizes the plan.
+4. Agent starts workflow after confirmation.
 
-| Parameter | Default | Range | Description |
-|-----------|---------|-------|-------------|
-| ISL | 1024 | 128-32K | Input sequence length |
-| OSL | 1024 | 16-4K | Output sequence length |
-| CONCURRENCY | 4,8,16,32,64,128 | 1-256 | Concurrency levels to test |
-| TP | 1 | 1-8 | Tensor parallelism |
-| PRECISION | fp16 | fp16, fp8, bf16 | Model precision |
-| FRAMEWORK | vLLM | vLLM | Inference framework |
+The user should never need to manually construct a full command.
 
-### Profiling Options
+## User-facing language rules
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| PROFILE_ITERATIONS | 128 | Number of profiler iterations |
-| PROFILE_DELAY | 0 | Delay before profiling starts |
-| ENABLE_TRACE | true | Generate torch profiler trace |
-| GAP_ANALYSIS | true | Analyze GPU kernel breakdown |
+- Treat a model name like `Qwen/Qwen3.5-4B` as enough to start.
+- Prefer the user-facing terms `TP`, `sequence length`, `concurrency`, `output path`.
+- Do not expose internal variable names in the first round.
+- Prefer choice-based questions over open-ended prompts.
+- Prefer the native `question` tool when available.
+- Keep setup tight: avoid more than 3 rounds unless the user explicitly asks to customize everything.
+- Batch multi-question rounds into one form.
 
-### Output Options
+## Status output contract
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| OUTPUT_DIR | ./vllm_results | Results directory |
-| SAVE_TRACE | true | Save raw profiler trace |
-| GENERATE_REPORT | true | Generate markdown report |
+Always show the user what stage you are in:
 
-## Filter Options
+- `Status 1/5: target model found. I'll ask one short setup form next.`
+- `Status 2/5: setup choices received. Checking available configuration options.`
+- `Status 3/5: discovery complete. Showing filter choices now.`
+- `Status 4/5: plan ready. One final confirmation and I'll start.`
+- `Status 5/5: starting execution. I'll report progress at each phase boundary.`
 
-### Smoke Test Defaults
-- Concurrency: 4, 16, 64
-- Sequence length: 1024
-- Profile iterations: 64
+## Intake algorithm
 
-### Full Sweep
-- Concurrency: 4, 8, 16, 32, 64, 128
-- Sequence length: 512, 1024, 2048
-- Profile iterations: 128
+1. Resolve the target model name from the user text.
+2. Send a kickoff status update.
+3. Ask the Round 1 high-level question set in one batched form.
+4. If the answers require a concrete path or GPU list, ask one short follow-up.
+5. Send a status update before discovery starts.
+6. Read [`RUNTIME.md`](RUNTIME.md) and do only the lightweight discovery needed.
+7. Send a status update when discovery is complete.
+8. If this is a smoke-style run, offer a fast path with recommended smoke defaults.
+9. Only if the user wants customization, ask the detailed filter question set.
+10. Summarize the plan and ask for final confirmation.
+11. After confirmation, send an execution-start status update and begin work.
 
-### Custom
-- User specifies which parameters to sweep
+## Round 1: exact high-level question set
 
-## Discovery
+### Question 1
 
-The skill will auto-detect:
-- GPU model (MI355X, MI300X, A100, H100, etc.)
-- Available GPU memory
-- vLLM installation and version
-- ROCm/CUDA version
+- `header`: `Run plan`
+- `question`: `What kind of run should I prepare for this model?`
+- `options`:
+  - `Smoke full workflow`: `Quick end-to-end run with narrow filters, including profile analysis`
+  - `Smoke benchmark only`: `One small benchmark point without profiling`
+  - `Benchmark only`: `Run benchmark and benchmark analysis only`
+  - `Profile only`: `Run profiling and profile analysis only (requires server running)`
+  - `Full workflow`: `Run benchmark plus profiling workflow`
+  - `Optimize workflow`: `Full workflow including kernel optimization`
+  - `Optimize from existing profile`: `Run kernel optimization using existing profiling data`
 
-## Questions
+Map these to:
 
-### Round 1 (High Level)
+- `Smoke full workflow` -> `mode=full` with narrow filters
+- `Smoke benchmark only` -> `mode=benchmark` with narrow filters
+- `Benchmark only` -> `mode=benchmark`
+- `Profile only` -> `mode=profile`
+- `Full workflow` -> `mode=full`
+- `Optimize workflow` -> `mode=optimize`
+- `Optimize from existing profile` -> `mode=optimize-only`, ask for existing output path
 
-1. **Run plan**: Smoke test / Full sweep / Custom
-2. **Output**: Default ./vllm_results or custom path
-3. **GPUs**: All available or specific GPU IDs
+### Question 2
 
-### Round 2 (After Discovery)
+- `header`: `Output`
+- `question`: `How should I handle the output directory?`
+- `options`:
+  - `New timestamped output`: `Create a fresh timestamped output directory`
+  - `Custom output path`: `Use a specific output path I provide`
 
-Model-specific options:
-- Precision (if model supports fp8)
-- Custom vLLM flags
-- Specific sequence lengths to test
+### Question 3
+
+- `header`: `GPUs`
+- `question`: `How should I choose GPUs for this run?`
+- `options`:
+  - `Auto-select GPUs`: `Let the workflow choose the most suitable GPUs`
+  - `Use current CUDA/HIP env`: `Respect current CUDA_VISIBLE_DEVICES or HIP_VISIBLE_DEVICES`
+  - `Specify GPU IDs`: `I will provide explicit GPU device IDs`
+
+## Follow-up questions only when needed
+
+Ask a short follow-up only for missing concrete values:
+
+- If the user chose `Custom output path`, ask for the path.
+- If the user chose `Specify GPU IDs`, ask for comma-separated GPU IDs.
+
+## Lightweight discovery before filter questions
+
+Before asking about TP / sequence / concurrency:
+
+1. Read [`RUNTIME.md`](RUNTIME.md).
+2. Discover available GPU configuration.
+3. Do not start the expensive benchmark or profile run yet.
+
+## Smoke fast path
+
+If the selected run plan is a smoke run, offer a fast path:
+
+- `header`: `Filters`
+- `question`: `How should I choose TP, sequence length, and concurrency for this smoke run?`
+- `options`:
+  - `Use recommended smoke defaults`: `Pick one narrow, representative configuration`
+  - `Review each filter`: `Let me choose TP, sequence length, and concurrency`
+
+## Recommended smoke defaults heuristic
+
+- TP: if only one value available, use it; else prefer `1` for consumer GPUs, `8` for data center GPUs.
+- Sequence length: prefer `1k1k` (ISL=1024, OSL=1024).
+- Concurrency: prefer `4` for smoke runs.
+
+## Detailed filter question set
+
+### TP question
+
+- `header`: `TP`
+- `question`: `Which tensor parallelism setting should I use?`
+- `options`:
+  - `Recommended`
+  - `1` (single GPU)
+  - `2`
+  - `4`
+  - `8`
+
+### Sequence question
+
+- `header`: `Seq len`
+- `question`: `Which sequence length preset should I use?`
+- `options`:
+  - `Recommended`
+  - `1k1k`: `ISL=1024, OSL=1024`
+  - `1k8k`: `ISL=1024, OSL=8192`
+  - `8k1k`: `ISL=8192, OSL=1024`
+  - `Custom`
+
+### Concurrency question
+
+- `header`: `Conc`
+- `question`: `Which concurrency levels should I test?`
+- `options`:
+  - `Recommended`
+  - `Smoke`: `4, 16, 64`
+  - `Full sweep`: `4, 8, 16, 32, 64, 128`
+  - `Custom range`
+
+### Profiling extras (if profiling is included)
+
+- `header`: `Profile`
+- `question`: `Any profiling-specific options?`
+- `options`:
+  - `Default profiling settings`
+  - `Enable eager mode`
+  - `Reuse existing profile artifacts if present`
+  - `Always start profile collection fresh`
+
+### Optimization extras (if mode is optimize or optimize-only)
+
+- `header`: `Optimize`
+- `question`: `What optimization scope should I use?`
+- `options`:
+  - `Default optimization settings (Recommended)`: `Auto-research with Triton; GEAK if available; 8 attempts, stop after 3 consecutive failures`
+  - `Deep optimization`: `More aggressive: 15 attempts, stop after 5 consecutive failures`
+  - `Quick optimization`: `Fast: 4 attempts, stop after 2 consecutive failures`
+  - `GEAK full mode`: `Use GEAK for Triton and HIP/CK kernels (requires GEAK installed)`
+  - `Skip integration benchmark`: `Optimize kernels only, skip E2E benchmark`
+
+Map these to:
+- `Default` → `MAX_OPTIMIZATION_ATTEMPTS=8, MAX_CONSECUTIVE_REJECTIONS=3`
+- `Deep` → `MAX_OPTIMIZATION_ATTEMPTS=15, MAX_CONSECUTIVE_REJECTIONS=5`
+- `Quick` → `MAX_OPTIMIZATION_ATTEMPTS=4, MAX_CONSECUTIVE_REJECTIONS=2`
+- `GEAK full` → `GEAK_MODE=full`
+- `Skip integration` → `SKIP_INTEGRATION=true`
+
+## Final confirmation
+
+Before execution, summarize:
+
+- model name
+- run plan and mode
+- output path
+- TP / sequence / concurrency selection
+- GPU selection
+- profiling behavior
+
+Then ask one final question:
+
+- `header`: `Confirm`
+- `question`: `Start the workflow with these settings?`
+- `options`:
+  - `Start now`
+  - `Edit choices`
+  - `Cancel`

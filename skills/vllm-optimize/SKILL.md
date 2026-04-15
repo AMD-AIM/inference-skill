@@ -1,70 +1,84 @@
 ---
 name: vllm-optimize
-description: "Run vLLM benchmark and profiling workflow in containerized environments. Provides automated model loading, concurrency sweep, torch profiling, and GPU kernel analysis. Works with AMD MI355X/MI300X and NVIDIA GPUs."
+description: "Run vLLM benchmark, profiling, and kernel optimization workflow for AMD and NVIDIA GPUs. Provides automated model loading, concurrency sweep, torch profiling, GPU kernel analysis, and kernel optimization with GEAK support."
 compatibility: claude-code, opencode
 metadata:
-  workflow: vllm-benchmark
+  workflow: vllm
   audience: performance-engineers
   distribution: standalone-skill-repo
 ---
 
 # vLLM Optimize
 
-Automated vLLM inference benchmark and profiling workflow for containerized environments.
+Automated vLLM inference benchmark, profiling, and kernel optimization workflow. Works with AMD GPUs (MI355X, MI300X, R7900/RDNA3) and NVIDIA GPUs.
 
-## Quick Start
+## Default user experience
 
-Run the workflow with a model name:
+- Treat a bare model name as enough to start. Do not require the user to spell out a full command.
+- If the user says `use vllm-optimize skill for <model>`, start guided setup immediately.
+- Prefer the native `question` tool for multiple-choice prompts when available.
+- Ask questions in grouped batches, not as a drip-feed.
+- Keep explicit progress updates so the user always knows current stage and next step.
+- Inform user about GEAK availability during setup when running in optimize mode.
 
-```
-use vllm-optimize skill for Qwen/Qwen3.5-35B-A3B
-```
+## First-turn latency rule
 
-The skill will automatically:
-1. Start vLLM server with the specified model
-2. Run benchmark at various concurrency levels
-3. Generate profiling traces
-4. Analyze GPU kernel performance
+- Do not read any other file before the first visible reply unless the model name is ambiguous.
+- Send one short kickoff status update.
+- Ask the first grouped setup form.
 
-## First-turn Latency Rule
+## Guided setup flow
 
-- Do not read any other file before the first visible reply
-- Send one short kickoff status update explaining the workflow
-- Ask the first grouped setup form with options
+1. Resolve the target model name from the user's input.
+2. Start with one short high-level question round:
+   - `Run plan`
+   - `Output`
+   - `GPUs`
+3. After Round 1 answers, read [`INTAKE.md`](INTAKE.md) for deeper config.
+4. Read [`RUNTIME.md`](RUNTIME.md) only when about to do discovery or execution.
+5. Ask high-level setup questions first, then do lightweight discovery, then ask filter-specific questions.
+6. Summarize the final plan and get a clear go/no-go before executing.
+7. Only after confirmation, read the needed phase docs and start execution.
 
-## Guided Setup Flow
+## Status contract
 
-1. Start with one short high-level question round:
-   - `Run plan` (smoke test vs full sweep)
-   - `Output` (where to save results)
-   - `GPUs` (which GPUs to use)
-
-2. After Round 1 answers, read `INTAKE.md` for deeper config
-
-3. Read `RUNTIME.md` for execution bootstrap
-
-4. Summarize the final plan and get confirmation before executing
-
-5. After confirmation, start execution following phase docs
+- Before the first question round, send one short kickoff status message.
+- After every major stage transition, send one short progress update.
+- During long benchmark or profile runs, stream live output and emit heartbeat updates.
+- Keep status updates human-readable.
 
 ## Modes
 
-- `full`: benchmark + profiling + analysis
-- `benchmark`: benchmark only (faster)
-- `profile`: profiling only (requires server running)
+- `full`: `env -> vllm-setup -> benchmark -> benchmark-analyze -> profiling -> profile-analyze`
+- `benchmark`: `env -> vllm-setup -> benchmark -> benchmark-analyze`
+- `profile`: `env -> vllm-setup -> profiling -> profile-analyze` (requires server running)
+- `optimize`: `env -> vllm-setup -> benchmark -> benchmark-analyze -> profiling -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`. Supports GEAK-accelerated kernel optimization when installed.
+- `optimize-only`: `env -> vllm-setup -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing profile analysis artifacts).
 
-## Files to Read
+Choose the narrowest mode that matches the user's goal.
 
-1. Before Round 1: no extra file reads required
-2. After Round 1 answers: `INTAKE.md`
-3. Before execution: `RUNTIME.md`
-4. Phase docs: `phases/*.md`
+## Files to read
+
+Read these in this order:
+
+1. Before Round 1: no extra file reads required.
+2. After Round 1 answers: [`INTAKE.md`](INTAKE.md)
+3. Before discovery/bootstrap: [`RUNTIME.md`](RUNTIME.md)
+4. Before execution: only the phase docs needed for the chosen mode
+5. Read [`EXAMPLES.md`](EXAMPLES.md) only if interaction quality has drifted.
 
 ## References
 
-- [`INTAKE.md`](INTAKE.md) - Configuration options
-- [`RUNTIME.md`](RUNTIME.md) - Execution details
+- [`INTAKE.md`](INTAKE.md)
+- [`RUNTIME.md`](RUNTIME.md)
+- [`EXAMPLES.md`](EXAMPLES.md)
+- [Phase 0: Environment Setup](phases/00-env-setup.md)
 - [Phase 1: vLLM Server Setup](phases/01-vllm-setup.md)
 - [Phase 2: Benchmark Execution](phases/02-benchmark.md)
-- [Phase 3: Profiling](phases/03-profiling.md)
-- [Phase 4: Analysis](phases/04-analysis.md)
+- [Phase 3: Benchmark Analysis](phases/03-benchmark-analyze.md)
+- [Phase 4: Profiling](phases/04-profiling.md)
+- [Phase 5: Profile Analysis](phases/05-profile-analyze.md)
+- [Phase 6: Problem Generation](phases/06-problem-generate.md)
+- [Phase 7: Kernel Optimization](phases/07-kernel-optimize.md)
+- [Phase 8: Integration & E2E Benchmark](phases/08-integration.md)
+- [Phase 9: Final Report](phases/09-report-generate.md)
