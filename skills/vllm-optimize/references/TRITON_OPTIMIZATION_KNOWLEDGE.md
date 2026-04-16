@@ -140,7 +140,20 @@ tl.store(Out + row * stride + tl.arange(0, BLOCK_N), result)
 - Measure launch overhead vs compute time
 - Compare grid size to CU count (underfull GPU = bad)
 
-## 10. Available Techniques Catalog
+## 10. Lessons from Experiments
+
+### Triton autotune in LLM serving (measured on gfx1100 + Qwen3-8B)
+- Micro-benchmark: autotune finds 1.1x avg speedup over rocBLAS for GEMM
+- E2E serving: **0.43x throughput** (2.3x SLOWER) due to autotune overhead
+- Root cause: dynamic batching causes M to change every iteration; each new (M,N,K) triggers autotune benchmark sweep
+- Fix: pre-warm autotune cache for all expected M values before serving, OR use fixed configs
+
+### Integration path for vLLM on ROCm
+- Patch point: `vllm.model_executor.layers.linear.dispatch_unquantized_gemm` (NOT `utils.rocm_unquantized_gemm_impl` — the torch custom op captures the reference at registration time)
+- Injection: `sitecustomize.py` via `PYTHONPATH` (works in spawn'd child processes)
+- Weight convention: vLLM weight is (out_features, in_features), need `weight.t()` for Triton
+
+## 11. Available Techniques Catalog
 
 These are techniques you CAN try. Do NOT follow them in fixed order. Choose based on profiling data.
 
