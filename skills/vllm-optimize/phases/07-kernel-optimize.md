@@ -81,6 +81,8 @@ Based on the current state, reason about what the bottleneck is:
 
 ### 2c. Write the kernel
 
+**IMPORTANT**: Triton `@triton.jit` kernels MUST be defined in `.py` files. They CANNOT be defined in `python3 -c "..."` inline scripts — the JIT compiler needs to read the source file. Always write to a file first, then test it.
+
 Create a new `.py` file at `{{OPTIMIZED_DIR}}/<ktype>/attempt_<N>.py`. The file MUST define:
 - `reference(*inputs)` → the PyTorch reference implementation
 - `optimized(*inputs)` → your Triton implementation

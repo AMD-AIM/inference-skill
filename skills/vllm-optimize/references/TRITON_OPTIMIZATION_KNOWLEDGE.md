@@ -135,6 +135,11 @@ tl.store(Out + row * stride + tl.arange(0, BLOCK_N), result)
 - Register spill → reduce num_warps, reduce tile size
 - Out of LDS → reduce BLOCK_K or remove shared memory usage
 
+### Triton JIT compilation constraint
+- `@triton.jit` decorated functions **MUST be defined in .py files**, not in `python3 -c "..."` inline scripts or stdin
+- Triton's JIT compiler reads the source file to generate the kernel; inline code has no file to read
+- Always write kernel code to a `.py` file first, then import/execute it
+
 ### Performance regression
 - Check if autotune selected a bad config (print autotune result)
 - Measure launch overhead vs compute time

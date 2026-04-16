@@ -57,6 +57,9 @@ Resolve these before loading any phase doc:
 - `OPTIMIZE_SCOPE` (all, fused_only; from INTAKE optimization extras)
 - `MAX_OPTIMIZATION_ATTEMPTS` (default 8; from INTAKE optimization extras)
 - `MAX_CONSECUTIVE_REJECTIONS` (default 3; from INTAKE optimization extras)
+- `HF_ENDPOINT` (optional; HuggingFace mirror/proxy URL, e.g., `http://mirror:port`)
+- `HF_HUB_DISABLE_XET` (optional; set to `1` if HF hub XET causes issues)
+- `MAX_CONSECUTIVE_REJECTIONS` (default 3; from INTAKE optimization extras)
 
 ## Recommended defaults
 
@@ -80,6 +83,8 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`: `<OUTPUT_DIR>/env_info.json`
 - `GEAK_MODE`: `auto`
 - `OPTIMIZE_SCOPE`: `all`
+- `HF_ENDPOINT`: (empty by default; set only if HuggingFace is not directly reachable)
+- `HF_HUB_DISABLE_XET`: (empty by default; set to `1` if needed)
 
 ## Placeholder rules
 

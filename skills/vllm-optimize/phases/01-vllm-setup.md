@@ -87,18 +87,22 @@ export VLLM_RPC_TIMEOUT=1800000
 mkdir -p "{{OUTPUT_DIR}}" "{{PROFILE_DIR}}" "{{REPORT_DIR}}" "{{SCRIPTS_DIR}}"
 ```
 
-### 6. Validate Model Availability
+### 6. Ensure Model is Available Locally
 
-**Do NOT load the full model weights.** Only verify the model path/config exists.
+If `{{MODEL}}` is a local directory, validate it has config.json and weight files.
+If it is a HuggingFace model ID (e.g., `org/model-name`), **download it first** using `huggingface-cli download`, then update the model path to the local directory.
+
+**Do NOT rely on vLLM to download the model at startup** — that gives no progress feedback and fails silently on network issues.
 
 ```bash
 python3 << 'PYEOF'
-import os, sys, json
+import os, sys, json, subprocess
 
 model = "{{MODEL}}"
-print(f"Validating model: {model}")
+print(f"Checking model: {model}")
 
 if os.path.isdir(model):
+    # Local path — validate
     config_path = os.path.join(model, "config.json")
     if not os.path.isfile(config_path):
         print(f"ERROR: config.json not found in {model}")
@@ -107,23 +111,57 @@ if os.path.isdir(model):
         cfg = json.load(f)
     print(f"  model_type: {cfg.get('model_type', 'unknown')}")
     print(f"  architectures: {cfg.get('architectures', [])}")
-    safetensors = [f for f in os.listdir(model) if f.endswith('.safetensors')]
-    print(f"  weight files: {len(safetensors)} safetensors")
-    if not safetensors:
+    weights = [f for f in os.listdir(model) if f.endswith(('.safetensors', '.bin'))]
+    print(f"  weight files: {len(weights)}")
+    if not weights:
         print("ERROR: No weight files found")
         sys.exit(1)
-    print(f"Model directory verified: {model}")
+    print(f"Model ready: {model}")
 else:
-    # Remote model: just check config is accessible (no weight download)
-    try:
-        from huggingface_hub import model_info
-        info = model_info(model)
-        print(f"  Remote model verified: {info.modelId}")
-    except Exception as e:
-        print(f"ERROR: Cannot access model {model}: {e}")
+    # Remote HF model ID — download to local directory
+    # Derive local path: /app/<model-name> or {{OUTPUT_DIR}}/<model-name>
+    model_name = model.split("/")[-1]
+    local_dir = os.path.join("/app", model_name)
+    
+    if os.path.isdir(local_dir) and os.path.isfile(os.path.join(local_dir, "config.json")):
+        weights = [f for f in os.listdir(local_dir) if f.endswith(('.safetensors', '.bin'))]
+        if weights:
+            print(f"Model already downloaded at {local_dir} ({len(weights)} weight files)")
+            # Write the resolved local path for subsequent steps
+            with open("{{OUTPUT_DIR}}/resolved_model_path.txt", "w") as f:
+                f.write(local_dir)
+            sys.exit(0)
+    
+    print(f"Downloading {model} to {local_dir}...")
+    result = subprocess.run(
+        ["huggingface-cli", "download", model, "--local-dir", local_dir],
+        capture_output=False, text=True, timeout=1800  # 30 min timeout
+    )
+    if result.returncode != 0:
+        print(f"ERROR: Download failed with exit code {result.returncode}")
         sys.exit(1)
+    
+    # Validate download
+    if not os.path.isfile(os.path.join(local_dir, "config.json")):
+        print(f"ERROR: Download completed but config.json not found in {local_dir}")
+        sys.exit(1)
+    
+    weights = [f for f in os.listdir(local_dir) if f.endswith(('.safetensors', '.bin'))]
+    print(f"Model downloaded: {local_dir} ({len(weights)} weight files)")
+    
+    # Write the resolved local path for subsequent steps
+    with open("{{OUTPUT_DIR}}/resolved_model_path.txt", "w") as f:
+        f.write(local_dir)
 PYEOF
+
+# If model was downloaded, update MODEL to local path
+if [ -f "{{OUTPUT_DIR}}/resolved_model_path.txt" ]; then
+    MODEL=$(cat "{{OUTPUT_DIR}}/resolved_model_path.txt")
+    echo "Using resolved model path: $MODEL"
+fi
 ```
+
+**IMPORTANT**: If the model was a remote ID and got downloaded, all subsequent steps (including the vLLM start command) should use the resolved local path from `resolved_model_path.txt`.
 
 ### 7. Start vLLM Server and Wait for Ready
 

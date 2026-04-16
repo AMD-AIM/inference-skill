@@ -6,10 +6,12 @@ Use this file to control the user interaction flow.
 
 Target UX:
 
-1. User names a model (e.g., `Qwen/Qwen3.5-4B`).
+1. User names a model (e.g., `Qwen/Qwen3.5-4B` or `/app/MyModel`).
 2. Agent asks 2-3 short setup rounds (batched when possible).
 3. Agent summarizes the plan.
 4. Agent starts workflow after confirmation.
+
+The model can be a HuggingFace ID or a local path. Phase 1 will handle downloading if needed — the user does not need to pre-download.
 
 The user should never need to manually construct a full command.
 
@@ -95,6 +97,25 @@ Ask a short follow-up only for missing concrete values:
 
 - If the user chose `Custom output path`, ask for the path.
 - If the user chose `Specify GPU IDs`, ask for comma-separated GPU IDs.
+
+## Network/environment detection (auto, no user question needed)
+
+Before any model download or HuggingFace access, the agent should auto-detect:
+
+1. **HF_ENDPOINT**: Check if `HF_ENDPOINT` env var is already set. If not, test if `huggingface.co` is directly reachable. If not reachable, ask the user for a proxy URL.
+2. **HF_HUB_DISABLE_XET**: Check if set. If the HF hub version has XET issues, set it.
+
+If the user provided a local model path (e.g., `/app/MyModel`), no HuggingFace access is needed — skip this.
+
+This detection happens automatically during Phase 1 Step 6 (model download). The variables are set in Phase 1 Step 4 with `${HF_ENDPOINT:-}` defaults. If the user's environment already has these set, nothing extra is needed.
+
+**If model download fails**, the agent should ask the user:
+- `header`: `Network`
+- `question`: `Model download failed. Do you have a HuggingFace proxy or mirror?`
+- `options`:
+  - `Provide proxy URL`: `I have an HF_ENDPOINT URL`
+  - `Model is already local`: `Point me to the local path`
+  - `No proxy needed`: `Retry with direct access`
 
 ## Lightweight discovery before filter questions
 
