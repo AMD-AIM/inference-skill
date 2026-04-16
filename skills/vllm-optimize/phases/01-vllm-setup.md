@@ -11,11 +11,15 @@ Start vLLM server with required configuration for benchmark and profiling.
 
 ### 1. Kill Any Existing vLLM Processes
 
-Always clean up before starting:
+**Kill both the API server AND the EngineCore worker processes.** The EngineCore holds GPU memory — if only the API server is killed, EngineCore becomes a zombie and leaks VRAM.
+
 ```bash
+# Kill EngineCore workers first (they hold GPU memory)
+pkill -9 -f "VLLM::EngineCore" 2>/dev/null || true
+# Then kill the API server
 pkill -9 -f "vllm.entrypoints" 2>/dev/null || true
 sleep 2
-echo "Cleaned stale vLLM processes"
+echo "Cleaned vLLM processes"
 ```
 
 ### 2. Environment Validation
@@ -90,7 +94,7 @@ mkdir -p "{{OUTPUT_DIR}}" "{{PROFILE_DIR}}" "{{REPORT_DIR}}" "{{SCRIPTS_DIR}}"
 ### 6. Ensure Model is Available Locally
 
 If `{{MODEL}}` is a local directory, validate it has config.json and weight files.
-If it is a HuggingFace model ID (e.g., `org/model-name`), **download it first** using `huggingface-cli download`, then update the model path to the local directory.
+If it is a HuggingFace model ID (e.g., `org/model-name`), **download it first** using `hf download`, then update the model path to the local directory.
 
 **Do NOT rely on vLLM to download the model at startup** — that gives no progress feedback and fails silently on network issues.
 
@@ -134,7 +138,7 @@ else:
     
     print(f"Downloading {model} to {local_dir}...")
     result = subprocess.run(
-        ["huggingface-cli", "download", model, "--local-dir", local_dir],
+        ["hf", "download", model, "--local-dir", local_dir],
         capture_output=False, text=True, timeout=1800  # 30 min timeout
     )
     if result.returncode != 0:

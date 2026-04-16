@@ -4,7 +4,12 @@ This file is a persistent reference for the kernel optimization agent. Read it a
 
 ## 1. Autotuning
 
-Always use `@triton.autotune` with a range of tile sizes. Never hardcode a single config.
+`@triton.autotune` benchmarks multiple configs at runtime to find the best one for each (M, N, K) combination.
+
+**WARNING for serving/inference**: In LLM serving with dynamic batching, M changes every iteration. Each new (M, N, K) triggers autotune's benchmark sweep, causing **2-5x throughput regression**. Use `serving-test` to verify before deploying.
+
+**For micro-benchmarks** (fixed shapes): autotune is fine and finds optimal configs.
+**For serving** (dynamic shapes): use the best config found during Phase 7 as a fixed config, or pre-warm the autotune cache for all expected M values before serving.
 
 ```python
 @triton.autotune(
@@ -152,6 +157,13 @@ tl.store(Out + row * stride + tl.arange(0, BLOCK_N), result)
 - E2E serving: **0.43x throughput** (2.3x SLOWER) due to autotune overhead
 - Root cause: dynamic batching causes M to change every iteration; each new (M,N,K) triggers autotune benchmark sweep
 - Fix: pre-warm autotune cache for all expected M values before serving, OR use fixed configs
+
+### Triton JIT compilation overhead (even without autotune)
+- Even with fixed configs (no `@triton.autotune`), Triton has first-call JIT compilation overhead per (M, N, K) combination
+- After JIT cache warms up, subsequent calls to the same shape are fast
+- In serving, if M varies rapidly through many unique values, the JIT cache may not help
+- `serving-test` command simulates this and reports verdict
+- If `serving-test` shows regression but E2E shows improvement, the kernel is borderline — E2E is the ground truth
 
 ### Integration path for vLLM on ROCm
 - Patch point: `vllm.model_executor.layers.linear.dispatch_unquantized_gemm` (NOT `utils.rocm_unquantized_gemm_impl` — the torch custom op captures the reference at registration time)

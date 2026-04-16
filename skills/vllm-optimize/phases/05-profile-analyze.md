@@ -164,7 +164,27 @@ python3 {{SCRIPTS_DIR}}/analyze_fusion_vllm.py \
     --gpu-arch "{{OUTPUT_DIR}}/results/gpu_arch.json"
 ```
 
-### 5. Generate GPU Architecture Info
+### 5. Extract Real GEMM Shapes from Trace
+
+**CRITICAL for kernel optimization**: Extract the actual (M, K, N) shapes dispatched during inference. These are the shapes that Phase 7's kernel agent must optimize for — NOT shapes guessed from model config.
+
+```bash
+python3 {{SCRIPTS_DIR}}/extract_trace_shapes.py \
+    --trace-dir "{{PROFILE_DIR}}" \
+    --output "{{OUTPUT_DIR}}/results/real_shapes.json"
+```
+
+If the script is not available, copy it from the skill:
+```bash
+cp {{SKILL_DIR}}/scripts/extract_trace_shapes.py {{SCRIPTS_DIR}}/ 2>/dev/null || true
+```
+
+The output `real_shapes.json` contains:
+- Every unique (M, K, N) actually observed, with call counts
+- `unique_m_values`: the real batch sizes (e.g., [1, 129] not [1, 64, 256])
+- `benchmark_shapes`: ready-to-use shape pairs for kernel agent benchmarking
+
+### 6. Generate GPU Architecture Info
 ```bash
 python3 -c "
 import json, os, subprocess

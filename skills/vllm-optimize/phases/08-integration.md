@@ -55,22 +55,41 @@ In micro-benchmarks, autotune finds optimal configs for fixed shapes. But in vLL
 ### Step 1: Baseline E2E benchmark
 Run a short benchmark on the current **unpatched** server. Save to `{{OUTPUT_DIR}}/results/baseline_e2e.json`.
 
-### Step 2: Create the patch
-Write the auto_patch.py and sitecustomize.py in `{{OPTIMIZED_DIR}}`.
+### Step 2: Deploy the patch
 
-The optimized kernel must handle the vLLM weight convention: weight is `(out_features, in_features)`, so call `triton_fn(x_2d, weight.t())`.
+Copy the bundled patch scripts to `{{OPTIMIZED_DIR}}`:
+```bash
+cp {{SCRIPTS_DIR}}/../scripts/auto_patch.py {{OPTIMIZED_DIR}}/auto_patch.py 2>/dev/null || \
+cp $(dirname {{SCRIPTS_DIR}})/scripts/auto_patch.py {{OPTIMIZED_DIR}}/auto_patch.py 2>/dev/null || \
+cp ~/.claude/skills/vllm-optimize/scripts/auto_patch.py {{OPTIMIZED_DIR}}/auto_patch.py
 
-The patch must:
-- Track call counts (`triton`, `fallback`, `error`) and persist to a JSON file
-- Catch all exceptions and fall back to original
+echo 'import auto_patch' > {{OPTIMIZED_DIR}}/sitecustomize.py
+```
+
+The `auto_patch.py` is a **bundled, verified script** that:
+- Uses a meta_path import hook to patch `linear_mod.dispatch_unquantized_gemm`
+- Loads `{{OPTIMIZED_DIR}}/gemm/best_kernel.py` and calls its `optimized(A, B)` function
+- Handles weight transpose (vLLM weight is out×in, Triton expects in×out)
+- Tracks call counts in `{{OPTIMIZED_DIR}}/.call_stats.json`
+- Catches all exceptions and falls back to original
 
 ### Step 3: Address the autotune problem
 Before deploying, fix the autotune overhead. The recommended approach: run a pre-warm loop that calls the Triton kernel with M values [1, 2, 4, 8, 16, 32, 64] to populate the autotune cache, then start serving.
 
 ### Step 4: Kill current server, start patched server
+
+Kill the server cleanly — **must kill EngineCore workers** (they hold GPU memory):
+```bash
+pkill -9 -f "VLLM::EngineCore" 2>/dev/null || true
+pkill -9 -f "vllm.entrypoints" 2>/dev/null || true
+sleep 2
+```
+
+Then start the patched server:
 - Select GPU with `select_gpus.py`
 - Set `PYTHONPATH={{OPTIMIZED_DIR}}:$PYTHONPATH`
-- Start vLLM, wait with fail-fast detection
+- Start vLLM with same args as Phase 1
+- Use fail-fast startup detection (check PID + log errors, don't blindly wait)
 
 ### Step 5: Verify kernel is active
 Send requests, then read the stats JSON file. `triton` count must be > 0.

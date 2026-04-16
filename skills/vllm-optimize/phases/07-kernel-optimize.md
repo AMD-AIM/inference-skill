@@ -23,7 +23,8 @@ CUDA_VISIBLE_DEVICES={{SELECTED_GPU}} python3 {{SCRIPTS_DIR}}/kernel_optimize_ag
     --output-dir "{{OPTIMIZED_DIR}}" \
     --threshold {{OPTIMIZE_PRIORITY_THRESHOLD}} \
     --max-attempts {{MAX_OPTIMIZATION_ATTEMPTS}} \
-    --max-rejections {{MAX_CONSECUTIVE_REJECTIONS}}
+    --max-rejections {{MAX_CONSECUTIVE_REJECTIONS}} \
+    --real-shapes "{{OUTPUT_DIR}}/results/real_shapes.json"
 ```
 
 After setup, read `{{OPTIMIZED_DIR}}/manifest.json` to see:
@@ -132,7 +133,21 @@ python3 {{SCRIPTS_DIR}}/kernel_optimize_agent.py reject \
     --log-path {{OPTIMIZED_DIR}}/<ktype>/optimization_log.json
 ```
 
-### 2g. Profile with rocprofv3 (periodically)
+### 2g. Serving readiness test (after each accept)
+
+After accepting a kernel, run the `serving-test` to verify it won't regress under dynamic-M conditions (simulates real inference serving with varying batch sizes):
+
+```bash
+python3 {{SCRIPTS_DIR}}/kernel_optimize_agent.py serving-test \
+    --kernel {{OPTIMIZED_DIR}}/<ktype>/best_kernel.py \
+    --n <N_dim> --k <K_dim> \
+    --m-values "1,2,3,5,8,13,21,34,55,64" \
+    --iterations 100
+```
+
+This cycles through different M values rapidly, exactly like vLLM serving does with dynamic batching. If the verdict is `FAIL_REGRESSION`, the kernel has a serving-incompatible pattern (e.g., `@triton.autotune` that re-benchmarks on every new shape). **You must fix it** before proceeding — typically by replacing autotune with fixed configs.
+
+### 2h. Profile with rocprofv3 (periodically)
 
 After every 2-3 accepted optimizations, or when stuck, run rocprofv3 to get fresh HW data:
 

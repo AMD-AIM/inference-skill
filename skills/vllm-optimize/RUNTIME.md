@@ -24,7 +24,11 @@ Use only the files bundled next to this skill:
 - `scripts/kernel_test_runner.py`
 - `scripts/kernel_finalize.py`
 - `scripts/generate_vllm_plugin.py`
+- `scripts/extract_trace_shapes.py`
+- `scripts/kernel_optimize_agent.py`
+- `scripts/auto_patch.py`
 - `resources/TraceLens-internal.tar.gz`
+- `references/TRITON_OPTIMIZATION_KNOWLEDGE.md`
 
 If required files are missing, stop and report incomplete installation.
 
@@ -113,11 +117,9 @@ For `resume` or `from-phase`, read existing `progress.json` and artifacts first,
 
 ## Phase map
 
-- `full`: `env -> vllm-setup -> benchmark -> benchmark-analyze -> profiling -> profile-analyze`
-- `benchmark`: `env -> vllm-setup -> benchmark -> benchmark-analyze`
-- `profile`: `vllm-setup -> profiling -> profile-analyze`
-- `optimize`: `env -> vllm-setup -> benchmark -> benchmark-analyze -> profiling -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`
-- `optimize-only`: `env -> vllm-setup -> problem-generate -> kernel-optimize -> integration -> report-generate`
+- `full`: `env -> vllm-setup -> benchmark-and-profile -> analysis`
+- `optimize`: `env -> vllm-setup -> benchmark-and-profile -> analysis -> kernel-optimize -> integration -> report`
+- `optimize-only`: `env -> vllm-setup -> kernel-optimize -> integration -> report` (requires existing analysis)
 
 Read only the phase docs needed for the selected mode and start phase.
 

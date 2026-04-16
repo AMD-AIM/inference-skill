@@ -375,6 +375,70 @@ def do_status(log_path):
         ],
     }
 
+def do_serving_test(kernel_path, N, K, m_values, iterations):
+    """Simulate serving: call the kernel with rapidly varying M values.
+    This catches autotune regressions that don't show up in fixed-shape benchmarks.
+
+    Returns: {optimized_avg_us, reference_avg_us, speedup, verdict, per_m_results}
+    """
+    mod = load_module(kernel_path)
+    dtype = _resolve_dtype(kernel_path)
+    import itertools
+
+    m_cycle = itertools.cycle(m_values)
+
+    # Pre-allocate weight (fixed)
+    weight = torch.randn(N, K, dtype=dtype, device="cuda")  # (out, in) like vLLM
+
+    # Warmup both
+    for _ in range(5):
+        x = torch.randn(1, K, dtype=dtype, device="cuda")
+        mod.optimized(x, weight.t())
+        mod.reference(x, weight.t())
+    torch.cuda.synchronize()
+
+    # Test optimized: varying M
+    torch.cuda.synchronize()
+    t0 = time.time()
+    for i in range(iterations):
+        m = next(m_cycle)
+        x = torch.randn(m, K, dtype=dtype, device="cuda")
+        mod.optimized(x, weight.t())
+    torch.cuda.synchronize()
+    opt_total = (time.time() - t0) * 1e6  # us
+
+    # Test reference: same sequence of M values
+    m_cycle2 = itertools.cycle(m_values)
+    torch.cuda.synchronize()
+    t0 = time.time()
+    for i in range(iterations):
+        m = next(m_cycle2)
+        x = torch.randn(m, K, dtype=dtype, device="cuda")
+        mod.reference(x, weight.t())
+    torch.cuda.synchronize()
+    ref_total = (time.time() - t0) * 1e6
+
+    opt_avg = opt_total / iterations
+    ref_avg = ref_total / iterations
+    speedup = ref_avg / opt_avg if opt_avg > 0 else 0
+
+    verdict = "PASS" if speedup >= 0.9 else "FAIL_REGRESSION"
+    if speedup < 0.5:
+        verdict = "FAIL_SEVERE_REGRESSION"
+
+    return {
+        "optimized_total_us": round(opt_total, 1),
+        "reference_total_us": round(ref_total, 1),
+        "optimized_avg_us": round(opt_avg, 2),
+        "reference_avg_us": round(ref_avg, 2),
+        "speedup": round(speedup, 4),
+        "iterations": iterations,
+        "m_values": m_values,
+        "N": N, "K": K,
+        "verdict": verdict,
+    }
+
+
 def _count_trailing_rejections(steps):
     count = 0
     for s in reversed(steps):
@@ -492,8 +556,33 @@ def cmd_setup(args):
         os.makedirs(kernel_dir, exist_ok=True)
         log_path = os.path.join(kernel_dir, "optimization_log.json")
 
-        # Derive shapes from model config (generic, works for any model)
-        bench_shapes = _derive_shapes(ktype, model_cfg)
+        # Use REAL shapes from trace if available; fall back to model config
+        bench_shapes = None
+        if args.real_shapes and os.path.exists(args.real_shapes) and ktype == "gemm":
+            try:
+                real = load_json(args.real_shapes)
+                # Use the actual shapes from profiling — these are the shapes
+                # that REALLY run during inference, not guesses from model config
+                bench_shapes = real.get("benchmark_shapes", None)
+                if bench_shapes:
+                    # Deduplicate
+                    seen = set()
+                    unique = []
+                    for s in bench_shapes:
+                        key = str(s)
+                        if key not in seen:
+                            seen.add(key)
+                            unique.append(s)
+                    bench_shapes = unique
+                    print(f"  [{ktype}] Using REAL shapes from trace: {len(bench_shapes)} unique shapes")
+                    print(f"  [{ktype}] Real M values: {sorted(set(s[0][0] for s in bench_shapes))}")
+            except Exception as e:
+                print(f"  [{ktype}] Failed to load real shapes: {e}")
+                bench_shapes = None
+
+        if not bench_shapes:
+            bench_shapes = _derive_shapes(ktype, model_cfg)
+            print(f"  [{ktype}] Using model-config-derived shapes (no trace data)")
 
         # Write a minimal baseline kernel (just torch reference) so we can measure
         baseline_path = os.path.join(kernel_dir, "baseline.py")
@@ -624,6 +713,8 @@ def main():
                          help="Max optimization attempts per kernel (default: 8)")
     p_setup.add_argument("--max-rejections", type=int, default=3,
                          help="Stop after N consecutive rejections (default: 3)")
+    p_setup.add_argument("--real-shapes", default=None,
+                         help="Path to real_shapes.json from Phase 5 (extracted from trace)")
 
     # benchmark
     p_bench = sub.add_parser("benchmark")
@@ -662,6 +753,17 @@ def main():
     p_stat = sub.add_parser("status")
     p_stat.add_argument("--log-path", required=True)
 
+    # serving-test: simulates dynamic-M serving to catch autotune regressions
+    p_srv = sub.add_parser("serving-test",
+        help="Test kernel with varying M (simulates serving). Catches autotune regressions.")
+    p_srv.add_argument("--kernel", required=True)
+    p_srv.add_argument("--n", type=int, default=4096, help="N dimension (out_features)")
+    p_srv.add_argument("--k", type=int, default=4096, help="K dimension (in_features)")
+    p_srv.add_argument("--m-values", default="1,2,3,5,8,13,21,34,55,64",
+                       help="Comma-separated M values to cycle through (simulates dynamic batching)")
+    p_srv.add_argument("--iterations", type=int, default=100,
+                       help="Total kernel calls across varying M values")
+
     args = parser.parse_args()
 
     if args.command == "setup":
@@ -688,6 +790,11 @@ def main():
         print(json.dumps(r, indent=2))
     elif args.command == "status":
         r = do_status(args.log_path)
+        print(json.dumps(r, indent=2))
+    elif args.command == "serving-test":
+        r = do_serving_test(args.kernel, args.n, args.k,
+                            [int(x) for x in args.m_values.split(",")],
+                            args.iterations)
         print(json.dumps(r, indent=2))
     else:
         parser.print_help()

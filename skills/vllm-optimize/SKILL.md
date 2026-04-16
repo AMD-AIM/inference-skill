@@ -49,11 +49,9 @@ Automated vLLM inference benchmark, profiling, and kernel optimization workflow.
 
 ## Modes
 
-- `full`: `env -> vllm-setup -> benchmark -> benchmark-analyze -> profiling -> profile-analyze`
-- `benchmark`: `env -> vllm-setup -> benchmark -> benchmark-analyze`
-- `profile`: `env -> vllm-setup -> profiling -> profile-analyze` (requires server running)
-- `optimize`: `env -> vllm-setup -> benchmark -> benchmark-analyze -> profiling -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`. Supports GEAK-accelerated kernel optimization when installed.
-- `optimize-only`: `env -> vllm-setup -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing profile analysis artifacts).
+- `full`: `env -> vllm-setup -> benchmark-and-profile -> analysis`
+- `optimize`: `env -> vllm-setup -> benchmark-and-profile -> analysis -> kernel-optimize -> integration -> report`
+- `optimize-only`: `env -> vllm-setup -> kernel-optimize -> integration -> report` (requires existing analysis artifacts)
 
 Choose the narrowest mode that matches the user's goal.
 
@@ -74,11 +72,8 @@ Read these in this order:
 - [`EXAMPLES.md`](EXAMPLES.md)
 - [Phase 0: Environment Setup](phases/00-env-setup.md)
 - [Phase 1: vLLM Server Setup](phases/01-vllm-setup.md)
-- [Phase 2: Benchmark Execution](phases/02-benchmark.md)
-- [Phase 3: Benchmark Analysis](phases/03-benchmark-analyze.md)
-- [Phase 4: Profiling](phases/04-profiling.md)
-- [Phase 5: Profile Analysis](phases/05-profile-analyze.md)
-- [Phase 6: Problem Generation](phases/06-problem-generate.md)
-- [Phase 7: Kernel Optimization](phases/07-kernel-optimize.md)
-- [Phase 8: Integration & E2E Benchmark](phases/08-integration.md)
-- [Phase 9: Final Report](phases/09-report-generate.md)
+- [Phase 2: Benchmark & Profile](phases/02-benchmark-and-profile.md)
+- [Phase 3: Analysis](phases/03-analysis.md)
+- [Phase 4: Kernel Optimization](phases/07-kernel-optimize.md)
+- [Phase 5: Integration & E2E Benchmark](phases/08-integration.md)
+- [Phase 6: Final Report](phases/09-report-generate.md)

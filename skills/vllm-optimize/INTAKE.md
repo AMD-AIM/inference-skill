@@ -56,23 +56,15 @@ Always show the user what stage you are in:
 - `header`: `Run plan`
 - `question`: `What kind of run should I prepare for this model?`
 - `options`:
-  - `Smoke full workflow`: `Quick end-to-end run with narrow filters, including profile analysis`
-  - `Smoke benchmark only`: `One small benchmark point without profiling`
-  - `Benchmark only`: `Run benchmark and benchmark analysis only`
-  - `Profile only`: `Run profiling and profile analysis only (requires server running)`
-  - `Full workflow`: `Run benchmark plus profiling workflow`
-  - `Optimize workflow`: `Full workflow including kernel optimization`
-  - `Optimize from existing profile`: `Run kernel optimization using existing profiling data`
+  - `Full optimize (Recommended)`: `Benchmark, profile, kernel optimization, integration, and report — the complete pipeline`
+  - `Benchmark + profile only`: `Benchmark and profile without kernel optimization`
+  - `Optimize from existing data`: `Run kernel optimization using existing benchmark/profile data`
 
 Map these to:
 
-- `Smoke full workflow` -> `mode=full` with narrow filters
-- `Smoke benchmark only` -> `mode=benchmark` with narrow filters
-- `Benchmark only` -> `mode=benchmark`
-- `Profile only` -> `mode=profile`
-- `Full workflow` -> `mode=full`
-- `Optimize workflow` -> `mode=optimize`
-- `Optimize from existing profile` -> `mode=optimize-only`, ask for existing output path
+- `Full optimize` -> `mode=optimize` (default, runs all phases)
+- `Benchmark + profile only` -> `mode=full`
+- `Optimize from existing data` -> `mode=optimize-only`, ask for existing output path
 
 ### Question 2
 
