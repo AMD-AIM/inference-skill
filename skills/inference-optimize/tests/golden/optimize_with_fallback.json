@@ -1,0 +1,119 @@
+{
+  "blockers_emitted": [],
+  "fallbacks_used": [
+    {
+      "fallback_target": "problem-generate",
+      "phase_key": "kernel-optimize"
+    }
+  ],
+  "final_status": "completed",
+  "mode": "optimize",
+  "phase_sequence": [
+    "env",
+    "config",
+    "benchmark",
+    "benchmark-analyze",
+    "profile",
+    "profile-analyze",
+    "problem-generate",
+    "kernel-optimize",
+    "integration",
+    "report-generate"
+  ],
+  "phases_completed": [
+    "env",
+    "config",
+    "benchmark",
+    "benchmark-analyze",
+    "profile",
+    "profile-analyze",
+    "integration",
+    "report-generate"
+  ],
+  "resolved_phases": [
+    "env",
+    "config",
+    "benchmark",
+    "benchmark-analyze",
+    "profile",
+    "profile-analyze",
+    "problem-generate",
+    "kernel-optimize",
+    "integration",
+    "report-generate"
+  ],
+  "retry_counts": {
+    "benchmark": 0,
+    "benchmark-analyze": 0,
+    "config": 0,
+    "env": 0,
+    "integration": 0,
+    "problem-generate": 0,
+    "profile": 0,
+    "profile-analyze": 0,
+    "report-generate": 0
+  },
+  "total_reruns": 3,
+  "verdict_sequence": [
+    {
+      "attempt": 1,
+      "phase": "env",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "config",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "benchmark",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "benchmark-analyze",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "profile",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "profile-analyze",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "problem-generate",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "kernel-optimize",
+      "verdict": "FAIL"
+    },
+    {
+      "attempt": 2,
+      "phase": "kernel-optimize",
+      "verdict": "FAIL"
+    },
+    {
+      "attempt": 3,
+      "phase": "kernel-optimize",
+      "verdict": "FAIL"
+    },
+    {
+      "attempt": 1,
+      "phase": "integration",
+      "verdict": "PASS"
+    },
+    {
+      "attempt": 1,
+      "phase": "report-generate",
+      "verdict": "PASS"
+    }
+  ]
+}

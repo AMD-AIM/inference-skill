@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SKILL_NAMES=("inferencex-optimize")
+SKILL_NAMES=("inference-optimize")
 MODE="copy"
 
 usage() {
@@ -81,7 +81,7 @@ install_skill() {
   require_dir "$SOURCE_DIR"
   require_file "$SOURCE_DIR/SKILL.md"
 
-  if [[ "$SKILL_NAME" == "inferencex-optimize" ]]; then
+  if [[ "$SKILL_NAME" == "inference-optimize" ]]; then
     require_file "$SOURCE_DIR/INSTALL.md"
     require_file "$SOURCE_DIR/LICENSE"
     require_dir "$SOURCE_DIR/phases"
