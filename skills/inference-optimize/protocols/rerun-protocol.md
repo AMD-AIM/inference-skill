@@ -77,7 +77,7 @@ Every `*_root_cause.json` written by the analysis agent includes:
 - `root_causes` — array of `{ "cause": "<description>", "confidence": "high | medium | low" }`
 - `retry_recommendation` — one of: `retry_same`, `retry_with_changes`, `fallback`, `stop`
 - `retry_guidance` — freeform prose guidance for the retrying phase agent
-- `terminal_action` — one of: `retry_phase`, `fallback_target`, `stop_with_blocker`, `allow_partial_report`
+- `terminal_action` — one of: `stop_with_blocker`, `continue`, or `null` (per `protocols/rca.schema.json`, the authoritative contract). Use `stop_with_blocker` only when the failure is unrecoverable on retry; use `continue` (or omit / `null`) otherwise. Note: retry vs. fallback intent is expressed via `retry_recommendation` (`retry_same | retry_with_changes | fallback | stop`), not via `terminal_action`. The orchestrator branches on `terminal_action == "stop_with_blocker"` only.
 - `suggested_fallback_target` — string or null
 - `blocker_classifications` — array of `{ "target": "<name>", "classification": "<enum>" }`
 

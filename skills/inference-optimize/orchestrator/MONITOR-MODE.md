@@ -122,28 +122,6 @@ After the last phase completes, present a consolidated report:
 - {Actionable recommendations based on WARN/FAIL findings}
 ```
 
-## Post-Hoc Analysis
-
-When MODE=monitor and the user provides an existing run directory (from intake), the orchestrator runs the same dispatch loop against existing artifacts:
-
-1. Read `progress.json` to determine which phases completed.
-2. For each completed phase:
-   - Phase agents **re-read** existing artifacts (they do not re-execute benchmark/profile/optimize).
-   - Monitor sub-agents evaluate the results and write reviews.
-   - The main agent presents the full digest — same format, same transparency.
-3. Present the Final Summary after processing all completed phases.
-
-The user sees exactly what they would have seen during a live run, applied retroactively.
-
-## In-Progress Runs
-
-If `progress.json` shows `status: "running"`:
-
-- Only process phases listed in `phases_completed`.
-- Note `current_phase` in the overview.
-- Label the report as **"Partial Analysis (run in progress)"**.
-- Do not assign an overall verdict — state that the run is incomplete.
-
 ## Interactive Follow-Up
 
 After the final summary, remain available for drill-down questions:

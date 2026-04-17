@@ -60,7 +60,7 @@ Rules:
 
 ## Round 1: exact high-level question set
 
-Unless the user already answered clearly, prefer one multi-question form with these three questions.
+Unless the user already answered clearly, prefer one multi-question form with these four questions.
 
 Before asking the form, say one natural sentence like:
 
@@ -79,7 +79,7 @@ Before asking the form, say one natural sentence like:
   - `Optimize workflow`: `Full workflow including kernel optimization (benchmark, profile, optimize, and report)`
   - `Optimize from existing profile`: `Run kernel optimization using existing profiling data`
   - `Resume existing output`: `Continue or restart from an existing output directory`
-  - `Monitor existing run`: `Analyze a completed run's artifacts with full transparency — see everything the quality monitor evaluates`
+  - `Monitor workflow`: `Live optimize workflow with full per-phase transparency — same phases as Optimize workflow, plus the structured monitor digest (verdict, quality checks, detection rules, key scalars, running totals) is surfaced after every phase boundary`
 
 Map these to:
 
@@ -91,7 +91,7 @@ Map these to:
 - `Optimize workflow` -> `mode=optimize`
 - `Optimize from existing profile` -> `mode=optimize-only`, ask for existing output path
 - `Resume existing output` -> ask for an output path, then ask how to continue
-- `Monitor existing run` -> `mode=monitor`, ask for run directory. Skip Questions 2-4 (Framework, Output, GPUs) only if analyzing existing run; if running fresh, keep them.
+- `Monitor workflow` -> `mode=monitor` (live run; same phase list as `optimize`, with per-phase transparency digest)
 
 ### Question 2
 
@@ -150,19 +150,10 @@ If multiple concrete values are missing, batch follow-ups into one short message
 
 ## Monitor mode follow-up
 
-If the user chose `Monitor existing run`, skip Questions 2-4 entirely. Ask one follow-up:
-
-- `header`: `Run directory`
-- `question`: `Which run should I analyze?`
-- `options`:
-  - One option per discovered `~/inferencex_*` directory (show config key + date + status)
-  - `Custom path`: `I will provide a specific output directory path`
-
-If only one run exists, offer it as the default. Validate the chosen path contains
-`progress.json` and `config.json`.
-
-After receiving the run directory, skip discovery, filter questions, and confirmation.
-Read `orchestrator/MONITOR-MODE.md` and `orchestrator/ORCHESTRATOR.md`, then begin the monitor dispatch loop.
+If the user chose `Monitor workflow`, treat it exactly like `Optimize workflow` for setup
+purposes (Framework, Output, GPUs, discovery, and filter questions all still apply). The only
+difference at runtime is that `orchestrator/MONITOR-MODE.md` is read alongside
+`orchestrator/ORCHESTRATOR.md`, and the per-phase digest is surfaced after each phase boundary.
 
 ## Lightweight discovery before filter questions
 

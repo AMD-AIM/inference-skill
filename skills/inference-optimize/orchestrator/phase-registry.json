@@ -238,7 +238,8 @@
   },
   "parallel_groups": {
     "full": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]],
-    "optimize": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
+    "optimize": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]],
+    "monitor": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
   },
   "rerun": { "max_per_phase": 2, "max_total": 5 },
   "timeouts": {
@@ -253,7 +254,7 @@
   "_schema_notes": {
     "monitor_context_fields": "Active — structured context extraction for monitor, used by critical phases",
     "detection_rules_structured": "Active — typed predicates for verdict automation on critical phases",
-    "parallel_groups": "Active — concurrent phase execution groups for full and optimize modes"
+    "parallel_groups": "Active — concurrent phase execution groups for full, optimize, and monitor modes"
   },
   "context_sources": {
     "CONFIG_KEY":                { "source": "config" },

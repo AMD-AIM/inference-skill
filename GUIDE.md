@@ -21,8 +21,8 @@ Use inferencex-optimize skill for qwen3.5-bf16-mi355x-sglang.
 From there, the agent should:
 
 - treat the model/config name as the starting point
-- first ask exactly three high-level question groups: `Run plan`, `Output`, and `GPUs`
-- ask those three groups in one batched form
+- first ask exactly four high-level question groups: `Run plan`, `Framework`, `Output`, and `GPUs`
+- ask those four groups in one batched form
 - then do lightweight discovery before asking TP / sequence length / concurrency
 - offer the smoke fast path: `Use recommended smoke defaults`, `Review each filter`, or `Use full discovered sweep`
 - emit short status updates before discovery, after discovery, before confirmation, and at phase boundaries

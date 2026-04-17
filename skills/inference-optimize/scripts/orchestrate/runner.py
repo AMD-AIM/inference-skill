@@ -81,6 +81,7 @@ class RunnerState:
         self.verdict_sequence = []
         self.blockers_emitted = []
         self.human_extensions = {}
+        self.rca_skipped = {}  # phase_key -> reason string when rca_fn is None but rca_artifact is set
 
     def to_progress(self):
         progress = {
@@ -96,6 +97,8 @@ class RunnerState:
         }
         if self.human_extensions:
             progress["human_extensions"] = dict(self.human_extensions)
+        if self.rca_skipped:
+            progress["rca_skipped"] = dict(self.rca_skipped)
         return progress
 
     def write_progress(self):
@@ -675,8 +678,15 @@ class DeterministicRunner:
                             "phase": phase_key,
                             "rca_artifact": phase_meta["rca_artifact"],
                             "failure_type": verdict.get("failure_type", "unknown"),
+                            "verdict_severity": "FAIL",
                         }
                         rca_result = rca_fn(phase_key, rca_manifest)
+                    elif phase_meta.get("rca_artifact") and rca_fn is None:
+                        logger.warning(
+                            "rca_fn not wired; skipping RCA for phase %s "
+                            "(rca_artifact=%s). Wire rca_fn in platform-dispatch to enable.",
+                            phase_key, phase_meta["rca_artifact"].get("output", "?"))
+                        state.rca_skipped[phase_key] = "rca_fn_not_wired"
 
                     escalation_result = self._maybe_escalate(phase_key, v, verdict)
                     response = self._determine_response(
@@ -724,8 +734,15 @@ class DeterministicRunner:
                             "phase": phase_key,
                             "rca_artifact": phase_meta["rca_artifact"],
                             "failure_type": verdict.get("failure_type", "unknown"),
+                            "verdict_severity": "FAIL",
                         }
                         rca_result = rca_fn(phase_key, rca_manifest)
+                    elif phase_meta.get("rca_artifact") and rca_fn is None:
+                        logger.warning(
+                            "rca_fn not wired; skipping RCA for phase %s "
+                            "(rca_artifact=%s). Wire rca_fn in platform-dispatch to enable.",
+                            phase_key, phase_meta["rca_artifact"].get("output", "?"))
+                        state.rca_skipped[phase_key] = "rca_fn_not_wired"
 
                     state.total_reruns += 1
                     phase_reruns += 1

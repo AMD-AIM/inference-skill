@@ -83,6 +83,17 @@ function dispatch(mode, config):
         # Strict mode: escalate WARN to FAIL
         treat as FAIL (fall through to FAIL handling below)
       else:
+        # Spawn RCA on WARN for critical phases (non-blocking analysis)
+        # WARN-mode RCA is constrained: terminal_action must be null/continue,
+        # retry_recommendation is advisory and does NOT trigger a retry — the
+        # pipeline continues regardless. The RCA artifact is preserved for
+        # downstream phases and the final report.
+        rca_artifact = phase.rca_artifact
+        if rca_artifact:
+          analyzer_manifest = build_rca_manifest(
+              phase_key, rca_artifact, review, verdict_severity="WARN")
+          rca_result = spawn_rca_agent(analyzer_manifest)
+          # rca_result writes rca_artifact.output (e.g. results/integration_root_cause.json)
         update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
         continue to next phase (non-blocking)
 
@@ -92,8 +103,9 @@ function dispatch(mode, config):
       rca_artifact = phase.rca_artifact  # from registry; null for non-critical phases
       rca_result = null
       if rca_artifact:
-        analyzer_manifest = build_rca_manifest(phase_key, rca_artifact, review)
-        rca_result = spawn_analysis_agent(analyzer_manifest)
+        analyzer_manifest = build_rca_manifest(
+            phase_key, rca_artifact, review, verdict_severity="FAIL")
+        rca_result = spawn_rca_agent(analyzer_manifest)
         # rca_result writes rca_artifact.output (e.g. results/integration_root_cause.json)
 
       # Step B: Increment counters AFTER RCA, BEFORE budget check
@@ -231,26 +243,46 @@ The deterministic `runner.py` already implements `build_handoff()` and `write_ha
 
 ## RCA Manifest Construction
 
-When the monitor returns FAIL for a critical phase with an `rca_artifact` entry in the registry:
+The RCA agent (`agents/rca-agent.md`) is spawned in two situations:
+
+- **FAIL on a critical phase**: full RCA may recommend any `retry_recommendation` and
+  may set `terminal_action: stop_with_blocker` to halt the pipeline.
+- **WARN on a critical phase** (standard / V2 modes): advisory RCA. The orchestrator
+  preserves the artifact for downstream consumers but does NOT consume the
+  recommendation as a control-flow signal — execution always continues to the next
+  phase. WARN-mode RCA must not emit `terminal_action: stop_with_blocker` (the agent
+  enforces this).
+
+Both paths build the manifest the same way. Skip RCA when `phase.rca_artifact` is null
+(non-critical phases have no analysis context registered).
+
+Manifest construction:
 
 1. Read `phases[phase_key].rca_artifact` from the registry.
 2. Build an `analyzer_manifest` YAML block:
-   - `task` = `"Root cause analysis for {phase_key} failure: {monitor.failure_type}"`
+   - `task` = `"Root cause analysis for {phase_key} {verdict_severity}: {monitor.failure_type}"`
    - `output_path` = `rca_artifact.output` (e.g. `"results/integration_root_cause.json"`)
+   - `phase_key` = the failing phase's canonical key
+   - `verdict_severity` = `"WARN"` or `"FAIL"` (controls allowable terminal actions)
    - `files` = one entry per item in `rca_artifact.analysis_context`, with:
      - `path` = the context item path
      - `description` = auto-generated from the file name
      - `format` = inferred from extension (`json`, `md`, `log`)
      - `required` = `true` for JSON artifacts, `false` for directories and logs
-3. Append the monitor's review text as an additional context file.
-4. Spawn the analysis agent with this manifest via `agents/analysis-agent.md`.
+3. Append the monitor's review text and `monitor/phase-{NN}-context.json` (if present)
+   as additional context files.
+4. Spawn the RCA agent with this manifest via `agents/rca-agent.md`.
 
-The analysis agent writes its output to `output_path` as a JSON file following the common RCA schema (see `protocols/rerun-protocol.md`).
+The RCA agent writes its output to `output_path` as a JSON file conforming strictly
+to `protocols/rca.schema.json`. The orchestrator only branches on
+`terminal_action == "stop_with_blocker"` (see V1 dispatch loop step D); other fields
+are surfaced to the user and embedded into the rewritten handoff.
 
 If the RCA agent fails (timeout, crash, malformed output):
 - Record an RCA failure note in the rewritten handoff.
 - One plain retry is still allowed if retry budget remains.
 - If no retry budget remains, emit a structured blocker and apply normal fallback or stop rules.
+- For the WARN-mode advisory path, an RCA failure is logged but does not block phase progression.
 
 ## Pipeline Blocker Emission
 
@@ -386,7 +418,8 @@ Full protocol details and context-budget rules are in `protocols/platform-dispat
 |---|---|---|---|
 | Phase agent | `generalPurpose` | inherit | Agent doc + handoff content inlined |
 | Monitor agent | `generalPurpose` | `fast` | `monitor.md` + result + summary inlined |
-| Analysis/RCA agent | `generalPurpose` | inherit | Manifest + context files inlined |
+| Analysis agent | `generalPurpose` | inherit | `analysis-agent.md` + manifest + context files inlined (routine in-phase data analysis) |
+| RCA agent | `generalPurpose` | inherit | `rca-agent.md` + manifest + context files inlined; **prepend the literal keyword `ultrathink`** to enable Cursor's high reasoning effort (Cursor does not read agent frontmatter) |
 | Coding agent | `generalPurpose` | inherit | Task from parent phase agent |
 | Container ops | `shell` | `fast` | Shell commands only |
 
@@ -400,7 +433,8 @@ Prompt assembly for phase agents: read `agents/phase-NN-*.md` content and `hando
 |---|---|---|
 | Phase agent | `Agent` | **Step 1**: Write handoff to `handoff/to-phase-NN.md`. **Step 2**: Validate with `validate_handoff.py`. **Step 3**: Spawn agent with path to handoff file. Agent reads from disk — NEVER inline content. |
 | Monitor agent | `Agent` | Paths to monitor docs + result + summary |
-| Analysis/RCA agent | `Agent` | Path to manifest file |
+| Analysis agent | `Agent` | Path to `analysis-agent.md` + manifest file |
+| RCA agent | `Agent` | Path to `rca-agent.md` + manifest file. Extended-thinking budget is taken from the agent frontmatter (`thinking.budget_tokens: 32000`). |
 | Coding agent | `Agent` | Spawned by parent phase agent |
 | Container ops | `bash` | Direct shell commands |
 

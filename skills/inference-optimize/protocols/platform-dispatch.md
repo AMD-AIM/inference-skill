@@ -10,6 +10,8 @@ The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical cont
 
 When a callback is `None`, the runner applies its default: `dispatch_fn` returns PASS (shadow mode), `monitor_fn` passes through the dispatch verdict, `rca_fn` is skipped.
 
+When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host platform supplies `rca_fn=None`, the runner emits a `WARNING`-level log line and records `rca_skipped: true` in the phase's progress entry. RCA is not silently absent: integrators are expected to wire `rca_fn` for any platform that runs the optimize/profile modes end-to-end. Shadow-mode and unit-test runs may legitimately leave `rca_fn=None`; the warning makes the absence auditable.
+
 ## Cursor
 
 ### Agent Type Mapping
@@ -18,7 +20,8 @@ When a callback is `None`, the runner applies its default: `dispatch_fn` returns
 |---|---|---|---|
 | Phase agent | `generalPurpose` | inherit | Agent doc + handoff content inlined |
 | Monitor agent | `generalPurpose` | `fast` | `monitor.md` + result + running summary inlined |
-| Analysis/RCA agent | `generalPurpose` | inherit | Analyzer manifest + context file contents inlined |
+| Analysis agent | `generalPurpose` | inherit | `analysis-agent.md` + analyzer manifest + context file contents inlined (routine in-phase data analysis) |
+| RCA agent | `generalPurpose` | inherit | `rca-agent.md` + analyzer manifest + context file contents inlined; **prepend the literal keyword `ultrathink`** to the assembled prompt — Cursor does not read agent frontmatter, so this is the only way to enable the high-reasoning-effort budget the RCA agent expects |
 | Coding agent | `generalPurpose` | inherit | Task description from parent phase agent |
 | Container operations | `shell` | `fast` | Shell commands only |
 
@@ -30,7 +33,9 @@ When a callback is `None`, the runner applies its default: `dispatch_fn` returns
 
 **Monitor agents**: Read `orchestrator/monitor.md`, `monitor/running-summary.md`, `agent-results/phase-NN-result.md`, and optionally `monitor/phase-NN-context.json`. Concatenate. Pass as `Task` tool `prompt` with `model: "fast"`.
 
-**RCA agents**: Read `agents/analysis-agent.md` and the manifest's `analysis_context` file contents. Concatenate. Pass as `Task` tool `prompt`.
+**Analysis agents** (routine in-phase data analysis): Read `agents/analysis-agent.md` and the manifest's `analysis_context` file contents. Concatenate. Pass as `Task` tool `prompt`.
+
+**RCA agents** (orchestrator-level root cause on monitor WARN/FAIL): Read `agents/rca-agent.md` and the manifest's `analysis_context` file contents. Concatenate. **Prepend the literal keyword `ultrathink` as the first token of the assembled prompt** — Cursor uses this keyword to enable the maximum reasoning-effort budget. Pass as `Task` tool `prompt`.
 
 ### Question Tool
 
@@ -44,7 +49,8 @@ Use `AskQuestion` tool for guided setup forms (SKILL.md intake flow).
 |---|---|---|
 | Phase agent | `Agent` | Path to `handoff/to-phase-NN.md` (agent reads from disk) |
 | Monitor agent | `Agent` | Paths to monitor docs + result + summary |
-| Analysis/RCA agent | `Agent` | Path to analyzer manifest file |
+| Analysis agent | `Agent` | Path to `analysis-agent.md` + analyzer manifest file |
+| RCA agent | `Agent` | Path to `rca-agent.md` + analyzer manifest file. Extended-thinking budget (`thinking.budget_tokens: 32000`) is taken from the agent's frontmatter — Claude Code honors this without prompt-side keywords. |
 | Coding agent | `Agent` | Spawned by parent phase agent, not orchestrator |
 | Container operations | `bash` | Direct shell commands |
 
