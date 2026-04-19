@@ -211,8 +211,24 @@ echo $VLLM_PID > "{{OUTPUT_DIR}}/vllm.pid"
 ```
 
 **For profiling mode (REQUIRED for profiler API)**, use this single script:
+
+**IMPORTANT**: The `--profiler-config` flag requires a JSON string (not dot-notation). Construct it as shown below.
 ```bash
 VLLM_LOG="{{OUTPUT_DIR}}/vllm_server.log"
+
+# Build profiler config as JSON string (required format for vLLM >= 0.16)
+PROFILER_JSON=$(python3 -c "
+import json
+print(json.dumps({
+    'profiler': 'torch',
+    'torch_profiler_dir': '{{PROFILE_DIR}}',
+    'torch_profiler_record_shapes': True,
+    'torch_profiler_with_stack': True,
+    'torch_profiler_use_gzip': True,
+    'ignore_frontend': True,
+    'max_iterations': {{PROFILE_ITERATIONS}},
+}))
+")
 
 python3 -m vllm.entrypoints.openai.api_server \
     --model "{{MODEL}}" \
@@ -223,13 +239,7 @@ python3 -m vllm.entrypoints.openai.api_server \
     --api-key dummy \
     --max-model-len {{MAX_MODEL_LEN}} \
     --gpu-memory-utilization {{GPU_MEM_UTIL}} \
-    --profiler-config.profiler torch \
-    --profiler-config.torch_profiler_dir "{{PROFILE_DIR}}" \
-    --profiler-config.torch_profiler_record_shapes True \
-    --profiler-config.torch_profiler_with_stack True \
-    --profiler-config.torch_profiler_use_gzip True \
-    --profiler-config.ignore_frontend True \
-    --profiler-config.max_iterations {{PROFILE_ITERATIONS}} \
+    --profiler-config "$PROFILER_JSON" \
     > "$VLLM_LOG" 2>&1 &
 
 VLLM_PID=$!

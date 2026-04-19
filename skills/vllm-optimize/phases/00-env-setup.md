@@ -8,9 +8,12 @@ Verify that all prerequisites are installed and the GPU environment is ready for
 ### 1. Check GPU Availability
 Detect GPU vendor, architecture, and current utilization:
 ```bash
-# Try AMD GPU detection via rocminfo
+# Try AMD GPU detection via rocminfo (pick longest gfx name to avoid partial matches like gfx11 vs gfx1100)
 if command -v rocminfo &>/dev/null; then
-    AMD_ARCH=$(rocminfo 2>/dev/null | grep -oP 'gfx\w+' | head -1 | tr '[:upper:]' '[:lower:]')
+    AMD_ARCH=$(rocminfo 2>/dev/null | grep -oP 'gfx\d+' | sort | tail -1 | tr '[:upper:]' '[:lower:]')
+    if [ -z "$AMD_ARCH" ]; then
+        AMD_ARCH=$(rocminfo 2>/dev/null | grep -oP 'gfx\w+' | head -1 | tr '[:upper:]' '[:lower:]')
+    fi
     if [ -n "$AMD_ARCH" ]; then
         echo "AMD GPU detected: $AMD_ARCH"
         # Show GPU count and utilization
@@ -108,24 +111,55 @@ fi
 ### 7. Write env_info.json
 ```bash
 python3 -c "
-import json, os, subprocess
+import json, os, subprocess, re
 
 gpu_vendor = 'unknown'
 gpu_arch = 'unknown'
 gpu_count = 0
 
+# AMD detection: use rocm-smi for count (rocminfo gfx entries are not 1:1 with GPUs)
 try:
-    result = subprocess.run(['rocminfo'], capture_output=True, text=True, timeout=10)
+    result = subprocess.run(['rocm-smi', '--showuse'], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
-        import re
-        arches = re.findall(r'gfx\w+', result.stdout)
-        if arches:
+        gpu_lines = [l for l in result.stdout.split('\n') if 'GPU[' in l]
+        if gpu_lines:
             gpu_vendor = 'amd'
-            gpu_arch = arches[0].lower()
-            gpu_count = len(set(arches))
+            gpu_count = len(gpu_lines)
 except Exception:
     pass
 
+# AMD arch detection: use rocminfo and pick the most specific gfx name
+if gpu_vendor == 'amd':
+    try:
+        result = subprocess.run(['rocminfo'], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            # Find all gfx arch names, prefer longest (most specific) match
+            # e.g. 'gfx1100' over 'gfx11'
+            arches = re.findall(r'\bgfx(\d+)\b', result.stdout)
+            if arches:
+                # Pick the longest numeric suffix to avoid partial matches like gfx11 vs gfx1100
+                best = max(arches, key=len)
+                gpu_arch = f'gfx{best}'
+            else:
+                # Fallback: try PyTorch
+                import torch
+                if torch.cuda.is_available():
+                    gcn_arch = torch.cuda.get_device_properties(0).gcnArchName
+                    if gcn_arch:
+                        gpu_arch = gcn_arch.split(':')[0]
+    except Exception:
+        pass
+
+# If AMD detection failed, count GPUs via rocm-smi list or PyTorch
+if gpu_vendor == 'amd' and gpu_count == 0:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_count = torch.cuda.device_count()
+    except Exception:
+        pass
+
+# NVIDIA detection
 if gpu_vendor == 'unknown':
     try:
         result = subprocess.run(['nvidia-smi', '--query-gpu=count', '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10)
@@ -136,6 +170,16 @@ if gpu_vendor == 'unknown':
         if result2.returncode == 0:
             cap = result2.stdout.strip().split('\n')[0].replace('.', '')
             gpu_arch = f'sm_{cap}'
+    except Exception:
+        pass
+
+if gpu_vendor == 'unknown':
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_count = torch.cuda.device_count()
+            gpu_arch = torch.cuda.get_device_properties(0).gcnArchName.split(':')[0] if hasattr(torch.cuda.get_device_properties(0), 'gcnArchName') else 'unknown'
+            gpu_vendor = 'amd' if 'gfx' in gpu_arch else 'nvidia'
     except Exception:
         pass
 

@@ -187,21 +187,33 @@ The output `real_shapes.json` contains:
 ### 6. Generate GPU Architecture Info
 ```bash
 python3 -c "
-import json, os, subprocess
+import json, os, subprocess, re
 
 gpu_arch = 'unknown'
 gpu_vendor = 'unknown'
+gpu_count = 0
 
+# AMD: use rocm-smi for count, rocminfo for arch (pick most specific gfx name)
 try:
-    result = subprocess.run(['rocminfo'], capture_output=True, text=True, timeout=10)
-    if result.returncode == 0:
-        import re
-        arches = re.findall(r'gfx\w+', result.stdout)
-        if arches:
+    r = subprocess.run(['rocm-smi', '--showuse'], capture_output=True, text=True, timeout=10)
+    if r.returncode == 0:
+        gpu_lines = [l for l in r.stdout.split('\n') if 'GPU[' in l]
+        if gpu_lines:
             gpu_vendor = 'amd'
-            gpu_arch = arches[0].lower()
+            gpu_count = len(gpu_lines)
 except Exception:
     pass
+
+if gpu_vendor == 'amd':
+    try:
+        r = subprocess.run(['rocminfo'], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            arches = re.findall(r'\bgfx(\d+)\b', r.stdout)
+            if arches:
+                best = max(arches, key=len)
+                gpu_arch = f'gfx{best}'
+    except Exception:
+        pass
 
 if gpu_vendor == 'unknown':
     try:
@@ -210,10 +222,24 @@ if gpu_vendor == 'unknown':
             gpu_vendor = 'nvidia'
             cap = result.stdout.strip().split('\n')[0].replace('.', '')
             gpu_arch = f'sm_{cap}'
+            r2 = subprocess.run(['nvidia-smi', '--query-gpu=count', '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10)
+            if r2.returncode == 0:
+                gpu_count = int(r2.stdout.strip().split('\n')[0])
     except Exception:
         pass
 
-gpu_info = {'gpu_vendor': gpu_vendor, 'gpu_arch': gpu_arch}
+if gpu_vendor == 'unknown':
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_count = torch.cuda.device_count()
+            prop = torch.cuda.get_device_properties(0)
+            gpu_arch = getattr(prop, 'gcnArchName', getattr(prop, 'name', 'unknown')).split(':')[0]
+            gpu_vendor = 'amd' if 'gfx' in gpu_arch else 'nvidia'
+    except Exception:
+        pass
+
+gpu_info = {'gpu_vendor': gpu_vendor, 'gpu_arch': gpu_arch, 'gpu_count': gpu_count}
 with open('{{OUTPUT_DIR}}/results/gpu_arch.json', 'w') as f:
     json.dump(gpu_info, f, indent=2)
 print(json.dumps(gpu_info, indent=2))
