@@ -8,6 +8,7 @@ from scripts.orchestrate.response_policy import determine_response
 
 
 RERUN_LIMITS = {"max_per_phase": 2, "max_total": 5}
+UNCAPPED_RERUN_LIMITS = {"max_per_phase": 0, "max_total": 0}
 
 
 class MockRunnerState:
@@ -69,6 +70,15 @@ class TestResponsePolicy:
         assert resp["action"] == "retry"
         assert "extended" in resp["reason"].lower()
 
+    def test_uncapped_limits_do_not_trigger_human_extension_path(self):
+        state = MockRunnerState(human_extensions={"kernel-optimize": 3})
+        escalation = {"action": "retry", "notes": "keep going"}
+        resp = determine_response("FAIL", "logic", "kernel-optimize", {}, state,
+                                  escalation_result=escalation,
+                                  rerun_limits=UNCAPPED_RERUN_LIMITS, phase_reruns=10)
+        assert resp["action"] == "retry"
+        assert "budget extended" not in resp["reason"].lower()
+
     def test_budget_exhausted_with_fallback(self):
         state = MockRunnerState(retry_counts={"kernel-optimize": 2}, total_reruns=3)
         meta = {"fallback_target": "problem-generate"}
@@ -118,3 +128,10 @@ class TestResponsePolicy:
                                    {"fallback_target": "problem-generate"}, state,
                                    rerun_limits=RERUN_LIMITS, phase_reruns=1)
         assert resp["action"] == "redirect"
+
+    def test_uncapped_limits_never_report_budget_exhausted(self):
+        state = MockRunnerState(total_reruns=100)
+        resp = determine_response("FAIL", "logic", "kernel-optimize",
+                                  {"fallback_target": "problem-generate"}, state,
+                                  rerun_limits=UNCAPPED_RERUN_LIMITS, phase_reruns=100)
+        assert resp["action"] == "retry"

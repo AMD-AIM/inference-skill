@@ -71,6 +71,12 @@ def _create_artifacts(tmpdir):
         json.dump({"status": "complete"}, f)
 
 
+def _load_capped_registry(max_per_phase=2, max_total=5):
+    registry = json.loads(REGISTRY_PATH.read_text())
+    registry["rerun"] = {"max_per_phase": max_per_phase, "max_total": max_total}
+    return registry
+
+
 class TestV2FallbackDispatch:
     """V2 path re-dispatches from fallback target (unlike V1 which skips it)."""
 
@@ -94,7 +100,7 @@ class TestV2FallbackDispatch:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=True)
             _create_artifacts(tmpdir)
-            registry = json.loads(REGISTRY_PATH.read_text())
+            registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
@@ -135,7 +141,7 @@ class TestV2FallbackDispatch:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=True)
             _create_artifacts(tmpdir)
-            registry = json.loads(REGISTRY_PATH.read_text())
+            registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
@@ -162,7 +168,7 @@ class TestV2FallbackDispatch:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=True)
             _create_artifacts(tmpdir)
-            registry = json.loads(REGISTRY_PATH.read_text())
+            registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
@@ -193,7 +199,7 @@ class TestV2FallbackDispatch:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=False)
             _create_artifacts(tmpdir)
-            registry = json.loads(REGISTRY_PATH.read_text())
+            registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 

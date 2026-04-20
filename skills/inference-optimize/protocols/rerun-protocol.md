@@ -32,8 +32,8 @@ Missing expected output files, metrics outside plausible range, empty traces, tr
 
 ## Retry Limits
 
-- `max_per_phase`: 2 (two re-dispatches after the original attempt)
-- `max_total`: 5
+- `max_per_phase`: `0` in the shipped registry. Positive values cap per-phase re-dispatches; `0` or negative values mean uncapped retries.
+- `max_total`: `0` in the shipped registry. Positive values cap total re-dispatches across the run; `0` or negative values mean uncapped retries.
 
 ## RCA-First Recovery Flow
 
@@ -45,7 +45,7 @@ Every critical phase uses the same orchestrator-managed recovery loop. The RCA s
    b. Orchestrator constructs an `analyzer_manifest` from `rca_artifact.analysis_context`.
    c. Analysis agent writes `rca_artifact.output` (e.g. `results/integration_rca.json`).
 3. **Increment retry counters** (`phase_reruns` and `total_reruns`).
-4. **Check budget limits** (`max_per_phase`, `max_total`). Because the counters were incremented for the rerun that is about to be dispatched, the budget is exhausted only when a counter becomes **greater than** its configured limit.
+4. **Check budget limits** (`max_per_phase`, `max_total`) only when those limits are positive. Because the counters were incremented for the rerun that is about to be dispatched, the budget is exhausted only when a counter becomes **greater than** its configured limit.
 5. If budget remains and RCA does not recommend `stop_with_blocker`:
    a. Rewrite handoff with `## Prior Attempt Feedback` and `## Root Cause Analysis`.
    b. For infrastructure failures, also add `## Environment Check` section.
@@ -62,9 +62,9 @@ Every critical phase uses the same orchestrator-managed recovery loop. The RCA s
 
 - Spawning the RCA agent does **not** increment `phase_reruns` or `total_reruns`.
 - Only the subsequent phase re-dispatch increments the retry counters.
-- Equality with the configured limit still allows that re-dispatch. Exhaustion starts on the next failure, when `phase_reruns > max_per_phase` or `total_reruns > max_total`.
-- If the RCA agent fails (timeout, crash): record an RCA failure note in the handoff, allow one plain retry if budget remains.
-- If RCA repeatedly fails and no retry budget remains: emit a structured blocker, apply normal fallback/stop.
+- Equality with a configured positive limit still allows that re-dispatch. Exhaustion starts on the next failure, when `phase_reruns > max_per_phase` or `total_reruns > max_total`.
+- If the RCA agent fails (timeout, crash): record an RCA failure note in the handoff, allow one plain retry if retries are uncapped or finite budget remains.
+- If RCA repeatedly fails and finite retry budget is exhausted: emit a structured blocker, apply normal fallback/stop.
 
 ## Common RCA Schema
 

@@ -244,6 +244,39 @@ class TestDeterministicRunner:
             assert state.retry_counts.get("benchmark") == 1
             assert state.total_reruns == 1
 
+    def test_non_positive_rerun_limits_disable_budget_enforcement(self):
+        registry = _load_registry()
+        assert registry["rerun"]["max_per_phase"] == 0
+        assert registry["rerun"]["max_total"] == 0
+        config = _minimal_config("benchmark")
+        call_count = {}
+
+        def failing_then_passing_dispatch(phase_key, handoff_path):
+            call_count.setdefault(phase_key, 0)
+            call_count[phase_key] += 1
+            if phase_key == "benchmark" and call_count[phase_key] <= 3:
+                return {"verdict": "FAIL", "attempt": call_count[phase_key]}
+            return {"verdict": "PASS", "attempt": call_count[phase_key]}
+
+        def monitor_from_dispatch(phase_key, result_path, summary_path, checks):
+            attempts = call_count.get(phase_key, 0)
+            if phase_key == "benchmark" and attempts <= 3:
+                return {"verdict": "FAIL", "attempt": attempts}
+            return {"verdict": "PASS", "attempt": attempts}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config["OUTPUT_DIR"] = tmpdir
+            runner = DeterministicRunner(config, registry, tmpdir)
+            state = runner.run(
+                dispatch_fn=failing_then_passing_dispatch,
+                monitor_fn=monitor_from_dispatch,
+            )
+
+            assert state.status == "completed"
+            assert state.retry_counts.get("benchmark") == 3
+            assert state.total_reruns == 3
+            assert state.fallbacks_used == []
+
     def test_monitor_fn_required_for_non_shadow_dispatch(self):
         registry = _load_registry()
         config = _minimal_config("benchmark")

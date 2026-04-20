@@ -112,9 +112,9 @@ function dispatch(mode, config):
       total_reruns += 1
       phase_reruns += 1
 
-      # Step C: Check budget limits
-      if phase_reruns > registry.rerun.max_per_phase
-         or total_reruns > registry.rerun.max_total:
+      # Step C: Check budget limits (only when the registry cap is positive)
+      if (registry.rerun.max_per_phase > 0 and phase_reruns > registry.rerun.max_per_phase)
+         or (registry.rerun.max_total > 0 and total_reruns > registry.rerun.max_total):
         if phase.fallback_target and {"phase_key": phase_key, "fallback_target": phase.fallback_target} not in progress.fallbacks_used:
           progress.fallbacks_used.append({"phase_key": phase_key, "fallback_target": phase.fallback_target})
           rollback to fallback_target phase, invalidate subsequent outputs
@@ -318,8 +318,8 @@ are surfaced to the user and embedded into the rewritten handoff.
 
 If the RCA agent fails (timeout, crash, malformed output):
 - Record an RCA failure note in the rewritten handoff.
-- One plain retry is still allowed if retry budget remains.
-- If no retry budget remains, emit a structured blocker and apply normal fallback or stop rules.
+- One plain retry is still allowed whenever retries are uncapped or finite retry budget remains.
+- If finite retry budget is exhausted, emit a structured blocker and apply normal fallback or stop rules.
 - For the WARN-mode advisory path, an RCA failure is logged but does not block phase progression.
 
 ## Pipeline Blocker Emission
@@ -421,14 +421,14 @@ Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-o
 
 ## Rerun Rules
 
-- `max_per_phase`: 2 (two re-dispatches after the original attempt)
-- `max_total`: 5
-- Retry counters increment immediately before the budget check for the rerun that is about to be dispatched, so the budget is exhausted only when a counter becomes **greater than** its limit, not when it is merely equal.
+- `max_per_phase`: `0` by default in the shipped registry. Positive values cap per-phase re-dispatches; `0` or negative values mean uncapped retries.
+- `max_total`: `0` by default in the shipped registry. Positive values cap total re-dispatches across the run; `0` or negative values mean uncapped retries.
+- Retry counters increment immediately before the budget check for the rerun that is about to be dispatched. Budget exhaustion is only possible when a configured limit is positive and a counter becomes **greater than** that limit.
 - On FAIL: write a new handoff that appends `## Prior Attempt Feedback` with the monitor's failure comments, `failure_type`, and remediation guidance
 - Infrastructure failures get an additional `## Environment Check` section
 - A fresh phase agent is always spawned (never reuse a failed agent)
 - On repeated FAIL with `fallback_target`: rollback to the earlier phase, invalidate subsequent outputs
-- On limits exceeded: stop and report to user with full monitor history
+- On limits exceeded (only when finite caps are configured): stop and report to user with full monitor history
 
 ## Progress Tracking
 

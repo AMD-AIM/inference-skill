@@ -326,6 +326,14 @@ class TestRegistryStructure:
         assert "context_sources" in reg
         assert "schema_version" in reg
 
+    def test_registry_defaults_to_uncapped_reruns(self):
+        reg = _load_registry()
+        rerun = reg["rerun"]
+        assert isinstance(rerun["max_per_phase"], int)
+        assert isinstance(rerun["max_total"], int)
+        assert rerun["max_per_phase"] <= 0
+        assert rerun["max_total"] <= 0
+
     def test_phase_indices_are_contiguous(self):
         reg = _load_registry()
         indices = sorted(p["index"] for p in reg["phases"].values())

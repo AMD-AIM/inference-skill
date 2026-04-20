@@ -243,7 +243,7 @@
     "optimize": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]],
     "monitor": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
   },
-  "rerun": { "max_per_phase": 2, "max_total": 5 },
+  "rerun": { "max_per_phase": 0, "max_total": 0 },
   "systemic_rca": {
     "agent": "systemic-rca.md",
     "artifact": "results/systemic_rca.json",

@@ -63,7 +63,7 @@
     },
     "budget_mode": {
       "type": "object",
-      "description": "Decomposes the legacy budget_override.unlimited into two scoped modes. `default` enforces rerun.max_per_phase / max_total. `diagnostic` is orchestrator-set when the systemic RCA returns terminal_action_systemic=accept_finding: e2e benchmarks are halted, only instrumentation runs are allowed, and the loop converges to report-generate. `extended` is user-authorized only and lifts the per-phase / total caps for additional e2e attempts.",
+      "description": "Decomposes the legacy budget_override.unlimited into two scoped modes. `default` follows the registry's rerun policy: positive rerun.max_per_phase / max_total values are enforced, while non-positive values mean uncapped retries. `diagnostic` is orchestrator-set when the systemic RCA returns terminal_action_systemic=accept_finding: e2e benchmarks are halted, only instrumentation runs are allowed, and the loop converges to report-generate. `extended` is user-authorized only and lifts the per-phase / total caps for additional e2e attempts when a custom registry uses finite caps.",
       "required": ["mode", "set_by", "set_at"],
       "properties": {
         "mode": {

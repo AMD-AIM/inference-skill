@@ -6,15 +6,20 @@ Evaluation order is first-match, highest priority wins.
 Priority order:
 1. Safety stop: RCA stop_with_blocker -> abort (non-overridable)
 2. Human override: escalation response -> follow human's choice
-3. Budget constraint: budget exhausted -> redirect/abort
+3. Budget constraint: active finite caps exhausted -> redirect/abort
 4. RCA recommendation: retry or fallback per RCA
-5. Default: retry if budget remains
+5. Default: retry if retries are uncapped or budget remains
 """
 import logging
 
 logger = logging.getLogger(__name__)
 
 MAX_HUMAN_EXTENSIONS = 3  # Default cap per phase
+
+
+def _limit_exceeded(current_value, limit_value):
+    """Positive limits are enforced; non-positive values mean uncapped retries."""
+    return limit_value is not None and limit_value > 0 and current_value > limit_value
 
 
 def determine_response(verdict, failure_type, phase_key, phase_meta,
@@ -30,7 +35,8 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
         runner_state: RunnerState object with budget tracking
         rca_result: RCA analysis result dict or None
         escalation_result: Human response dict or None
-        rerun_limits: {"max_per_phase": int, "max_total": int} or None
+        rerun_limits: {"max_per_phase": int, "max_total": int} or None.
+            Non-positive limits mean uncapped retries.
         phase_reruns: Current phase retry count
         phase_list: Ordered list of phase keys (for partial report skip)
 
@@ -40,8 +46,8 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
     """
     if rerun_limits is None:
         rerun_limits = {}
-    max_per_phase = rerun_limits.get("max_per_phase", 2)
-    max_total = rerun_limits.get("max_total", 5)
+    max_per_phase = rerun_limits.get("max_per_phase", 0)
+    max_total = rerun_limits.get("max_total", 0)
 
     # Non-FAIL verdicts
     if verdict == "PASS":
@@ -62,7 +68,7 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
         human_action = escalation_result.get("action", "abort")
 
         if human_action == "retry":
-            if phase_reruns > max_per_phase:
+            if _limit_exceeded(phase_reruns, max_per_phase):
                 extensions = getattr(runner_state, 'human_extensions', {})
                 ext_count = extensions.get(phase_key, 0)
                 max_ext = getattr(runner_state, 'max_human_extensions', MAX_HUMAN_EXTENSIONS)
@@ -95,7 +101,8 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
                     "reason": "Human override: manual fix applied, retrying"}
 
     # 3. BUDGET CONSTRAINT
-    if phase_reruns > max_per_phase or runner_state.total_reruns > max_total:
+    if (_limit_exceeded(phase_reruns, max_per_phase)
+            or _limit_exceeded(runner_state.total_reruns, max_total)):
         fallback = phase_meta.get("fallback_target")
         if fallback:
             return {"action": "redirect", "target": fallback,
@@ -122,6 +129,6 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
                 return {"action": "redirect", "target": fallback,
                         "reason": f"RCA recommends fallback to {fallback}"}
 
-    # 5. DEFAULT: retry if budget remains
+    # 5. DEFAULT: retry if retries are uncapped or budget remains
     return {"action": "retry", "target": None,
-            "reason": "Default: retrying (budget available)"}
+            "reason": "Default: retrying (budget available or uncapped)"}

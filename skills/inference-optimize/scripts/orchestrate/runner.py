@@ -85,7 +85,7 @@ class RunnerState:
         self.human_extensions = {}
         self.rca_skipped = {}  # phase_key -> reason string when rca_fn is None but rca_artifact is set
         # budget_mode replaces the legacy ad-hoc budget_override.unlimited.
-        # default = enforce rerun.max_per_phase/max_total
+        # default = enforce positive rerun.max_per_phase/max_total caps from registry
         # diagnostic = orchestrator-set after systemic RCA accept_finding (no further e2e attempts)
         # extended = user-authorized only, lifts the per-phase/total caps
         self.budget_mode = {
@@ -447,6 +447,18 @@ class DeterministicRunner:
         are dispatched at all), so for diagnostic we still report 'enforced'.
         """
         return state.budget_mode.get("mode") != "extended"
+
+    @staticmethod
+    def rerun_limit_exceeded(current_value, limit_value):
+        """Positive limits are enforced; non-positive values mean uncapped retries."""
+        return limit_value is not None and limit_value > 0 and current_value > limit_value
+
+    def rerun_budgets_exhausted(self, state, phase_reruns):
+        """Return True only when an active rerun cap has been exceeded."""
+        return (
+            self.rerun_limit_exceeded(phase_reruns, self.rerun_limits.get("max_per_phase", 0))
+            or self.rerun_limit_exceeded(state.total_reruns, self.rerun_limits.get("max_total", 0))
+        )
 
     def write_pipeline_blockers(self, state):
         """Persist state.blockers_emitted to results/pipeline_blockers.json."""
@@ -1034,8 +1046,7 @@ class DeterministicRunner:
 
                     # Budget caps are bypassed only in extended (user-set) budget_mode.
                     if (self.budget_caps_enforced(state)
-                            and (phase_reruns > self.rerun_limits["max_per_phase"]
-                                 or state.total_reruns > self.rerun_limits["max_total"])):
+                            and self.rerun_budgets_exhausted(state, phase_reruns)):
                         ft = phase_meta.get("fallback_target")
                         already_used = any(
                             f["phase_key"] == phase_key and f["fallback_target"] == ft

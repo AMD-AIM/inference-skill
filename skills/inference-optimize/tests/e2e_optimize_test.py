@@ -339,6 +339,14 @@ def check_multi_agent_workspace(output_dir, config):
     if os.path.isfile(progress_path):
         with open(progress_path) as f:
             progress = json.load(f)
+        skill_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        registry_path = os.path.join(skill_root, "orchestrator", "phase-registry.json")
+        rerun_limits = {"max_per_phase": 0, "max_total": 0}
+        if os.path.isfile(registry_path):
+            with open(registry_path) as f:
+                rerun_limits = json.load(f).get("rerun", rerun_limits)
+        max_per_phase = rerun_limits.get("max_per_phase", 0)
+        max_total = rerun_limits.get("max_total", 0)
         completed = progress.get("phases_completed", [])
         valid_keys = set(OPTIMIZE_PHASES)
         invalid = [k for k in completed if k not in valid_keys]
@@ -359,16 +367,20 @@ def check_multi_agent_workspace(output_dir, config):
             else:
                 checks.append(CheckResult("multi-agent", "retry_counts uses canonical keys",
                                            "pass"))
-            for k, v in retry_counts.items():
-                if isinstance(v, int) and v > 2:
-                    checks.append(CheckResult("multi-agent",
-                                               f"retry_counts[{k}] within limit",
-                                               "fail", f"Retried {v} times (max_per_phase=2)"))
+            if max_per_phase > 0:
+                for k, v in retry_counts.items():
+                    if isinstance(v, int) and v > max_per_phase:
+                        checks.append(CheckResult(
+                            "multi-agent",
+                            f"retry_counts[{k}] within limit",
+                            "fail",
+                            f"Retried {v} times (max_per_phase={max_per_phase})",
+                        ))
 
         total_reruns = progress.get("total_reruns", 0)
-        if isinstance(total_reruns, int) and total_reruns > 5:
+        if max_total > 0 and isinstance(total_reruns, int) and total_reruns > max_total:
             checks.append(CheckResult("multi-agent", "total_reruns within limit",
-                                       "fail", f"Total reruns={total_reruns} (max=5)"))
+                                       "fail", f"Total reruns={total_reruns} (max={max_total})"))
 
         # Validate fallbacks_used structure
         fallbacks_used = progress.get("fallbacks_used", [])

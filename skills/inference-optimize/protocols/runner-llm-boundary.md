@@ -58,7 +58,7 @@ When the runner detects a failure, it classifies it:
 | `missing_artifact` | Required artifact not produced | Re-dispatch with explicit artifact list |
 | `monitor_error` | Monitor agent failure (crash, malformed output) | Fail-closed on critical phases (Commit 3) |
 | `timeout` | Phase exceeded wall-clock limit | Treat as FAIL, route through RCA |
-| `budget_exhausted` | Retry/total rerun limits exceeded | Fallback or stop |
+| `budget_exhausted` | Positive retry/total rerun limits exceeded | Fallback or stop |
 | `manual_intervention_required` | Unrecoverable state needs human | Stop with structured blocker |
 
 ## Backward Compatibility
@@ -84,9 +84,9 @@ PASS, WARN, and FAIL are **verdicts** — they describe what was observed. REDIR
 
 1. Safety stop (RCA `stop_with_blocker`) -> abort (non-overridable)
 2. Human override (escalation response) -> follow human's choice
-3. Budget constraint (exhausted) -> redirect to fallback or abort
+3. Budget constraint (positive caps exhausted) -> redirect to fallback or abort
 4. RCA recommendation -> retry or fallback
-5. Default -> retry if budget remains
+5. Default -> retry if retries are uncapped or budget remains
 
 ### Escalation Boundary
 

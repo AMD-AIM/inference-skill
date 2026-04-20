@@ -177,6 +177,8 @@ Read only the phase docs needed for the selected mode and start phase.
 
 The **deterministic runner** (`scripts/orchestrate/runner.py`) is the canonical orchestration path. It handles all mechanical work: mode resolution, dependency checks, artifact prerequisites, context-source resolution, context-budget enforcement, retry budgets, fallback invalidation, handoff generation, atomic `progress.json` writes, and parity artifact emission.
 
+The shipped registry now sets `rerun.max_per_phase=0` and `rerun.max_total=0`, which the runner interprets as uncapped retries. Set positive integers in a custom registry only if you explicitly want budget exhaustion and fallback/stop behavior.
+
 Set `USE_RUNNER=false` in the run configuration to revert to the legacy LLM orchestrator path. The legacy path remains fully supported.
 
 Architecture details: `docs/ARCHITECTURE.md`. Parity verification: `docs/PARITY_CONTRACT.md`.
