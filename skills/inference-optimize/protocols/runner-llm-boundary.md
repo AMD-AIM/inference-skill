@@ -103,5 +103,5 @@ The runner enforces bounded context before each dispatch:
 1. Resolve `context_sources` from the registry to actual file contents or config values.
 2. Large structured data stays in sidecar files; only file paths plus compact summaries enter the handoff.
 3. After a phase completes, the runner retains only `phase_key + verdict + sticky_values` in accumulated state.
-4. Before dispatch, enforce `max_context_lines` (global default: 500, per-phase overrides in registry). Truncate deterministically with a `[truncated: N lines omitted]` marker.
+4. Before dispatch, apply `max_context_lines` from the registry (default `20000`). If `max_context_lines > 0`, truncate deterministically with a `[truncated: N lines omitted]` marker. If `max_context_lines <= 0`, do not truncate.
 5. No LLM-based summarization for compression — that would introduce non-determinism.

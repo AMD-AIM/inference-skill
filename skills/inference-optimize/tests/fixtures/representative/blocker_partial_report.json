@@ -21,7 +21,7 @@
           "summary": "Compilation failed on all targets after fallback",
           "blocker_classifications": ["compilation_failure"],
           "terminal_action": "budget_exhausted",
-          "rca_artifact": "results/kernel_opt_root_cause.json",
+          "rca_artifact": "results/kernel_opt_rca.json",
           "monitor_review": "monitor/phase-07-review.md",
           "timestamp": "2025-01-15T10:30:00Z"
         }

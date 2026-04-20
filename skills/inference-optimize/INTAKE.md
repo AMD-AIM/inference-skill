@@ -55,8 +55,9 @@ Rules:
 7. Send a status update when discovery is complete.
 8. If this is a smoke-style run, offer a fast path with recommended smoke defaults.
 9. Only if the user wants customization, ask the detailed filter question set in one batched form.
-10. Summarize the plan and ask for final confirmation.
-11. After confirmation, send an execution-start status update and begin work.
+10. If mode is `optimize`, `optimize-only`, or `monitor`, set `MONITOR_LEVEL=strict` automatically before final confirmation.
+11. Summarize the plan and ask for final confirmation.
+12. After confirmation, send an execution-start status update and begin work.
 
 ## Round 1: exact high-level question set
 
@@ -151,8 +152,12 @@ If multiple concrete values are missing, batch follow-ups into one short message
 ## Monitor mode follow-up
 
 If the user chose `Monitor workflow`, treat it exactly like `Optimize workflow` for setup
-purposes (Framework, Output, GPUs, discovery, and filter questions all still apply). The only
-difference at runtime is that `orchestrator/MONITOR-MODE.md` is read alongside
+purposes (Framework, Output, GPUs, discovery, and filter questions all still apply).
+
+Before final confirmation for `mode=monitor`, always set `MONITOR_LEVEL=strict`.
+Do not ask the user to choose between standard/strict/minimal for monitor workflow.
+
+At runtime, `orchestrator/MONITOR-MODE.md` is read alongside
 `orchestrator/ORCHESTRATOR.md`, and the per-phase digest is surfaced after each phase boundary.
 
 ## Lightweight discovery before filter questions
@@ -288,21 +293,14 @@ Map these to:
 - `Manual optimization only` -> `GEAK_MODE=manual`
 - `Skip integration benchmark` -> `SKIP_INTEGRATION=true`
 
-### Monitor level
+### Monitoring policy (fixed)
 
-Only if mode is `optimize` or `optimize-only`, optionally ask:
+If mode is `optimize`, `optimize-only`, or `monitor`, set:
 
-- `header`: `Monitor`
-- `question`: `What level of quality monitoring should I use?`
-- `options`:
-  - `Standard monitoring`: `Review critical phases with quality checks, generic checks for others`
-  - `Strict monitoring`: `Apply quality checks to all phases, fail on any warning`
-  - `Minimal monitoring`: `Only check that phase results exist, skip quality analysis`
+- `MONITOR_LEVEL=strict`
 
-Map these to:
-- `Standard monitoring` -> `MONITOR_LEVEL=standard` (default)
-- `Strict monitoring` -> `MONITOR_LEVEL=strict`
-- `Minimal monitoring` -> `MONITOR_LEVEL=minimal`
+This setting is mandatory for skill-guided runs. Apply it even when other filter questions were
+skipped via defaults or resume shortcuts.
 
 ## Final confirmation
 
@@ -314,6 +312,7 @@ Before execution, summarize:
 - TP / EP / sequence / concurrency selection
 - GPU selection
 - profiling behavior
+- monitoring policy: strict (fixed for `optimize`, `optimize-only`, and `monitor`)
 
 Then ask one final question:
 

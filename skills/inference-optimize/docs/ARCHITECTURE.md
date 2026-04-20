@@ -54,7 +54,7 @@ These are enforced by `tests/test_invariants.py`, not just prose.
 | INV-2 | Every control-plane JSON artifact carries `schema_version` and is validated on write and on resume. | Commit 2 |
 | INV-3 | Critical phases fail closed on missing or malformed monitor JSON, RCA JSON, handoff data, or validator-critical artifacts. | Commit 3 |
 | INV-4 | Attempt artifacts are immutable and attempt-scoped; retries append, never mutate. | Commit 4 |
-| INV-5 | The legacy orchestration path remains the default until shadow parity, predicate agreement, and rollback proof are green. | Commit 7 |
+| INV-5 | The deterministic runner is the default orchestration path; legacy remains available via explicit rollback (`USE_RUNNER=false`) with parity/rollback proof. | Commit 7+ |
 | INV-6 | LLM judgment stays only where it adds value: intake UX, monitor explanation, RCA interpretation. Mechanical work moves to code. | Commit 4 |
 | INV-7 | Release-critical PASS/WARN/FAIL authority comes from schemas, validators, report logic, runner state, and structured predicates. Prose monitor output is explanatory evidence, not final authority. | Commit 5 |
 | INV-8 | Registry fields must be implemented and tested or absent. No dormant documented contracts. | All commits |
@@ -141,5 +141,5 @@ Each phase's L1 predicate evaluation is written to `monitor/phase-{NN}-predicate
 Runs started under the legacy path before the runner lands:
 
 - Resume under the legacy path. Do not force-migrate mid-run.
-- The runner path only applies to new runs started after `USE_RUNNER=true`.
+- The runner path applies to new runs started with `USE_RUNNER=true` (default for skill-guided runs).
 - `progress.json` written by the legacy path is read-compatible with the runner path (validated by resume tests in Commit 2).

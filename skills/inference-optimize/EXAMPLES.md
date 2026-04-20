@@ -155,7 +155,7 @@ Use inference-optimize skill for dsr1-fp4-mi355x-sglang with optimize workflow.
 
 Assistant:
 
-The guided setup flow proceeds the same as before (Round 1 setup form, discovery, filter choices, confirmation). After confirmation:
+The guided setup flow proceeds the same as before (Round 1 setup form, discovery, filter choices, strict monitoring is applied automatically, confirmation). After confirmation:
 
 ```text
 Status 5/5: starting multi-agent execution.
@@ -184,3 +184,42 @@ Report: ~/inference_dsr1-fp4-mi355x-sglang_20260413_100000/report/optimization_r
 ```
 
 > In multi-agent mode, each phase runs as an isolated agent with bounded context. The orchestrator dispatches phases sequentially, and the monitor validates critical phases before proceeding. If a critical phase fails, the orchestrator reruns it (up to 2 times) before escalating.
+
+## Example 5: monitor workflow with fixed strict monitoring
+
+User:
+
+```text
+Use inference-optimize skill for dsr1-fp4-mi355x-sglang with monitor workflow.
+```
+
+Assistant asks the Round 1 setup form (including `Run plan`, `Framework`, `Output`, and `GPUs`).
+
+User selects:
+
+- `Run plan`: `Monitor workflow`
+- `Framework`: `SGLang`
+- `Output`: `New timestamped output`
+- `GPUs`: `Auto-select GPUs`
+
+Assistant performs lightweight discovery, asks filter choices as needed, and applies strict monitoring automatically for monitor workflow.
+
+Assistant:
+
+```text
+Status 4/5: plan ready. One final confirmation and I’ll start the workflow.
+
+Plan summary:
+- config: dsr1-fp4-mi355x-sglang
+- mode: monitor
+- framework: sglang
+- output: new timestamped directory
+- monitoring: strict (fixed)
+- filters: TP=8, seq=1k1k, conc=4
+
+Start now?
+```
+
+Assistant then asks:
+
+- `Confirm`: `Start now` / `Edit choices` / `Cancel`

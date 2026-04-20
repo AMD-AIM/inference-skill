@@ -100,8 +100,9 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`
 - `GEAK_MODE` (auto, full, triton_only, manual; from INTAKE optimization extras)
 - `OPTIMIZE_SCOPE` (all, fused_only; from INTAKE optimization extras)
-- `MONITOR_LEVEL` (standard, strict, minimal; from INTAKE monitor level question)
+- `MONITOR_LEVEL` (strict by default for skill-guided `optimize`, `optimize-only`, and `monitor` runs; optional manual override for advanced configs)
 - `SKIP_INTEGRATION` (true/false; from INTAKE "Skip integration benchmark" option)
+- `USE_RUNNER` (set to `true` for skill-guided runs; set `false` only for explicit rollback/debugging)
 - `RESOURCES_DIR` (path to installed skill's `resources/` directory; contains `TraceLens-internal.tar.gz`)
 - `TEMPLATES_DIR` (path where bundled templates are copied during bootstrap)
 - `ENFORCE_EAGER_FLAG` (set to `--enforce-eager` when eager mode is required for the framework, or empty string otherwise; resolved by the agent based on framework and profiling requirements)
@@ -127,8 +128,9 @@ Resolve these before loading any phase doc:
 - `ENV_INFO_FILE`: `<OUTPUT_DIR>/env_info.json` (environment info written by Phase 0)
 - `GEAK_MODE`: `auto` (auto-detect GEAK availability; `full` = Triton + HIP/CK; `triton_only` = simple mode only; `manual` = no GEAK)
 - `OPTIMIZE_SCOPE`: `all` (optimize all bottleneck kernels; `fused_only` = only fused operator problems)
-- `MONITOR_LEVEL`: `standard` (review critical phases with quality checks, generic checks for others; `strict` = quality checks on all phases, fail on any warning; `minimal` = only check result exists)
+- `MONITOR_LEVEL`: `strict` (default for skill-guided runs; quality checks on all phases, fail on any warning. Advanced/manual configs may still set `standard` or `minimal`)
 - `SKIP_INTEGRATION`: `false` (when `true`, skip Phase 8 integration benchmark — only generate optimized kernels and plugins)
+- `USE_RUNNER`: `true` (default for skill-guided runs; set `false` only for explicit rollback/debugging)
 - `RESOURCES_DIR`: `<installed_skill_root>/resources` (the `resources/` directory alongside `SKILL.md`; not copied to OUTPUT_DIR due to tarball size -- must remain accessible during execution)
 - `TEMPLATES_DIR`: `<OUTPUT_DIR>/templates`
 - `ENFORCE_EAGER_FLAG`: `""` (empty; set to `--enforce-eager` by the agent when the framework requires eager mode for profiling)

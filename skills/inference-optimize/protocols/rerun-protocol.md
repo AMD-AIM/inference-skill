@@ -43,7 +43,7 @@ Every critical phase uses the same orchestrator-managed recovery loop. The RCA s
 2. **Spawn RCA agent** (does NOT increment counters):
    a. Orchestrator reads `phases[phase_key].rca_artifact` from the registry.
    b. Orchestrator constructs an `analyzer_manifest` from `rca_artifact.analysis_context`.
-   c. Analysis agent writes `rca_artifact.output` (e.g. `results/integration_root_cause.json`).
+   c. Analysis agent writes `rca_artifact.output` (e.g. `results/integration_rca.json`).
 3. **Increment retry counters** (`phase_reruns` and `total_reruns`).
 4. **Check budget limits** (`max_per_phase`, `max_total`). Because the counters were incremented for the rerun that is about to be dispatched, the budget is exhausted only when a counter becomes **greater than** its configured limit.
 5. If budget remains and RCA does not recommend `stop_with_blocker`:
@@ -68,7 +68,7 @@ Every critical phase uses the same orchestrator-managed recovery loop. The RCA s
 
 ## Common RCA Schema
 
-Every `*_root_cause.json` written by the analysis agent includes:
+Every `*_rca.json` written by the analysis agent includes:
 
 - `phase` — string, the phase key
 - `failure_type` — string, monitor-assigned failure type
@@ -83,16 +83,16 @@ Every `*_root_cause.json` written by the analysis agent includes:
 
 ### Phase-Specific RCA Fields
 
-**Benchmark** (`results/benchmark_root_cause.json`):
+**Benchmark** (`results/benchmark_rca.json`):
 - `missing_artifacts`, `harness_issue`, `environment_issue`
 
-**Profile** (`results/profile_root_cause.json`):
+**Profile** (`results/profile_rca.json`):
 - `trace_integrity_failures`, `missing_phase_split_inputs`, `tracelens_readiness`
 
-**Kernel-optimize** (`results/kernel_opt_root_cause.json`):
+**Kernel-optimize** (`results/kernel_opt_rca.json`):
 - `failed_kernels`, `missing_winners`, `expected_improvement_status`, `next_attempt_mode`
 
-**Integration** (`results/integration_root_cause.json`):
+**Integration** (`results/integration_rca.json`):
 - `failed_targets`, `integration_strategy_by_target`, `dispatch_failures`, `adapter_overhead_findings`
 
 ### Blocker Classification Enums

@@ -77,19 +77,26 @@ class TestV2FallbackDispatch:
     def test_fallback_redispatches_target(self):
         """After budget exhaustion + fallback, the fallback phase is dispatched."""
         dispatched_phases = []
+        latest_verdict_by_phase = {}
 
         def dispatch_fn(phase_key, handoff_path):
             dispatched_phases.append(phase_key)
             if phase_key == "kernel-optimize" and dispatched_phases.count("kernel-optimize") <= 3:
-                return {"verdict": "FAIL", "failure_type": "logic"}
-            return {"verdict": "PASS"}
+                verdict = {"verdict": "FAIL", "failure_type": "logic"}
+            else:
+                verdict = {"verdict": "PASS"}
+            latest_verdict_by_phase[phase_key] = verdict
+            return verdict
+
+        def monitor_fn(phase_key, result_path, summary_path, checks):
+            return latest_verdict_by_phase.get(phase_key, {"verdict": "PASS"})
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=True)
             _create_artifacts(tmpdir)
             registry = json.loads(REGISTRY_PATH.read_text())
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn)
+            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
             # kernel-optimize has fallback_target = problem-generate
             # After 3 FAILs, budget exhausted -> redirect to problem-generate
@@ -107,22 +114,30 @@ class TestV2FallbackDispatch:
     def test_fallback_then_success_completes(self):
         """Fallback re-dispatch -> subsequent success -> pipeline completes."""
         dispatch_count = {}
+        latest_verdict_by_phase = {}
 
         def dispatch_fn(phase_key, handoff_path):
             dispatch_count[phase_key] = dispatch_count.get(phase_key, 0) + 1
             # kernel-optimize fails first 3 times, then passes after fallback
             if phase_key == "kernel-optimize":
                 if dispatch_count[phase_key] <= 3:
-                    return {"verdict": "FAIL", "failure_type": "logic"}
-                return {"verdict": "PASS"}
-            return {"verdict": "PASS"}
+                    verdict = {"verdict": "FAIL", "failure_type": "logic"}
+                else:
+                    verdict = {"verdict": "PASS"}
+            else:
+                verdict = {"verdict": "PASS"}
+            latest_verdict_by_phase[phase_key] = verdict
+            return verdict
+
+        def monitor_fn(phase_key, result_path, summary_path, checks):
+            return latest_verdict_by_phase.get(phase_key, {"verdict": "PASS"})
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=True)
             _create_artifacts(tmpdir)
             registry = json.loads(REGISTRY_PATH.read_text())
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn)
+            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
             assert state.status == "completed", f"Expected completed, got {state.status}"
             assert len(state.fallbacks_used) == 1
@@ -131,17 +146,25 @@ class TestV2FallbackDispatch:
 
     def test_fallback_exhausted_aborts(self):
         """If fallback also fails and budget exhausted again, pipeline aborts."""
+        latest_verdict_by_phase = {}
+
         def dispatch_fn(phase_key, handoff_path):
             if phase_key in ("kernel-optimize", "problem-generate"):
-                return {"verdict": "FAIL", "failure_type": "logic"}
-            return {"verdict": "PASS"}
+                verdict = {"verdict": "FAIL", "failure_type": "logic"}
+            else:
+                verdict = {"verdict": "PASS"}
+            latest_verdict_by_phase[phase_key] = verdict
+            return verdict
+
+        def monitor_fn(phase_key, result_path, summary_path, checks):
+            return latest_verdict_by_phase.get(phase_key, {"verdict": "PASS"})
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=True)
             _create_artifacts(tmpdir)
             registry = json.loads(REGISTRY_PATH.read_text())
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn)
+            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
             # Should eventually fail (budget exhausted after fallback exhausted)
             assert state.status == "failed"
@@ -153,19 +176,26 @@ class TestV2FallbackDispatch:
         re-dispatched in V1 because the outer for loop advances past it.
         """
         dispatched_phases = []
+        latest_verdict_by_phase = {}
 
         def dispatch_fn(phase_key, handoff_path):
             dispatched_phases.append(phase_key)
             if phase_key == "kernel-optimize":
-                return {"verdict": "FAIL", "failure_type": "logic"}
-            return {"verdict": "PASS"}
+                verdict = {"verdict": "FAIL", "failure_type": "logic"}
+            else:
+                verdict = {"verdict": "PASS"}
+            latest_verdict_by_phase[phase_key] = verdict
+            return verdict
+
+        def monitor_fn(phase_key, result_path, summary_path, checks):
+            return latest_verdict_by_phase.get(phase_key, {"verdict": "PASS"})
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, v2=False)
             _create_artifacts(tmpdir)
             registry = json.loads(REGISTRY_PATH.read_text())
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn)
+            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
 
             # In V1, problem-generate appears only once (initial dispatch).
             # The fallback break doesn't re-dispatch it.

@@ -405,10 +405,11 @@ def check_multi_agent_workspace(output_dir, config):
     # Validate handoff files match completed phases
     handoff_dir = os.path.join(output_dir, "handoff")
     rca_phase_map = {
-        "benchmark": "results/benchmark_root_cause.json",
-        "profile-analyze": "results/profile_root_cause.json",
-        "kernel-optimize": "results/kernel_opt_root_cause.json",
-        "integration": "results/integration_root_cause.json",
+        "benchmark": "results/benchmark_rca.json",
+        "profile-analyze": "results/profile_rca.json",
+        "problem-generate": "results/problem_gen_rca.json",
+        "kernel-optimize": "results/kernel_opt_rca.json",
+        "integration": "results/integration_rca.json",
     }
     if os.path.isdir(handoff_dir) and os.path.isfile(progress_path):
         for phase_key in completed:
@@ -1213,7 +1214,7 @@ def check_phase08_result_scalars(output_dir, config):
 
 
 def check_rca_artifacts(output_dir, config):
-    """Verify *_root_cause.json files exist when the corresponding phase had reruns."""
+    """Verify *_rca.json files exist when the corresponding phase had reruns."""
     checks = []
     progress_path = os.path.join(output_dir, "progress.json")
     if not os.path.isfile(progress_path):
@@ -1226,10 +1227,11 @@ def check_rca_artifacts(output_dir, config):
     results_dir = os.path.join(output_dir, "results")
 
     rca_map = {
-        "benchmark": "benchmark_root_cause.json",
-        "profile-analyze": "profile_root_cause.json",
-        "kernel-optimize": "kernel_opt_root_cause.json",
-        "integration": "integration_root_cause.json",
+        "benchmark": "benchmark_rca.json",
+        "profile-analyze": "profile_rca.json",
+        "problem-generate": "problem_gen_rca.json",
+        "kernel-optimize": "kernel_opt_rca.json",
+        "integration": "integration_rca.json",
     }
 
     for phase_key, rca_file in rca_map.items():

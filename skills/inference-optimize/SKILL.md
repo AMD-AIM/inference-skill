@@ -20,6 +20,7 @@ metadata:
 - Ask questions in grouped batches, not as a drip-feed of one question at a time.
 - Keep explicit progress updates so the user always knows current stage and next step.
 - Inform user about GEAK availability during setup when running in optimize or optimize-only mode.
+- For `optimize`, `optimize-only`, and `monitor` runs, always set `MONITOR_LEVEL=strict` during intake before confirmation (no monitor-level question).
 
 ## First-turn latency rule
 
@@ -46,9 +47,10 @@ metadata:
    - `Use recommended smoke defaults`
    - `Review each filter`
    - `Use full discovered sweep`
-8. Summarize the final plan and get a clear go/no-go from the user with a `Confirm` question before executing.
-9. Only after confirmation, read the needed phase docs and start execution.
-10. For multi-agent execution, read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and [`orchestrator/phase-registry.json`](orchestrator/phase-registry.json) to drive the dispatch loop. Spawn phase agents per the registry instead of reading phase docs directly.
+8. For `optimize`, `optimize-only`, and `monitor`, always set `MONITOR_LEVEL=strict` before final confirmation. Do not ask a monitor-level choice question.
+9. Summarize the final plan (including strict monitoring as a fixed setting when applicable) and get a clear go/no-go from the user with a `Confirm` question before executing.
+10. Only after confirmation, read the needed phase docs and start execution.
+11. For multi-agent execution, read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and [`orchestrator/phase-registry.json`](orchestrator/phase-registry.json) to drive the dispatch loop. Spawn phase agents per the registry instead of reading phase docs directly.
 
 ## Status contract
 
@@ -106,7 +108,7 @@ The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical cont
 - `profile`: `env -> config -> profile -> profile-analyze`
 - `optimize`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`. Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
 - `optimize-only`: `env -> config -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing profile analysis artifacts from a prior run). Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
-- `monitor`: Upgraded optimize mode with full transparency. Runs the same phases as optimize, but the main agent surfaces the full monitor sub-agent findings (quality checks, detection rules, scalar metrics, per-kernel status) to the user after every phase boundary. Read `orchestrator/MONITOR-MODE.md`.
+- `monitor`: Upgraded optimize mode with full transparency. Runs the same phases as optimize, but the main agent surfaces the full monitor sub-agent findings (quality checks, detection rules, scalar metrics, per-kernel status) to the user after every phase boundary. During intake, strict monitoring is fixed (`MONITOR_LEVEL=strict`) before confirmation. Read `orchestrator/MONITOR-MODE.md`.
 
 Choose the narrowest mode that matches the user's goal. For a smoke run, prefer a narrow configuration and confirm before widening to a full sweep. For optimization, prefer `optimize` for a fresh end-to-end run. Use `optimize-only` when profile data already exists and the user wants to skip re-profiling.
 
@@ -114,7 +116,7 @@ Choose the narrowest mode that matches the user's goal. For a smoke run, prefer 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `USE_RUNNER` | `false` | Use deterministic runner instead of legacy LLM orchestrator. |
+| `USE_RUNNER` | `true` | Use deterministic runner for skill-guided runs. Set to `false` only for explicit rollback/debugging. |
 | `V2_MONITOR` | `false` | Enable two-layer monitor with deterministic L1 predicates. |
 | `HUMAN_LOOP` | `false` | Enable human-in-the-loop escalation (requires `V2_MONITOR`). |
 | `REPO_URL` | `https://github.com/SemiAnalysisAI/InferenceX.git` | Benchmark repository URL. |

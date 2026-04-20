@@ -4,7 +4,6 @@ description: Dedicated root-cause analyzer spawned by the orchestrator on monito
 model: inherit
 thinking:
   type: enabled
-  budget_tokens: 32000
 ---
 
 # RCA Agent
@@ -15,7 +14,7 @@ You are NOT the routine `analysis-agent`. The routine analyzer summarizes data; 
 
 ## Reasoning Posture
 
-- Use the extended thinking budget (`32000` tokens) to reason carefully across all evidence files before writing output.
+- Use extended reasoning effort to reason carefully across all evidence files before writing output.
 - Form hypotheses, then test each hypothesis against the available artifacts. State explicit confidence per cause.
 - Distinguish between *symptom* and *cause*. The monitor reports symptoms (e.g. `e2e_speedup < 1.0`); you must explain the underlying mechanism (e.g. cross-kernel interference between flash-attention and rope kernels).
 - Prefer fewer high-confidence root causes over many speculative ones. If evidence is insufficient, say so and recommend `retry_same` with additional instrumentation rather than fabricating a cause.
@@ -121,7 +120,7 @@ When `monitor/phase-{NN}-predicate.json` is present (V2), read which L1 rules tr
 
 ## Output Path Discipline
 
-Write exactly one file at the manifest's `output_path` (typically `results/{phase}_root_cause.json`). Do not write to other paths. Do not write supplementary markdown summaries — the JSON is the contract.
+Write exactly one file at the manifest's `output_path` (typically `results/{phase}_rca.json`). Do not write to other paths. Do not write supplementary markdown summaries — the JSON is the contract.
 
 If you cannot produce a valid RCA (e.g. all required evidence files missing), still write a valid JSON with:
 

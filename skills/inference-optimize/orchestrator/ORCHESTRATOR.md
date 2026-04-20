@@ -4,7 +4,7 @@ You are the orchestrator for the Inference multi-agent optimization pipeline. Yo
 
 ## Context Budget
 
-During execution you hold ~500 lines of context: this document + phase-registry.json + the current monitor review. You do NOT read phase agent docs or phase runbooks.
+During execution you hold this document + `phase-registry.json` + the current monitor review. You do NOT read phase agent docs or phase runbooks.
 
 ## Lifecycle
 
@@ -93,7 +93,7 @@ function dispatch(mode, config):
           analyzer_manifest = build_rca_manifest(
               phase_key, rca_artifact, review, verdict_severity="WARN")
           rca_result = spawn_rca_agent(analyzer_manifest)
-          # rca_result writes rca_artifact.output (e.g. results/integration_root_cause.json)
+          # rca_result writes rca_artifact.output (e.g. results/integration_rca.json)
         update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
         continue to next phase (non-blocking)
 
@@ -106,7 +106,7 @@ function dispatch(mode, config):
         analyzer_manifest = build_rca_manifest(
             phase_key, rca_artifact, review, verdict_severity="FAIL")
         rca_result = spawn_rca_agent(analyzer_manifest)
-        # rca_result writes rca_artifact.output (e.g. results/integration_root_cause.json)
+        # rca_result writes rca_artifact.output (e.g. results/integration_rca.json)
 
       # Step B: Increment counters AFTER RCA, BEFORE budget check
       total_reruns += 1
@@ -149,7 +149,7 @@ function dispatch(mode, config):
 A per-phase RCA tells you why one attempt failed. When two consecutive attempts produce **the same RCA fingerprint** even though the retry hypothesis was different, the per-phase view is no longer the right lens — the loop is stuck on a cross-phase issue (wrong patch target, measurement bias, baseline drift, etc). The orchestrator detects this mechanically and dispatches the **systemic RCA agent** instead of another per-phase retry. This applies to both V1 and V2 dispatch loops, regardless of `max_per_phase` budget.
 
 ### Fingerprint
-Each per-phase RCA artifact (`results/<phase>_root_cause.json`) includes:
+Each per-phase RCA artifact (`results/<phase>_rca.json`) includes:
 - `scope: "phase"`
 - `root_cause_class` (e.g. `wrong_patch_target`, `dynamo_blocked`, `geak_measurement_bias`)
 - `key_signal_names` (sorted list of symbolic signals — names not values)
@@ -161,13 +161,13 @@ The RCA agent computes and writes the fingerprint. The orchestrator only reads i
 
 After spawning a per-phase RCA on attempt N (where N >= 2):
 
-1. Read `results/<phase>_root_cause.json` (this attempt's fingerprint).
-2. Read `results/<phase>_root_cause_attempt{N-1}.json` if the runner archived the prior attempt's RCA, or recover the prior fingerprint from `results/rca_history.json`.
+1. Read `results/<phase>_rca.json` (this attempt's fingerprint).
+2. Read `results/<phase>_rca_attempt{N-1}.json` if the runner archived the prior attempt's RCA, or recover the prior fingerprint from `results/rca_history.json`.
 3. If `current.fingerprint == prior.fingerprint` AND the dispatched retry hypothesis differed (handoff feedback was not identical to the prior attempt):
    - **Do NOT dispatch another per-phase retry.**
    - **Do NOT increment retry counters again** (they already incremented before the per-phase RCA).
    - Dispatch the **systemic RCA agent** (`agents/systemic-rca.md`).
-   - Write the systemic RCA artifact path to `results/systemic_root_cause.json` per `phase-registry.json -> systemic_rca_artifact`.
+  - Write the systemic RCA artifact path to `results/systemic_rca.json` per `phase-registry.json -> systemic_rca_artifact`.
 
 ### Systemic RCA terminal_action
 
@@ -180,7 +180,7 @@ The orchestrator also surfaces the systemic RCA to the user via the standard `pr
 
 ### Archiving prior RCA fingerprints
 
-Before overwriting `results/<phase>_root_cause.json` with a new attempt's RCA, copy the existing file to `results/<phase>_root_cause_attempt{N}.json` so the fingerprint history survives. The runner does this archival as part of its FAIL-handling step. Also append `{attempt, fingerprint, timestamp}` to `results/rca_history.json` for cross-attempt traceability.
+Before overwriting `results/<phase>_rca.json` with a new attempt's RCA, copy the existing file to `results/<phase>_rca_attempt{N}.json` so the fingerprint history survives. The runner does this archival as part of its FAIL-handling step. Also append `{attempt, fingerprint, timestamp}` to `results/rca_history.json` for cross-attempt traceability.
 
 ## V2 Dispatch Loop
 
@@ -299,7 +299,7 @@ Manifest construction:
 1. Read `phases[phase_key].rca_artifact` from the registry.
 2. Build an `analyzer_manifest` YAML block:
    - `task` = `"Root cause analysis for {phase_key} {verdict_severity}: {monitor.failure_type}"`
-   - `output_path` = `rca_artifact.output` (e.g. `"results/integration_root_cause.json"`)
+   - `output_path` = `rca_artifact.output` (e.g. `"results/integration_rca.json"`)
    - `phase_key` = the failing phase's canonical key
    - `verdict_severity` = `"WARN"` or `"FAIL"` (controls allowable terminal actions)
    - `files` = one entry per item in `rca_artifact.analysis_context`, with:
@@ -334,7 +334,7 @@ The `write_pipeline_blocker` function appends an entry to `results/pipeline_bloc
       "summary": "{monitor summary or RCA summary}",
       "blocker_classifications": [],
       "terminal_action": "{from RCA or 'budget_exhausted'}",
-      "rca_artifact": "{path to root_cause.json if present}",
+      "rca_artifact": "{path to *_rca.json if present}",
       "monitor_review": "{path to monitor review}",
       "timestamp": "{ISO 8601}"
     }
@@ -363,9 +363,10 @@ The retrying phase agent reads this section alongside `## Prior Attempt Feedback
 After each phase agent completes:
 
 1. Read `MONITOR_LEVEL` from `config.json`:
-   - `standard` (default): Use `phase.quality.checks` for critical phases, generic result-exists check for non-critical
+   - `standard` (manual override): Use `phase.quality.checks` for critical phases, generic result-exists check for non-critical
    - `strict`: Apply `phase.quality.checks` to ALL phases (treat every phase as critical), and FAIL on any WARN verdict
    - `minimal`: Only check that the result file exists and status is not `failed` — skip quality analysis
+   - In skill-guided runs, intake fixes `MONITOR_LEVEL=strict` before execution.
 2. Build a monitor prompt containing:
    - The quality checks selected per the monitor level
    - The phase key and index
@@ -382,6 +383,7 @@ After each phase agent completes:
    - `monitor/running-summary.md` (accumulated state)
    - `agent-results/phase-NN-result.md` (latest output)
    - `monitor/phase-{NN}-context.json` (if generated in step 3)
+   - The orchestrator must not self-author the review or inline a verdict; monitor verdicts must come from this separate monitor agent.
 5. Read the monitor's review from `monitor/phase-NN-review.md`
 6. Act on the verdict per the dispatch loop (if `strict`, escalate WARN to FAIL)
 
@@ -472,7 +474,7 @@ Prompt assembly for phase agents: read `agents/phase-NN-*.md` content and `hando
 | Phase agent | `Agent` | **Step 1**: Write handoff to `handoff/to-phase-NN.md`. **Step 2**: Validate with `validate_handoff.py`. **Step 3**: Spawn agent with path to handoff file. Agent reads from disk — NEVER inline content. |
 | Monitor agent | `Agent` | Paths to monitor docs + result + summary |
 | Analysis agent | `Agent` | Path to `analysis-agent.md` + manifest file |
-| RCA agent | `Agent` | Path to `rca-agent.md` + manifest file. Extended-thinking budget is taken from the agent frontmatter (`thinking.budget_tokens: 32000`). |
+| RCA agent | `Agent` | Path to `rca-agent.md` + manifest file. Reasoning effort is taken from the agent frontmatter without a fixed token cap. |
 | Coding agent | `Agent` | Spawned by parent phase agent |
 | Container ops | `bash` | Direct shell commands |
 

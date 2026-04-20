@@ -122,8 +122,8 @@ class TestAttemptArtifactImmutability:
 
 
 # ---------------------------------------------------------------------------
-# INV-5: Legacy path remains default until shadow parity + predicate agreement
-#         + rollback proof are green
+# INV-5: Runner is default path; legacy rollback remains available
+#         with parity + rollback proof guards
 # ---------------------------------------------------------------------------
 
 class TestCanonicalRuntimePath:
@@ -579,7 +579,7 @@ class TestSystemicRcaRegistered:
         assert "systemic_rca" in reg, "systemic_rca block must be registered in phase-registry"
         block = reg["systemic_rca"]
         assert block["agent"] == "systemic-rca.md"
-        assert block["artifact"] == "results/systemic_root_cause.json"
+        assert block["artifact"] == "results/systemic_rca.json"
 
     def test_systemic_rca_agent_doc_exists(self):
         agent_doc = SKILL_ROOT / "agents" / "systemic-rca.md"

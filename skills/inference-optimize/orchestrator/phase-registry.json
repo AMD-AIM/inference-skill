@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "v2_monitor": false,
   "human_loop": false,
-  "max_context_lines": 500,
+  "max_context_lines": 20000,
   "phases": {
     "env": {
       "index": 0,
@@ -44,7 +44,7 @@
         ]
       },
       "rca_artifact": {
-        "output": "results/benchmark_root_cause.json",
+        "output": "results/benchmark_rca.json",
         "analysis_context": ["results/", "agent-results/phase-02-result.md"]
       },
       "terminal_policy": "stop"
@@ -105,7 +105,7 @@
         ]
       },
       "rca_artifact": {
-        "output": "results/profile_root_cause.json",
+        "output": "results/profile_rca.json",
         "analysis_context": ["profiles/", "results/trace_manifest.json", "agent-results/phase-05-result.md"]
       },
       "fallback_target": "profile",
@@ -138,7 +138,7 @@
         ]
       },
       "rca_artifact": {
-        "output": "results/problem_gen_root_cause.json",
+        "output": "results/problem_gen_rca.json",
         "analysis_context": ["problems/optimization_manifest.json", "results/profile_analysis.json", "agent-results/phase-06-result.md"]
       },
       "terminal_policy": "stop"
@@ -171,7 +171,7 @@
         ]
       },
       "rca_artifact": {
-        "output": "results/kernel_opt_root_cause.json",
+        "output": "results/kernel_opt_rca.json",
         "analysis_context": ["problems/geak_results.json", "optimized/", "agent-results/phase-07-result.md"]
       },
       "fallback_target": "problem-generate",
@@ -208,7 +208,7 @@
         ]
       },
       "rca_artifact": {
-        "output": "results/integration_root_cause.json",
+        "output": "results/integration_rca.json",
         "analysis_context": ["problems/geak_results.json", "results/optimization_comparison.json", "optimized/", "agent-results/phase-08-result.md"]
       },
       "fallback_target": "kernel-optimize",
@@ -246,11 +246,11 @@
   "rerun": { "max_per_phase": 2, "max_total": 5 },
   "systemic_rca": {
     "agent": "systemic-rca.md",
-    "artifact": "results/systemic_root_cause.json",
+    "artifact": "results/systemic_rca.json",
     "rca_history_path": "results/rca_history.json",
     "trigger": "two consecutive per-phase RCAs share the same fingerprint",
     "analysis_context": [
-      "results/*_root_cause.json",
+      "results/*_rca.json",
       "results/rca_history.json",
       "agent-results/",
       "monitor/running-summary.md",

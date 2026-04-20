@@ -21,9 +21,11 @@ You read at most **4 files** per invocation: this document, the running summary,
 
 The orchestrator tailors your prompt based on `MONITOR_LEVEL` from `config.json`:
 
-- **standard** (default): You receive `phase.quality.checks` for critical phases, or a generic result-exists check for non-critical phases.
+- **standard** (manual override): You receive `phase.quality.checks` for critical phases, or a generic result-exists check for non-critical phases.
 - **strict**: You receive `phase.quality.checks` for ALL phases (every phase is treated as critical). Any WARN verdict you issue will be escalated to FAIL by the orchestrator.
 - **minimal**: You only check that the result file exists and status is not `failed`. Skip quality analysis entirely.
+
+For skill-guided runs, intake sets `MONITOR_LEVEL=strict` automatically before execution.
 
 You do not need to read `MONITOR_LEVEL` yourself -- the orchestrator selects the appropriate checks and embeds them in your prompt.
 
@@ -167,7 +169,7 @@ In V2 mode, you receive a broader set of files beyond the standard 4. The orches
 | `problems/optimization_manifest.json` | Kernel priorities, roofline data, effort budgets |
 | `results/benchmark_summary.json` | Baseline performance metrics (earlier phases) |
 | `results/profile_analysis.json` | Profiling analysis, roofline data |
-| `results/*_root_cause.json` | Root cause analysis artifacts (on retries) |
+| `results/*_rca.json` | Root cause analysis artifacts (on retries) |
 
 Read only the files the orchestrator includes in your prompt. Do not open files not listed.
 

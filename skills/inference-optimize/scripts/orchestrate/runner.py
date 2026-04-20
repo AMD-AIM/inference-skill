@@ -6,8 +6,8 @@ artifact prerequisites, context-source resolution, context-budget enforcement,
 retry budgets, fallback invalidation, handoff generation, atomic progress
 writes, and parity artifact emission.
 
-Shadow mode (default): runs alongside the legacy orchestrator without
-overriding it. Set USE_RUNNER=true to make this the active path.
+Runner is the canonical control plane for skill-guided runs. Legacy behavior
+remains available only when USE_RUNNER=false is set explicitly.
 
 Usage:
     python3 runner.py --config <config.json> --registry <phase-registry.json> \
@@ -26,7 +26,7 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "1.0"
-MAX_CONTEXT_LINES_DEFAULT = 500
+MAX_CONTEXT_LINES_DEFAULT = 20000
 
 
 def load_json(path):
@@ -57,7 +57,9 @@ def compute_parity_hash(snapshot):
 
 
 def truncate_context(lines, max_lines):
-    """Deterministic truncation with marker."""
+    """Deterministic truncation with marker (disabled when max_lines <= 0)."""
+    if max_lines is None or max_lines <= 0:
+        return lines
     if len(lines) <= max_lines:
         return lines
     keep = max_lines - 1
@@ -175,7 +177,7 @@ class DeterministicRunner:
         self.shadow = shadow
         self.registry = registry
         self.output_dir = output_dir
-        self.max_context_lines = registry.get("max_context_lines", MAX_CONTEXT_LINES_DEFAULT)
+        self.max_context_lines = int(registry.get("max_context_lines", MAX_CONTEXT_LINES_DEFAULT))
         self.phases = registry["phases"]
         self.modes = registry["modes"]
         self.rerun_limits = registry["rerun"]
@@ -389,7 +391,7 @@ class DeterministicRunner:
         return hashlib.sha256(material.encode()).hexdigest()
 
     def archive_prior_rca(self, phase_key, attempt):
-        """Copy results/<phase>_root_cause.json to <phase>_root_cause_attempt{N}.json
+        """Copy results/<phase>_rca.json to <phase>_rca_attempt{N}.json
         before the next attempt overwrites it. Returns the prior fingerprint
         if the archived file declares one, else None."""
         phase_meta = self.phases.get(phase_key, {})
@@ -750,7 +752,8 @@ class DeterministicRunner:
         dispatch_fn: callable(phase_key, handoff_path) -> verdict_dict
             Spawns phase agent. If None (shadow mode), simulates PASS.
         monitor_fn: callable(phase_key, result_path, summary_path, checks) -> verdict_dict
-            Spawns monitor agent. If None, returns the dispatch verdict directly.
+            Spawns monitor agent. If None, pass-through is only allowed in
+            shadow/test paths (dispatch_fn is None or runner.shadow=True).
         rca_fn: callable(phase_key, manifest_dict) -> rca_dict
             Spawns RCA/analysis agent. If None, skips RCA on FAIL.
         systemic_rca_fn: callable(phase_key, manifest_dict) -> systemic_rca_dict
@@ -794,6 +797,19 @@ class DeterministicRunner:
             atomic_write_json(sticky_path, derived_sticky)
 
         state.write_progress()
+
+        if dispatch_fn is not None and monitor_fn is None and not self.shadow:
+            message = (
+                "monitor_fn not wired for non-shadow run. "
+                "Independent monitor reviews are required; dispatch-verdict "
+                "pass-through is only allowed in shadow/test paths."
+            )
+            logger.error(message)
+            self.write_runner_failure("monitor_error", message)
+            state.status = "failed"
+            state.write_progress()
+            state.write_parity_manifest()
+            return state
 
         while phase_idx < len(phase_list):
             phase_key = phase_list[phase_idx]

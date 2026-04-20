@@ -82,6 +82,11 @@ class TestTruncateContext:
         lines = ["a", "b", "c"]
         assert truncate_context(lines, 3) == lines
 
+    def test_non_positive_limit_disables_truncation(self):
+        lines = [str(i) for i in range(100)]
+        assert truncate_context(lines, 0) == lines
+        assert truncate_context(lines, -1) == lines
+
 
 class TestParityHash:
     def test_deterministic(self):
@@ -197,7 +202,7 @@ class TestDeterministicRunner:
             files = os.listdir(handoff_dir)
             assert len(files) == len(registry["modes"]["benchmark"])
 
-    def test_context_budget_enforced(self):
+    def test_context_budget_high_cap_avoids_practical_truncation(self):
         registry = _load_registry()
         config = _minimal_config("benchmark")
 
@@ -208,7 +213,9 @@ class TestDeterministicRunner:
             context = {"KEY_" + str(i): "x" * 100 for i in range(600)}
             handoff = runner.build_handoff("env", context, 1)
             lines = handoff.split("\n")
-            assert len(lines) <= runner.max_context_lines
+            assert runner.max_context_lines == 20000
+            assert "[truncated:" not in handoff
+            assert any("KEY_599" in line for line in lines)
 
     def test_dispatch_with_failures(self):
         registry = _load_registry()
@@ -222,14 +229,39 @@ class TestDeterministicRunner:
                 return {"verdict": "FAIL", "attempt": call_count[phase_key]}
             return {"verdict": "PASS", "attempt": call_count[phase_key]}
 
+        def monitor_from_dispatch(phase_key, result_path, summary_path, checks):
+            attempts = call_count.get(phase_key, 0)
+            if phase_key == "benchmark" and attempts <= 1:
+                return {"verdict": "FAIL", "attempt": attempts}
+            return {"verdict": "PASS", "attempt": attempts}
+
         with tempfile.TemporaryDirectory() as tmpdir:
             config["OUTPUT_DIR"] = tmpdir
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=failing_dispatch)
+            state = runner.run(dispatch_fn=failing_dispatch, monitor_fn=monitor_from_dispatch)
 
             assert state.status == "completed"
             assert state.retry_counts.get("benchmark") == 1
             assert state.total_reruns == 1
+
+    def test_monitor_fn_required_for_non_shadow_dispatch(self):
+        registry = _load_registry()
+        config = _minimal_config("benchmark")
+
+        def always_pass_dispatch(phase_key, handoff_path):
+            return {"verdict": "PASS", "attempt": 1}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config["OUTPUT_DIR"] = tmpdir
+            runner = DeterministicRunner(config, registry, tmpdir)
+            state = runner.run(dispatch_fn=always_pass_dispatch)
+
+            assert state.status == "failed"
+            failure_path = os.path.join(tmpdir, "runner_failure.json")
+            assert os.path.isfile(failure_path)
+            with open(failure_path) as f:
+                failure = json.load(f)
+            assert failure["error_type"] == "monitor_error"
 
     def test_skip_integration_removes_phase(self):
         registry = _load_registry()

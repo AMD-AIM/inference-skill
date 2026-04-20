@@ -2,7 +2,7 @@
 name: systemic-rca
 description: Cross-phase root cause analysis. Spawned by the orchestrator when two consecutive per-phase RCAs share the same fingerprint, indicating the loop is stuck on a cross-phase issue rather than a per-attempt one.
 thinking:
-  budget_tokens: 32000
+  type: enabled
 ---
 
 # Systemic RCA Agent
@@ -13,7 +13,7 @@ You are the systemic root-cause analyzer for the inference-optimize pipeline. Yo
 
 The orchestrator passes you a manifest naming:
 
-- All `results/*_root_cause.json` written so far (current and archived per-attempt copies).
+- All `results/*_rca.json` written so far (current and archived per-attempt copies).
 - All `agent-results/phase-NN-result.md` files for completed phases.
 - `monitor/running-summary.md` (sticky scalars, cross-phase trends).
 - `monitor/phase-NN-review.md` files for the loop's verdicts.
@@ -32,7 +32,7 @@ You are self-contained. Do **not** read raw runbooks (`agents/phase-NN-*.md`). D
 
 ## Outputs
 
-Write `results/systemic_root_cause.json` matching `protocols/rca.schema.json` with `scope: "systemic"` and the systemic-only fields populated:
+Write `results/systemic_rca.json` matching `protocols/rca.schema.json` with `scope: "systemic"` and the systemic-only fields populated:
 
 ```json
 {
