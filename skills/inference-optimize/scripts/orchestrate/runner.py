@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+from collections.abc import Mapping, Sequence
 import datetime
 import hashlib
 import json
@@ -26,7 +27,11 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "1.0"
-MAX_CONTEXT_LINES_DEFAULT = 20000
+MAX_CONTEXT_LINES_DEFAULT = 8000
+CONTEXT_VALUE_CHAR_LIMIT_DEFAULT = 800
+CONTEXT_KEYS_PREVIEW_DEFAULT = 10
+CONTEXT_ITEMS_PREVIEW_DEFAULT = 5
+CURSOR_AGENT_DOC_MAX_LINES_DEFAULT = 600
 
 
 def load_json(path):
@@ -178,6 +183,18 @@ class DeterministicRunner:
         self.registry = registry
         self.output_dir = output_dir
         self.max_context_lines = int(registry.get("max_context_lines", MAX_CONTEXT_LINES_DEFAULT))
+        self.context_value_char_limit = int(
+            registry.get("context_value_char_limit", CONTEXT_VALUE_CHAR_LIMIT_DEFAULT)
+        )
+        self.context_keys_preview = int(
+            registry.get("context_keys_preview", CONTEXT_KEYS_PREVIEW_DEFAULT)
+        )
+        self.context_items_preview = int(
+            registry.get("context_items_preview", CONTEXT_ITEMS_PREVIEW_DEFAULT)
+        )
+        self.cursor_agent_doc_max_lines = int(
+            registry.get("cursor_agent_doc_max_lines", CURSOR_AGENT_DOC_MAX_LINES_DEFAULT)
+        )
         self.phases = registry["phases"]
         self.modes = registry["modes"]
         self.rerun_limits = registry["rerun"]
@@ -252,36 +269,142 @@ class DeterministicRunner:
                 return ""
         return ""
 
-    def resolve_context(self, phase_key):
-        """Resolve required_context for a phase to concrete values."""
+    @staticmethod
+    def _is_present(value):
+        """Return True when a resolved context value should be considered usable."""
+        return value not in ("", None, [], {}, ())
+
+    def _resolve_context_entry(self, var, source):
+        """Resolve one context variable and record where it came from."""
+        src_type = source.get("source", "config")
+        config_key = source.get("config_key", var)
+
+        def resolve_candidate(candidate):
+            if candidate == "config":
+                return self._resolve_from_config(source, var), {
+                    "resolved_source": "config",
+                    "config_key": config_key,
+                }
+
+            if candidate == "artifact":
+                fallback = source.get("artifact_fallback", source)
+                return self._resolve_from_artifact(source), {
+                    "resolved_source": "artifact",
+                    "path": fallback.get("path", source.get("path", "")),
+                    "field": fallback.get("field", source.get("field")),
+                }
+
+            return self.config.get(var, ""), {
+                "resolved_source": "config",
+                "config_key": var,
+            }
+
+        if isinstance(src_type, list):
+            for candidate in src_type:
+                value, meta = resolve_candidate(candidate)
+                if self._is_present(value):
+                    return value, meta
+            return "", {
+                "resolved_source": "none",
+                "config_key": config_key,
+            }
+
+        value, meta = resolve_candidate(src_type)
+        return value, meta
+
+    def resolve_context_with_meta(self, phase_key):
+        """Resolve required_context for a phase to concrete values + source metadata."""
         phase = self.phases[phase_key]
         context = {}
+        context_meta = {}
         for var in phase.get("required_context", []):
             source = self.context_sources.get(var, {})
-            src_type = source.get("source", "config")
-            # Handle list-type source (ordered fallback)
-            if isinstance(src_type, list):
-                resolved = ""
-                for s in src_type:
-                    if s == "config":
-                        val = self._resolve_from_config(source, var)
-                    elif s == "artifact":
-                        val = self._resolve_from_artifact(source)
-                    else:
-                        val = self.config.get(var, "")
-                    if val:
-                        resolved = val
-                        break
-                context[var] = resolved
-            elif src_type == "config":
-                context[var] = self._resolve_from_config(source, var)
-            elif src_type == "artifact":
-                context[var] = self._resolve_from_artifact(source)
-            else:
-                context[var] = self.config.get(var, "")
+            value, meta = self._resolve_context_entry(var, source)
+            context[var] = value
+            context_meta[var] = meta
+        return context, context_meta
+
+    def resolve_context(self, phase_key):
+        """Resolve required_context for a phase to concrete values."""
+        context, _ = self.resolve_context_with_meta(phase_key)
         return context
 
-    def build_handoff(self, phase_key, context, attempt, prior_feedback=None, dep_overrides=None):
+    @staticmethod
+    def _truncate_text(text, max_chars):
+        if max_chars <= 0 or len(text) <= max_chars:
+            return text
+        omitted = len(text) - max_chars
+        return f"{text[:max_chars]}... [truncated: {omitted} chars omitted]"
+
+    def _summarize_list_item(self, item):
+        if isinstance(item, Mapping):
+            keys = sorted(str(k) for k in item.keys())[: self.context_keys_preview]
+            return {"type": "dict", "keys_preview": keys}
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return {"type": "list", "size": len(item)}
+        if isinstance(item, str):
+            return self._truncate_text(item, min(80, self.context_value_char_limit))
+        if isinstance(item, (int, float, bool)) or item is None:
+            return item
+        return self._truncate_text(str(item), min(80, self.context_value_char_limit))
+
+    def _summarize_structured_value(self, value):
+        if isinstance(value, Mapping):
+            keys = sorted(str(k) for k in value.keys())
+            return {
+                "type": "dict",
+                "size": len(keys),
+                "keys_preview": keys[: self.context_keys_preview],
+            }
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            preview = [
+                self._summarize_list_item(item)
+                for item in list(value)[: self.context_items_preview]
+            ]
+            return {
+                "type": "list",
+                "size": len(value),
+                "items_preview": preview,
+            }
+        return value
+
+    def _render_source_hint(self, meta):
+        if not meta:
+            return ""
+        resolved_source = meta.get("resolved_source")
+        if resolved_source == "artifact":
+            path = meta.get("path", "")
+            field = meta.get("field")
+            locator = path if not field else f"{path}#{field}"
+            return f"source={locator}" if locator else "source=artifact"
+        if resolved_source == "config":
+            config_key = meta.get("config_key")
+            return f"source=config:{config_key}" if config_key else "source=config"
+        return ""
+
+    def _format_context_value(self, value, meta=None):
+        """Render context values with deterministic compaction for large payloads."""
+        if isinstance(value, str):
+            rendered = self._truncate_text(value, self.context_value_char_limit)
+        elif isinstance(value, (Mapping, Sequence)) and not isinstance(value, (str, bytes, bytearray)):
+            try:
+                serialized = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            except TypeError:
+                serialized = repr(value)
+            if len(serialized) <= self.context_value_char_limit:
+                rendered = serialized
+            else:
+                summary = self._summarize_structured_value(value)
+                rendered = json.dumps(summary, sort_keys=True, separators=(",", ":"))
+        else:
+            rendered = self._truncate_text(str(value), self.context_value_char_limit)
+
+        source_hint = self._render_source_hint(meta)
+        if source_hint:
+            return f"{rendered} ({source_hint})"
+        return rendered
+
+    def build_handoff(self, phase_key, context, attempt, prior_feedback=None, dep_overrides=None, context_meta=None):
         """Generate a handoff document."""
         phase = self.phases[phase_key]
         lines = [
@@ -295,7 +418,8 @@ class DeterministicRunner:
             "## Context",
         ]
         for k, v in sorted(context.items()):
-            val = str(v) if not isinstance(v, str) else v
+            meta = context_meta.get(k, {}) if context_meta else {}
+            val = self._format_context_value(v, meta)
             lines.append(f"- **{k}**: {val}")
 
         deps = phase.get("deps", [])
@@ -345,7 +469,7 @@ class DeterministicRunner:
         return os.path.join(self.output_dir, "..", "agents", agent_file) if agent_file else ""
 
     def build_cursor_prompt(self, phase_key, handoff_content, agent_doc_root=None):
-        """Assemble a full Cursor Task prompt: agent doc + handoff, truncated."""
+        """Assemble a bounded Cursor Task prompt: capped agent doc + handoff."""
         agent_file = self.phases[phase_key].get("agent", "")
         doc_content = ""
         if agent_doc_root and agent_file:
@@ -355,7 +479,10 @@ class DeterministicRunner:
                     doc_content = f.read()
         parts = []
         if doc_content:
-            parts.append(doc_content)
+            doc_lines = doc_content.split("\n")
+            if self.cursor_agent_doc_max_lines > 0:
+                doc_lines = truncate_context(doc_lines, self.cursor_agent_doc_max_lines)
+            parts.append("\n".join(doc_lines))
         parts.append(handoff_content)
         combined = "\n\n---\n\n".join(parts)
         lines = combined.split("\n")
@@ -647,6 +774,30 @@ class DeterministicRunner:
         # Default: retry
         return {"action": "retry", "phase_reruns": phase_reruns}
 
+    def _invoke_phase_rca(self, phase_key, phase_meta, verdict, verdict_severity, rca_fn, state):
+        """Run per-phase RCA if configured; record missing RCA wiring explicitly."""
+        rca_artifact = phase_meta.get("rca_artifact")
+        if not rca_artifact:
+            return None
+
+        if rca_fn is None:
+            logger.warning(
+                "rca_fn not wired; skipping RCA for phase %s "
+                "(rca_artifact=%s). Wire rca_fn in platform-dispatch to enable.",
+                phase_key,
+                rca_artifact.get("output", "?"),
+            )
+            state.rca_skipped[phase_key] = "rca_fn_not_wired"
+            return None
+
+        rca_manifest = {
+            "phase": phase_key,
+            "rca_artifact": rca_artifact,
+            "failure_type": verdict.get("failure_type", "unknown"),
+            "verdict_severity": verdict_severity,
+        }
+        return rca_fn(phase_key, rca_manifest)
+
     def _resume_from_escalation(self, state, phase_list):
         """Check for pending escalation and resume if response exists.
 
@@ -767,7 +918,7 @@ class DeterministicRunner:
             Spawns monitor agent. If None, pass-through is only allowed in
             shadow/test paths (dispatch_fn is None or runner.shadow=True).
         rca_fn: callable(phase_key, manifest_dict) -> rca_dict
-            Spawns RCA/analysis agent. If None, skips RCA on FAIL.
+            Spawns RCA/analysis agent. If None, skips RCA on WARN/FAIL.
         systemic_rca_fn: callable(phase_key, manifest_dict) -> systemic_rca_dict
             Spawns the systemic RCA agent when two consecutive per-phase RCAs
             share a fingerprint. If None, the orchestrator logs a warning and
@@ -840,12 +991,19 @@ class DeterministicRunner:
             advance_phase = True  # set False on redirect to suppress phase_idx += 1
             while True:
                 attempt = phase_reruns + 1
-                context = self.resolve_context(phase_key)
+                context, context_meta = self.resolve_context_with_meta(phase_key)
                 feedback = None
                 if phase_reruns > 0:
                     feedback = f"Attempt {attempt} after {phase_reruns} prior failure(s)."
 
-                handoff = self.build_handoff(phase_key, context, attempt, feedback, dep_overrides)
+                handoff = self.build_handoff(
+                    phase_key,
+                    context,
+                    attempt,
+                    prior_feedback=feedback,
+                    dep_overrides=dep_overrides,
+                    context_meta=context_meta,
+                )
                 handoff_path = self.write_handoff(phase_key, handoff)
 
                 if dispatch_fn:
@@ -877,6 +1035,7 @@ class DeterministicRunner:
                     # --- V2 path ---
                     v2_verdict = self._evaluate_v2(phase_key, verdict, v)
                     v = v2_verdict
+                    phase_meta = self.phases[phase_key]
 
                     if v == "WARN" and self.strict_mode:
                         action, _ = self._handle_strict_warn(phase_key, phase_reruns)
@@ -885,28 +1044,36 @@ class DeterministicRunner:
                             phase_reruns += 1
                             continue
 
-                    if v == "PASS" or v == "WARN":
+                    if v == "WARN":
+                        # Advisory RCA: keep WARN non-blocking while preserving RCA artifacts.
+                        # This mirrors the orchestrator contract for critical phases.
+                        if phase_meta.get("critical"):
+                            self._invoke_phase_rca(
+                                phase_key,
+                                phase_meta,
+                                verdict,
+                                "WARN",
+                                rca_fn,
+                                state,
+                            )
+                        state.phases_completed.append(phase_key)
+                        state.retry_counts[phase_key] = phase_reruns
+                        break
+
+                    if v == "PASS":
                         state.phases_completed.append(phase_key)
                         state.retry_counts[phase_key] = phase_reruns
                         break
 
                     # FAIL path: RCA first
-                    rca_result = None
-                    phase_meta = self.phases[phase_key]
-                    if rca_fn and phase_meta.get("rca_artifact"):
-                        rca_manifest = {
-                            "phase": phase_key,
-                            "rca_artifact": phase_meta["rca_artifact"],
-                            "failure_type": verdict.get("failure_type", "unknown"),
-                            "verdict_severity": "FAIL",
-                        }
-                        rca_result = rca_fn(phase_key, rca_manifest)
-                    elif phase_meta.get("rca_artifact") and rca_fn is None:
-                        logger.warning(
-                            "rca_fn not wired; skipping RCA for phase %s "
-                            "(rca_artifact=%s). Wire rca_fn in platform-dispatch to enable.",
-                            phase_key, phase_meta["rca_artifact"].get("output", "?"))
-                        state.rca_skipped[phase_key] = "rca_fn_not_wired"
+                    rca_result = self._invoke_phase_rca(
+                        phase_key,
+                        phase_meta,
+                        verdict,
+                        "FAIL",
+                        rca_fn,
+                        state,
+                    )
 
                     # Auto-systemic-RCA: record fingerprint, dispatch systemic
                     # RCA when the previous attempt's fingerprint matches.
@@ -987,22 +1154,15 @@ class DeterministicRunner:
                         break
 
                     # FAIL path: RCA first (does not increment counters)
-                    rca_result = None
                     phase_meta = self.phases[phase_key]
-                    if rca_fn and phase_meta.get("rca_artifact"):
-                        rca_manifest = {
-                            "phase": phase_key,
-                            "rca_artifact": phase_meta["rca_artifact"],
-                            "failure_type": verdict.get("failure_type", "unknown"),
-                            "verdict_severity": "FAIL",
-                        }
-                        rca_result = rca_fn(phase_key, rca_manifest)
-                    elif phase_meta.get("rca_artifact") and rca_fn is None:
-                        logger.warning(
-                            "rca_fn not wired; skipping RCA for phase %s "
-                            "(rca_artifact=%s). Wire rca_fn in platform-dispatch to enable.",
-                            phase_key, phase_meta["rca_artifact"].get("output", "?"))
-                        state.rca_skipped[phase_key] = "rca_fn_not_wired"
+                    rca_result = self._invoke_phase_rca(
+                        phase_key,
+                        phase_meta,
+                        verdict,
+                        "FAIL",
+                        rca_fn,
+                        state,
+                    )
 
                     # Auto-systemic-RCA dispatch (V1 path mirrors V2).
                     current_fp = self._record_rca_fingerprint(

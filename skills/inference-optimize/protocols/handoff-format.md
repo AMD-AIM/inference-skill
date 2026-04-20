@@ -78,4 +78,4 @@ The orchestrator generates handoffs mechanically:
 ## Platform Delivery
 
 - **Claude Code / OpenCode**: The orchestrator writes the handoff to disk. The phase agent reads the file path.
-- **Cursor**: The orchestrator reads the handoff content and the phase agent's `agents/phase-NN-*.md` doc, concatenates them, and passes the combined text as the `Task` tool `prompt` parameter. See `protocols/platform-dispatch.md` for assembly details.
+- **Cursor**: Prefer path-based dispatch. Pass a compact prompt that references `handoff/to-phase-NN.md` and `agents/phase-NN-*.md`, and let the subagent read those files directly. If inline fallback is required, cap agent-doc and handoff content with registry budget controls (`cursor_agent_doc_max_lines`, `max_context_lines`).

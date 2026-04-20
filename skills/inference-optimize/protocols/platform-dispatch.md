@@ -12,7 +12,7 @@ When a callback is `None`, the runner applies its default: `dispatch_fn` returns
 
 `monitor_fn=None` is only valid for shadow/unit-test paths. Real runs must wire `monitor_fn` so verdicts come from a separate monitor agent. In non-shadow runs with `dispatch_fn` wired, the runner fails closed with `error_type: monitor_error` when `monitor_fn` is missing.
 
-When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host platform supplies `rca_fn=None`, the runner emits a `WARNING`-level log line and records `rca_skipped: true` in the phase's progress entry. RCA is not silently absent: integrators are expected to wire `rca_fn` for any platform that runs the optimize/profile modes end-to-end. Shadow-mode and unit-test runs may legitimately leave `rca_fn=None`; the warning makes the absence auditable.
+When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host platform supplies `rca_fn=None`, the runner emits a `WARNING`-level log line and records `rca_skipped[phase_key] = "rca_fn_not_wired"` in `progress.json`. RCA is not silently absent: integrators are expected to wire `rca_fn` for any platform that runs the optimize/profile modes end-to-end. Shadow-mode and unit-test runs may legitimately leave `rca_fn=None`; the warning makes the absence auditable.
 
 ## Cursor
 
@@ -20,10 +20,10 @@ When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host
 
 | Agent Role | `subagent_type` | `model` | Prompt Shape |
 |---|---|---|---|
-| Phase agent | `generalPurpose` | inherit | Agent doc + handoff content inlined |
-| Monitor agent | `generalPurpose` | `fast` | `monitor.md` + result + running summary inlined |
-| Analysis agent | `generalPurpose` | inherit | `analysis-agent.md` + analyzer manifest + context file contents inlined (routine in-phase data analysis) |
-| RCA agent | `generalPurpose` | inherit | `rca-agent.md` + analyzer manifest + context file contents inlined; **prepend the literal keyword `ultrathink`** to the assembled prompt — Cursor does not read agent frontmatter, so this is the only way to enable the high-reasoning-effort budget the RCA agent expects |
+| Phase agent | `generalPurpose` | inherit | Compact prompt with file-path references (`agents/phase-NN-*.md` + `handoff/to-phase-NN.md`) |
+| Monitor agent | `generalPurpose` | `fast` | Compact prompt with paths to `monitor.md`, result, summary, optional context JSON |
+| Analysis agent | `generalPurpose` | inherit | Compact prompt with `analysis-agent.md` path + manifest path + bounded context paths |
+| RCA agent | `generalPurpose` | inherit | Compact prompt with `rca-agent.md` path + manifest path + bounded context paths; **prepend `ultrathink`** keyword |
 | Coding agent | `generalPurpose` | inherit | Task description from parent phase agent |
 | Container operations | `shell` | `fast` | Shell commands only |
 
@@ -31,13 +31,13 @@ When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host
 
 ### Prompt Assembly
 
-**Phase agents**: Read `agents/phase-NN-*.md` and `handoff/to-phase-NN.md`, concatenate with `---` separator, then apply `max_context_lines` from the registry (default `20000` lines). Pass as `Task` tool `prompt`.
+**Phase agents**: Prefer path-based delivery. Pass a compact instruction prompt that references `agents/phase-NN-*.md` and `handoff/to-phase-NN.md` paths and asks the subagent to read them. Only inline snippets when absolutely necessary, and always cap the final prompt with `max_context_lines`.
 
-**Monitor agents**: Read `orchestrator/monitor.md`, `monitor/running-summary.md`, `agent-results/phase-NN-result.md`, and optionally `monitor/phase-NN-context.json`. Concatenate. Pass as `Task` tool `prompt` with `model: "fast"`.
+**Monitor agents**: Pass file-path references (`orchestrator/monitor.md`, `monitor/running-summary.md`, `agent-results/phase-NN-result.md`, optional `monitor/phase-NN-context.json`) instead of concatenating full file contents in the parent orchestrator.
 
-**Analysis agents** (routine in-phase data analysis): Read `agents/analysis-agent.md` and the manifest's `analysis_context` file contents. Concatenate. Pass as `Task` tool `prompt`.
+**Analysis agents** (routine in-phase data analysis): Pass `agents/analysis-agent.md` and analyzer manifest paths. If the manifest enumerates many context files, pass only a bounded subset directly and let the subagent pull additional files as needed.
 
-**RCA agents** (orchestrator-level root cause on monitor WARN/FAIL): Read `agents/rca-agent.md` and the manifest's `analysis_context` file contents. Concatenate. **Prepend the literal keyword `ultrathink` as the first token of the assembled prompt** — Cursor uses this keyword to enable the maximum reasoning-effort budget. Pass as `Task` tool `prompt`.
+**RCA agents** (orchestrator-level root cause on monitor WARN/FAIL): Pass `agents/rca-agent.md` and analyzer manifest paths; avoid pre-inlining entire `analysis_context` trees. **Prepend the literal keyword `ultrathink` as the first token of the assembled prompt** — Cursor uses this keyword to enable the maximum reasoning-effort budget.
 
 ### Question Tool
 
@@ -56,13 +56,15 @@ Use `AskQuestion` tool for guided setup forms (SKILL.md intake flow).
 | Coding agent | `Agent` | Spawned by parent phase agent, not orchestrator |
 | Container operations | `bash` | Direct shell commands |
 
+The runner-side context compaction changes do **not** alter the Claude Code dispatch contract: phase/monitor/RCA agents still receive file paths, read their own docs from disk, and benefit from smaller handoff/manifests without any Cursor-specific prompt assembly.
+
 ### Question Tool
 
 Use `question` tool for guided setup forms.
 
 ## OpenCode
 
-Same as Claude Code. OpenCode discovers skills from `~/.claude/skills/` and uses the `Agent` tool with path-based handoffs.
+Same as Claude Code. OpenCode discovers skills from `~/.claude/skills/` and uses the `Agent` tool with path-based handoffs. The new context-budget changes therefore apply through compact handoff/manifests, not through a different prompt shape.
 
 ### Question Tool
 
@@ -70,4 +72,4 @@ Use `question` tool. For non-interactive runs (`opencode run`), set permission `
 
 ## Context Budget
 
-All platforms share the same `max_context_lines` control from `phase-registry.json`. The runner's `truncate_context()` applies deterministic truncation only when this value is greater than zero. The current default is `20000` lines (high cap for practical near-unlimited context without hard-window spikes). On Cursor, the setting applies to the assembled prompt (agent doc + handoff combined). On Claude Code / OpenCode, it applies to the handoff document (agents read their own docs separately from disk).
+All platforms share the same `max_context_lines` control from `phase-registry.json`. The runner's `truncate_context()` applies deterministic truncation only when this value is greater than zero. The current default is `8000` lines. `phase-registry.json` also defines `context_value_char_limit`, `context_keys_preview`, `context_items_preview`, and `cursor_agent_doc_max_lines` for deterministic context compaction. On Cursor, these caps apply to any prompt content assembled by the parent orchestrator. On Claude Code / OpenCode, the same compaction applies to handoff rendering and any optional inline snippets, while agent docs and manifests continue to be read from disk by path.

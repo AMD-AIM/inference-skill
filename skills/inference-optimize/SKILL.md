@@ -96,8 +96,8 @@ Communication schemas are in `protocols/`. The orchestrator never reads phase do
 The file-based communication protocol (handoffs, results, reviews) is identical across all platforms. Only the agent spawning mechanism differs. See `protocols/platform-dispatch.md` for the full adapter contract.
 
 - **Cursor**: Discovered via `~/.cursor/skills/` symlink and `~/.cursor/rules/*.mdc` (agent-requested rule). Use `Task` tool with `subagent_type` per the dispatch table. Use `AskQuestion` for guided setup. Monitor agents can use `model: "fast"`.
-- **Claude Code**: Discovered via `~/.claude/skills/`. Use `Agent` tool with path-based handoffs. Use `question` tool for guided setup.
-- **OpenCode**: Same as Claude Code. Verify discovery with `opencode debug skill`. For non-interactive runs, set `"question": "allow"` in `.opencode/opencode.jsonc`.
+- **Claude Code**: Discovered via `~/.claude/skills/`. Use `Agent` tool with path-based handoffs. Context-budget compaction applies at handoff/manifests level; agent docs still load from disk. Use `question` tool for guided setup.
+- **OpenCode**: Same as Claude Code. Verify discovery with `opencode debug skill`. For non-interactive runs, set `"question": "allow"` in `.opencode/opencode.jsonc`. Context compaction remains handoff-based here as well.
 
 The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical control plane for all platforms. It accepts platform-specific `dispatch_fn`, `monitor_fn`, and `rca_fn` callbacks.
 

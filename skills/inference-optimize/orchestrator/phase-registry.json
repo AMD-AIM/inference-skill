@@ -2,7 +2,11 @@
   "schema_version": "1.0",
   "v2_monitor": false,
   "human_loop": false,
-  "max_context_lines": 20000,
+  "max_context_lines": 8000,
+  "context_value_char_limit": 800,
+  "context_keys_preview": 10,
+  "context_items_preview": 5,
+  "cursor_agent_doc_max_lines": 600,
   "phases": {
     "env": {
       "index": 0,
@@ -45,7 +49,12 @@
       },
       "rca_artifact": {
         "output": "results/benchmark_rca.json",
-        "analysis_context": ["results/", "agent-results/phase-02-result.md"]
+        "analysis_context": [
+          "agent-results/phase-02-result.md",
+          "monitor/phase-02-review.md",
+          "results/config_selection.json",
+          "results/benchmark_summary.json"
+        ]
       },
       "terminal_policy": "stop"
     },
@@ -106,7 +115,12 @@
       },
       "rca_artifact": {
         "output": "results/profile_rca.json",
-        "analysis_context": ["profiles/", "results/trace_manifest.json", "agent-results/phase-05-result.md"]
+        "analysis_context": [
+          "agent-results/phase-05-result.md",
+          "monitor/phase-05-review.md",
+          "results/trace_manifest.json",
+          "results/profile_analysis.json"
+        ]
       },
       "fallback_target": "profile",
       "terminal_policy": "stop"
@@ -172,7 +186,13 @@
       },
       "rca_artifact": {
         "output": "results/kernel_opt_rca.json",
-        "analysis_context": ["problems/geak_results.json", "optimized/", "agent-results/phase-07-result.md"]
+        "analysis_context": [
+          "agent-results/phase-07-result.md",
+          "monitor/phase-07-review.md",
+          "problems/optimization_manifest.json",
+          "problems/geak_results.json",
+          "results/profile_analysis.json"
+        ]
       },
       "fallback_target": "problem-generate",
       "terminal_policy": "allow_partial_report"
@@ -209,7 +229,13 @@
       },
       "rca_artifact": {
         "output": "results/integration_rca.json",
-        "analysis_context": ["problems/geak_results.json", "results/optimization_comparison.json", "optimized/", "agent-results/phase-08-result.md"]
+        "analysis_context": [
+          "agent-results/phase-08-result.md",
+          "monitor/phase-08-review.md",
+          "results/integration_manifest.json",
+          "results/optimization_comparison.json",
+          "optimized/integration_plugin/_runtime_report.json"
+        ]
       },
       "fallback_target": "kernel-optimize",
       "terminal_policy": "allow_partial_report"
@@ -250,15 +276,15 @@
     "rca_history_path": "results/rca_history.json",
     "trigger": "two consecutive per-phase RCAs share the same fingerprint",
     "analysis_context": [
-      "results/*_rca.json",
       "results/rca_history.json",
-      "agent-results/",
+      "results/*_rca.json",
+      "agent-results/phase-*-result.md",
       "monitor/running-summary.md",
-      "monitor/",
+      "monitor/phase-*-review.md",
+      "monitor/phase-*-predicate.json",
       "progress.json",
       "results/optimization_comparison.json",
       "results/integration_manifest.json",
-      "optimized/integration_plugin/_runtime_counters_*.json",
       "optimized/integration_plugin/_runtime_report.json",
       "problems/geak_results.json",
       "problems/optimization_manifest.json",

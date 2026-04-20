@@ -137,6 +137,10 @@ def generate_golden(scenario_name, scenario_spec, output_dir):
         _create_artifacts(tmpdir)
 
         registry = json.loads(REGISTRY_PATH.read_text())
+        if scenario_name == "optimize_with_fallback":
+            # Fallback scenario needs finite retry budgets.
+            registry["rerun"]["max_per_phase"] = 2
+            registry["rerun"]["max_total"] = 3
         dispatch_fn, monitor_fn, rca_fn = make_mock_fns(scenario_spec)
 
         runner = DeterministicRunner(config, registry, tmpdir)

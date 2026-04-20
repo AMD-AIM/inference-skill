@@ -166,6 +166,17 @@ class TestLlmBoundary:
         assert isinstance(reg["max_context_lines"], int)
         assert reg["max_context_lines"] > 0
 
+    def test_context_compaction_keys_in_registry(self):
+        reg = _load_registry()
+        assert isinstance(reg.get("context_value_char_limit"), int)
+        assert reg["context_value_char_limit"] > 0
+        assert isinstance(reg.get("context_keys_preview"), int)
+        assert reg["context_keys_preview"] > 0
+        assert isinstance(reg.get("context_items_preview"), int)
+        assert reg["context_items_preview"] > 0
+        assert isinstance(reg.get("cursor_agent_doc_max_lines"), int)
+        assert reg["cursor_agent_doc_max_lines"] > 0
+
 
 # ---------------------------------------------------------------------------
 # INV-7: Release-critical PASS/WARN/FAIL authority comes from schemas,
@@ -445,6 +456,31 @@ class TestHandoffValidation:
         os.unlink(f.name)
         assert not valid
         assert any("Prior Attempt Feedback" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform dispatch contracts
+# ---------------------------------------------------------------------------
+
+class TestCrossPlatformDispatchContracts:
+    """Claude Code and OpenCode must remain compatible with runner compaction."""
+
+    def test_platform_dispatch_keeps_claude_code_path_handoffs(self):
+        text = (PROTOCOLS_DIR / "platform-dispatch.md").read_text()
+        assert "## Claude Code" in text
+        assert "Path to `handoff/to-phase-NN.md`" in text
+        assert "read from disk" in text
+
+    def test_platform_dispatch_keeps_opencode_path_handoffs(self):
+        text = (PROTOCOLS_DIR / "platform-dispatch.md").read_text()
+        assert "## OpenCode" in text
+        assert "path-based handoffs" in text
+        assert "context-budget changes" in text
+
+    def test_runtime_mentions_claude_opencode_compatibility(self):
+        runtime = (SKILL_ROOT / "RUNTIME.md").read_text()
+        assert "Claude Code / OpenCode" in runtime
+        assert "runner compacts handoffs/manifests before dispatch" in runtime
 
 
 # ---------------------------------------------------------------------------

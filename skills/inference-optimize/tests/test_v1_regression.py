@@ -79,6 +79,15 @@ def _create_artifacts(tmpdir):
         json.dump({"status": "complete"}, f)
 
 
+def _registry_for_scenario(scenario):
+    registry = json.loads(REGISTRY_PATH.read_text())
+    # Fallback parity scenario needs finite retry budgets.
+    if scenario == "optimize_with_fallback":
+        registry["rerun"]["max_per_phase"] = 2
+        registry["rerun"]["max_total"] = 3
+    return registry
+
+
 class TestV1Regression:
     """Ensure refactored runner produces identical output to golden files."""
 
@@ -93,7 +102,7 @@ class TestV1Regression:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, spec["mode"])
             _create_artifacts(tmpdir)
-            registry = json.loads(REGISTRY_PATH.read_text())
+            registry = _registry_for_scenario(scenario)
             dispatch_fn, monitor_fn, rca_fn = make_mock_fns(spec)
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)
@@ -137,3 +146,30 @@ class TestV1Regression:
             current_hash = compute_parity_hash(state.parity_snapshot())
 
         assert current_hash == golden_hash
+
+    def test_v1_warn_path_remains_non_rca(self):
+        """V1 WARN verdict should not spawn RCA and should continue execution."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _build_config(tmpdir, "benchmark")
+            config["V2_MONITOR"] = False
+            _create_artifacts(tmpdir)
+            registry = json.loads(REGISTRY_PATH.read_text())
+            rca_calls = []
+
+            def dispatch_fn(phase_key, handoff_path):
+                return {"verdict": "PASS"}
+
+            def monitor_fn(phase_key, result_path, summary_path, checks):
+                if phase_key == "benchmark":
+                    return {"verdict": "WARN", "failure_type": "logic"}
+                return {"verdict": "PASS"}
+
+            def rca_fn(phase_key, manifest_dict):
+                rca_calls.append((phase_key, manifest_dict))
+                return {"terminal_action": "retry", "analysis": "unexpected"}
+
+            runner = DeterministicRunner(config, registry, tmpdir)
+            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)
+
+            assert state.status == "completed"
+            assert rca_calls == []

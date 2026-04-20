@@ -80,22 +80,22 @@ function dispatch(mode, config):
 
     if review.verdict == WARN:
       if config.MONITOR_LEVEL == "strict":
-        # Strict mode: escalate WARN to FAIL
-        treat as FAIL (fall through to FAIL handling below)
-      else:
-        # Spawn RCA on WARN for critical phases (non-blocking analysis)
-        # WARN-mode RCA is constrained: terminal_action must be null/continue,
-        # retry_recommendation is advisory and does NOT trigger a retry — the
-        # pipeline continues regardless. The RCA artifact is preserved for
-        # downstream phases and the final report.
-        rca_artifact = phase.rca_artifact
-        if rca_artifact:
-          analyzer_manifest = build_rca_manifest(
-              phase_key, rca_artifact, review, verdict_severity="WARN")
-          rca_result = spawn_rca_agent(analyzer_manifest)
-          # rca_result writes rca_artifact.output (e.g. results/integration_rca.json)
-        update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
-        continue to next phase (non-blocking)
+        # Strict mode: allow one retry on WARN before accepting WARN.
+        if phase_reruns < 1:
+          total_reruns += 1
+          phase_reruns += 1
+          retry current phase
+      # Advisory WARN RCA (non-blocking) for critical phases.
+      # WARN-mode RCA is constrained: terminal_action must be null/continue,
+      # retry_recommendation is advisory and does NOT trigger a retry — the
+      # pipeline continues regardless. The RCA artifact is preserved for
+      # downstream phases and the final report.
+      if phase.critical and phase.rca_artifact:
+        analyzer_manifest = build_rca_manifest(
+            phase_key, phase.rca_artifact, review, verdict_severity="WARN")
+        spawn_rca_agent(analyzer_manifest)
+      update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
+      continue to next phase (non-blocking)
 
     if review.verdict == FAIL:
       # --- RCA-first recovery path ---
@@ -285,11 +285,7 @@ The RCA agent (`agents/rca-agent.md`) is spawned in two situations:
 
 - **FAIL on a critical phase**: full RCA may recommend any `retry_recommendation` and
   may set `terminal_action: stop_with_blocker` to halt the pipeline.
-- **WARN on a critical phase** (standard / V2 modes): advisory RCA. The orchestrator
-  preserves the artifact for downstream consumers but does NOT consume the
-  recommendation as a control-flow signal — execution always continues to the next
-  phase. WARN-mode RCA must not emit `terminal_action: stop_with_blocker` (the agent
-  enforces this).
+- **WARN on a critical phase**: advisory RCA. In strict mode, one WARN retry is allowed first; if WARN persists (or in standard mode immediately), the orchestrator preserves the RCA artifact for downstream consumers but does NOT consume the recommendation as a control-flow signal — execution continues to the next phase. WARN-mode RCA must not emit `terminal_action: stop_with_blocker` (the agent enforces this).
 
 Both paths build the manifest the same way. Skip RCA when `phase.rca_artifact` is null
 (non-critical phases have no analysis context registered).
@@ -456,16 +452,16 @@ Full protocol details and context-budget rules are in `protocols/platform-dispat
 
 | Agent Role | `subagent_type` | `model` | Prompt Shape |
 |---|---|---|---|
-| Phase agent | `generalPurpose` | inherit | Agent doc + handoff content inlined |
-| Monitor agent | `generalPurpose` | `fast` | `monitor.md` + result + summary inlined |
-| Analysis agent | `generalPurpose` | inherit | `analysis-agent.md` + manifest + context files inlined (routine in-phase data analysis) |
-| RCA agent | `generalPurpose` | inherit | `rca-agent.md` + manifest + context files inlined; **prepend the literal keyword `ultrathink`** to enable Cursor's high reasoning effort (Cursor does not read agent frontmatter) |
+| Phase agent | `generalPurpose` | inherit | Compact prompt with path references to phase doc + handoff |
+| Monitor agent | `generalPurpose` | `fast` | Compact prompt with path references to monitor inputs |
+| Analysis agent | `generalPurpose` | inherit | Compact prompt with analysis doc + manifest paths (bounded context paths) |
+| RCA agent | `generalPurpose` | inherit | Compact prompt with RCA doc + manifest paths; **prepend the literal keyword `ultrathink`** to enable Cursor's high reasoning effort (Cursor does not read agent frontmatter) |
 | Coding agent | `generalPurpose` | inherit | Task from parent phase agent |
 | Container ops | `shell` | `fast` | Shell commands only |
 
 `inherit` = omit the `model` parameter; the subagent runs on the parent session's model.
 
-Prompt assembly for phase agents: read `agents/phase-NN-*.md` content and `handoff/to-phase-NN.md` content, concatenate with `---` separator, truncate to `max_context_lines`, pass as `Task` `prompt`. Use `AskQuestion` tool for guided setup.
+Prompt assembly for phase agents: prefer path-based dispatch (phase doc path + handoff path) and avoid concatenating full files in the parent orchestrator. Only inline minimal snippets when needed; enforce `cursor_agent_doc_max_lines` and `max_context_lines` caps. Use `AskQuestion` tool for guided setup.
 
 ### Claude Code / OpenCode
 
@@ -506,9 +502,9 @@ After every monitor review, the orchestrator MUST present the full monitor findi
 
 **After reading the monitor's verdict from `monitor/phase-{NN}-review.md`:**
 
-1. Read the full `monitor/phase-{NN}-review.md`.
-2. Read `monitor/phase-{NN}-context.json` if it exists (critical phases with detection rules produce this).
-3. Read `monitor/running-summary.md` for updated sticky values and cross-phase trends.
+1. Read `monitor/phase-{NN}-review.md` first.
+2. Read `monitor/phase-{NN}-context.json` only when it exists **and** the phase is critical or verdict is WARN/FAIL.
+3. Read only the sticky/frontmatter portion of `monitor/running-summary.md` unless deeper trend analysis is needed.
 4. Present a structured digest to the user in this format:
 
 ```
@@ -536,7 +532,7 @@ After every monitor review, the orchestrator MUST present the full monitor findi
 - Sticky values: {key metrics from running-summary.md frontmatter}
 ```
 
-5. For WARN or FAIL verdicts: also present the **Failure Details** and **Rerun Guidance** sections verbatim from the review doc.
+5. For WARN or FAIL verdicts: present the **Failure Details** and **Rerun Guidance** sections from the review doc.
 
 6. **Phase-specific rich output** — surface extra data for these phases:
 

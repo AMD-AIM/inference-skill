@@ -213,9 +213,48 @@ class TestDeterministicRunner:
             context = {"KEY_" + str(i): "x" * 100 for i in range(600)}
             handoff = runner.build_handoff("env", context, 1)
             lines = handoff.split("\n")
-            assert runner.max_context_lines == 20000
+            assert runner.max_context_lines == 8000
             assert "[truncated:" not in handoff
             assert any("KEY_599" in line for line in lines)
+
+    def test_forced_context_budget_truncates_handoff(self):
+        registry = _load_registry()
+        registry["max_context_lines"] = 25
+        config = _minimal_config("benchmark")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config["OUTPUT_DIR"] = tmpdir
+            runner = DeterministicRunner(config, registry, tmpdir, shadow=True)
+            context = {f"KEY_{i}": "x" * 120 for i in range(120)}
+            handoff = runner.build_handoff("env", context, 1)
+            lines = handoff.split("\n")
+            assert len(lines) == 25
+            assert lines[-1].startswith("[truncated:")
+
+    def test_structured_artifact_context_is_compacted(self):
+        registry = _load_registry()
+        config = _minimal_config("benchmark")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config["OUTPUT_DIR"] = tmpdir
+            runner = DeterministicRunner(config, registry, tmpdir, shadow=True)
+            large_payload = {f"key_{i}": "x" * 40 for i in range(200)}
+            handoff = runner.build_handoff(
+                "problem-generate",
+                {"TOP_KERNELS": large_payload},
+                1,
+                context_meta={
+                    "TOP_KERNELS": {
+                        "resolved_source": "artifact",
+                        "path": "results/gap_analysis/gap_analysis.json",
+                        "field": "top_kernels",
+                    }
+                },
+            )
+            assert '"type":"dict"' in handoff
+            assert '"size":200' in handoff
+            assert "source=results/gap_analysis/gap_analysis.json#top_kernels" in handoff
+            assert "key_199" not in handoff
 
     def test_dispatch_with_failures(self):
         registry = _load_registry()
@@ -307,6 +346,55 @@ class TestDeterministicRunner:
             state = runner.run()
 
             assert "integration" not in state.phases_completed
+
+    def test_optimize_large_context_keeps_monitor_and_warn_rca_active(self):
+        registry = _load_registry()
+        config = _minimal_config("optimize")
+        config["V2_MONITOR"] = "true"
+
+        monitor_calls = []
+        rca_calls = []
+
+        def dispatch_fn(phase_key, handoff_path):
+            return {"verdict": "PASS", "phase": phase_key}
+
+        def monitor_fn(phase_key, result_path, summary_path, checks):
+            monitor_calls.append(phase_key)
+            if phase_key == "kernel-optimize":
+                return {"verdict": "WARN", "failure_type": "logic"}
+            return {"verdict": "PASS"}
+
+        def rca_fn(phase_key, manifest_dict):
+            rca_calls.append((phase_key, manifest_dict))
+            return {"terminal_action": None, "analysis": "advisory"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config["OUTPUT_DIR"] = tmpdir
+            os.makedirs(os.path.join(tmpdir, "results", "gap_analysis"), exist_ok=True)
+            with open(os.path.join(tmpdir, "env_info.json"), "w") as f:
+                json.dump({"gpu_arch": "mi300x"}, f)
+            with open(os.path.join(tmpdir, "results", "sweep_configs.json"), "w") as f:
+                json.dump({"framework": "sglang", "precision": "bf16"}, f)
+            with open(os.path.join(tmpdir, "results", "profile_analysis.json"), "w") as f:
+                json.dump({"status": "complete"}, f)
+            with open(os.path.join(tmpdir, "results", "gap_analysis", "gap_analysis.json"), "w") as f:
+                json.dump({"top_kernels": ["kernel_" + str(i) for i in range(1200)]}, f)
+
+            runner = DeterministicRunner(config, registry, tmpdir)
+            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)
+
+            assert state.status == "completed"
+            assert len(monitor_calls) == len(registry["modes"]["optimize"])
+            assert len(rca_calls) == 1
+            phase_key, manifest = rca_calls[0]
+            assert phase_key == "kernel-optimize"
+            assert manifest["verdict_severity"] == "WARN"
+
+            handoff_path = os.path.join(tmpdir, "handoff", "to-phase-06.md")
+            with open(handoff_path) as f:
+                handoff = f.read()
+            assert '"type":"list"' in handoff
+            assert "source=results/gap_analysis/gap_analysis.json#top_kernels" in handoff
 
     def test_progress_is_sole_writer(self):
         """progress.json should only be written by the runner."""

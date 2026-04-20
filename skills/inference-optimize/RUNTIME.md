@@ -200,8 +200,8 @@ When running in multi-agent mode, the orchestrator manages the execution loop:
 
 The runner accepts platform-specific callbacks (`dispatch_fn`, `monitor_fn`, `rca_fn`). See `protocols/platform-dispatch.md` for the full adapter contract.
 
-- **Cursor**: `Task` tool with `subagent_type` per dispatch table. Handoff content is inlined in the prompt. Use `AskQuestion` for guided setup.
-- **Claude Code / OpenCode**: `Agent` tool with file-path handoffs. Use `question` tool for guided setup.
+- **Cursor**: `Task` tool with `subagent_type` per dispatch table. Prefer compact prompts with path references (handoff + agent doc), and inline only bounded snippets when required. Use `AskQuestion` for guided setup.
+- **Claude Code / OpenCode**: `Agent` tool with file-path handoffs. The new context-budget changes stay compatible here because the runner compacts handoffs/manifests before dispatch; phase docs are still read from disk by path. Use `question` tool for guided setup.
 
 ## Execution status updates
 

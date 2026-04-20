@@ -20,11 +20,10 @@ Defines what the system should do. All contracts, schemas, and protocol document
 
 Deterministic Python code that owns sequencing, prerequisites, retry budgets, resume validation, rollback, handoff generation, context-source resolution, context-budget enforcement, and atomic `progress.json` writes.
 
-Today this role is filled by the LLM orchestrator agent. Starting at Commit 4, `scripts/orchestrate/runner.py` takes over mechanical orchestration while the LLM retains intake UX, monitor explanation, and RCA interpretation.
+`scripts/orchestrate/runner.py` is the canonical control-plane implementation for mechanical orchestration. The LLM layer retains intake UX, monitor explanation, and RCA interpretation.
 
-Key components (post-runner):
-- **DeterministicRunner**: Mode resolution, dependency checks, artifact prerequisites, timeout handling, retry budgets, fallback invalidation, handoff skeleton generation, atomic progress writes.
-- **ContextBudgetEnforcer**: Resolves `context_sources` to sidecar files, compresses accumulated state (key + verdict + sticky only), enforces `max_context_lines` before each dispatch.
+Key components:
+- **DeterministicRunner**: Mode resolution, dependency checks, artifact prerequisites, timeout handling, retry budgets, fallback invalidation, handoff generation, context compaction (`max_context_lines` + per-value caps), and atomic progress writes.
 - **ParityChecker**: Computes and validates the canonical parity hash per `PARITY_CONTRACT.md`.
 
 ### Execution Plane
@@ -33,7 +32,7 @@ Markdown-driven phase agents, monitor agent, and RCA agent. These write attempt-
 
 - **Phase agents**: `agents/phase-00-env-setup.md` through `agents/phase-09-report-generate.md`.
 - **Monitor agent**: `orchestrator/monitor.md` — spawned fresh after each phase.
-- **RCA agent**: `agents/analysis-agent.md` — spawned on critical-phase FAIL.
+- **RCA agent**: `agents/rca-agent.md` — spawned on critical-phase FAIL and advisory WARN paths.
 
 ### Evidence Plane
 
