@@ -61,6 +61,35 @@
       "additionalProperties": { "type": "integer", "minimum": 0 },
       "description": "V2 only: map of phase key to human extension count"
     },
+    "budget_mode": {
+      "type": "object",
+      "description": "Decomposes the legacy budget_override.unlimited into two scoped modes. `default` enforces rerun.max_per_phase / max_total. `diagnostic` is orchestrator-set when the systemic RCA returns terminal_action_systemic=accept_finding: e2e benchmarks are halted, only instrumentation runs are allowed, and the loop converges to report-generate. `extended` is user-authorized only and lifts the per-phase / total caps for additional e2e attempts.",
+      "required": ["mode", "set_by", "set_at"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["default", "diagnostic", "extended"]
+        },
+        "set_by": {
+          "type": "string",
+          "enum": ["orchestrator", "user"]
+        },
+        "set_at": {
+          "type": "string",
+          "description": "ISO-8601 timestamp"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Free-text reason this mode was selected (e.g. systemic RCA accept_finding, user lifted cap)"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["session", "phase"],
+          "description": "Defaults to session. extended modes may scope to a single phase if the user requests it."
+        }
+      },
+      "additionalProperties": false
+    },
     "response_sequence": {
       "type": "array",
       "items": { "type": "object" },

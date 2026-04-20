@@ -231,3 +231,59 @@ If the handoff contains a `## Root Cause Analysis` section (from a prior failed 
 - Targets classified as `framework_limit`: document as a structured blocker rather than retrying.
 
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.
+
+---
+
+## Required Telemetry (mandatory per attempt)
+
+Without these artifacts the orchestrator's L1 `WarmupBiasFilter` cannot run, and the loop will burn retry budget on un-attributable headlines (the failure mode that drove the gptoss-fp4 attempts 4 and 6 manual investigation).
+
+Every integration attempt MUST emit:
+
+1. **Per-rank patch counters** — `optimized/integration_plugin/_runtime_counters_attempt{N}_rank{R}.json` for each tensor-parallel rank, written via an `atexit` handler in the plugin. Each file must contain:
+   ```json
+   {
+     "attempt": <N>,
+     "rank": <R>,
+     "patch_log_len": <int>,
+     "active_counts": {"<patched_symbol>": <int>, ...},
+     "first_active_iter": {"<patched_symbol>": <int|null>, ...}
+   }
+   ```
+   Use `scripts/integration/dump_patch_counters.py` (promote any one-off scripts into this canonical helper). Counters that stay at zero across all ranks for a given symbol prove that patch site never executed in the live decode path — this is the central evidence the systemic RCA needs.
+
+2. **TTFT distribution scalars in the result frontmatter** — under `## Key Findings`, emit the following flat fields parsed by the monitor:
+   - `std_ttft_baseline` (float, ms)
+   - `std_ttft_optimized` (float, ms)
+   - `std_ttft_ratio` = `std_ttft_optimized / std_ttft_baseline` (float)
+   - `sum_patch_call_counters` (integer, sum across all ranks of `active_counts` values)
+   - `e2e_attributable` (`true` | `false` | `null`) — set `false` when ratio < 0.1 and counters == 0; `null` when telemetry is incomplete.
+
+3. **Sticky scalars** — for each patched symbol `S`, emit `patch_calls_<S>_attempt{N}` so the running-summary frontmatter preserves per-attempt counter activation across the loop.
+
+4. **`_runtime_report.json`** — `optimized/integration_plugin/_runtime_report.json` aggregates the per-rank counters at the end of the run for the monitor's pre-extraction step. Schema: `{"attempt": <N>, "ranks_present": [...], "active_counts_total": {...}, "ranks_with_zero_counters": [...]}`.
+
+If any of (1)-(4) are missing, the result is incomplete and the monitor will fail the artifact integrity check. Do NOT mark the attempt complete.
+
+---
+
+## Plugin edit escape hatch (strict guardrail preserved)
+
+Direct modification of the plugin file from within the agent is **prohibited**. The guardrail exists to keep agent-authored code reviewable and to prevent an agent from quietly inserting `@torch._dynamo.disable` decorators that change correctness semantics.
+
+When a per-phase RCA names a specific mechanical edit (e.g. `@torch._dynamo.disable`, `@torch.compiler.disable`, a `torch.compiler.is_compiling()` guard, a `print()` → `_PATCH_LOG.append(...)` swap, or a Dynamo-incompatible call-site rewrite), the agent MUST surface the edit through a structured handoff:
+
+1. Write `handoff/manual-edits-required-attempt{N}.md` with one row per edit, using the fixed template:
+   ```
+   <file>:<line> | OLD | NEW | rationale
+   ```
+   Example:
+   ```
+   optimized/integration_plugin/__init__.py:142 | def patched_apply(self, x): | @torch._dynamo.disable\ndef patched_apply(self, x): | Dynamo cannot trace through HIP kernel launch; without disable the patch is silently skipped during torch.compile graph capture
+   ```
+
+2. Set `manual_edits_required: true` in the result frontmatter and reference the handoff path under `## Artifacts`.
+
+3. Set the result `status` to `blocked_pending_user_edit`. The orchestrator will surface a single AskUserQuestion to the user with the diff inline as preview, offering: "Apply these N lines (manual), or convert to a control experiment?"
+
+Do NOT silently retry the same attempt hoping the user will see the warning. Do NOT inline the edit yourself.

@@ -144,6 +144,44 @@ function dispatch(mode, config):
       retry current phase (goto step 3)
 ```
 
+## Repeated-Failure Detection (Auto-Systemic-RCA)
+
+A per-phase RCA tells you why one attempt failed. When two consecutive attempts produce **the same RCA fingerprint** even though the retry hypothesis was different, the per-phase view is no longer the right lens — the loop is stuck on a cross-phase issue (wrong patch target, measurement bias, baseline drift, etc). The orchestrator detects this mechanically and dispatches the **systemic RCA agent** instead of another per-phase retry. This applies to both V1 and V2 dispatch loops, regardless of `max_per_phase` budget.
+
+### Fingerprint
+Each per-phase RCA artifact (`results/<phase>_root_cause.json`) includes:
+- `scope: "phase"`
+- `root_cause_class` (e.g. `wrong_patch_target`, `dynamo_blocked`, `geak_measurement_bias`)
+- `key_signal_names` (sorted list of symbolic signals — names not values)
+- `fingerprint = sha256(root_cause_class + "|" + ",".join(sorted(key_signal_names)))`
+
+The RCA agent computes and writes the fingerprint. The orchestrator only reads it.
+
+### Detection rule
+
+After spawning a per-phase RCA on attempt N (where N >= 2):
+
+1. Read `results/<phase>_root_cause.json` (this attempt's fingerprint).
+2. Read `results/<phase>_root_cause_attempt{N-1}.json` if the runner archived the prior attempt's RCA, or recover the prior fingerprint from `results/rca_history.json`.
+3. If `current.fingerprint == prior.fingerprint` AND the dispatched retry hypothesis differed (handoff feedback was not identical to the prior attempt):
+   - **Do NOT dispatch another per-phase retry.**
+   - **Do NOT increment retry counters again** (they already incremented before the per-phase RCA).
+   - Dispatch the **systemic RCA agent** (`agents/systemic-rca.md`).
+   - Write the systemic RCA artifact path to `results/systemic_root_cause.json` per `phase-registry.json -> systemic_rca_artifact`.
+
+### Systemic RCA terminal_action
+
+The systemic RCA writes a `terminal_action_systemic` field (see `protocols/rca.schema.json`):
+- `continue` — fingerprint match was a false alarm; resume per-phase retry path.
+- `fallback` — roll back to a named earlier phase (`suggested_fallback_target`).
+- `accept_finding` — halt the loop. Auto-enter `budget_mode = diagnostic` (no further e2e benchmark attempts), then skip to `report-generate` with `report_freshness = post_loop_convergence`.
+
+The orchestrator also surfaces the systemic RCA to the user via the standard `present_monitor_findings()` step — never silently consume it.
+
+### Archiving prior RCA fingerprints
+
+Before overwriting `results/<phase>_root_cause.json` with a new attempt's RCA, copy the existing file to `results/<phase>_root_cause_attempt{N}.json` so the fingerprint history survives. The runner does this archival as part of its FAIL-handling step. Also append `{attempt, fingerprint, timestamp}` to `results/rca_history.json` for cross-attempt traceability.
+
 ## V2 Dispatch Loop
 
 When `V2_MONITOR=true` in `config.json`, the dispatch loop replaces V1's verdict handling (Step 5 above) with the two-layer monitor model. The outer loop is index-driven (`while phase_idx < len(phase_list)`) to support correct fallback re-dispatch.

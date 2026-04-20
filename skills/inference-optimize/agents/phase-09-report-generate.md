@@ -116,4 +116,25 @@ Include these sticky fields in `## Key Findings`:
 - `final_speedup`: float (end-to-end speedup from optimization_summary.json)
 - `report_path`: string (path to the generated optimization_report.md)
 
+---
+
+## Mid-loop refresh (attempt > 1)
+
+When the handoff frontmatter sets `attempt > 1` (or equivalently `report_freshness ∈ {post_loop_convergence, manual_refresh}`), this invocation is a mid-loop refresh, not the initial report. The orchestrator dispatches a refresh after either (a) the systemic RCA returned `terminal_action_systemic = accept_finding` and `budget_mode` flipped to `diagnostic`, or (b) the user explicitly requested an updated report.
+
+Required behavior:
+
+1. **Preserve prior content.** Read `prior_report_path` from the handoff frontmatter and load the existing `optimization_report.md`. Do NOT overwrite it. Prepend a new section with the heading `## Update — <YYYY-MM-DD> (<report_freshness>)` and write the merged document back to the same path.
+
+2. **Required subsections in the update block:**
+   - **Loop narrative** — one paragraph per attempt since the last refresh. Each paragraph names: attempt index, what changed in the dispatched hypothesis, what the per-phase RCA concluded, and the verdict.
+   - **Structural diagnosis** — paste the systemic RCA's `summary` and `root_cause_class`. Quote `key_signal_names` verbatim. Include the fingerprint hash for cross-reference.
+   - **Attribution honesty** — for every headline e2e number reported in the prior section, state explicitly whether `e2e_attributable` is `true`, `false`, or `null`. If a prior attempt's headline turned out to be a `cache_warmup_artifact`, mark it `[retracted]` here rather than editing the prior section.
+   - **Headline numbers (current)** — the most recent attempt's e2e_speedup, ttft_regression_pct, and counter activation summary. If counters=0, lead with that.
+   - **Recommended next-steps** — concrete actions outside this loop's authority (e.g. "rewire patch site to `FusedMoE._do_dispatch` per attempt-5 evidence"; "re-run Phase 7 with the production cudagraph captured baseline"). Do NOT propose another attempt of the same kind the loop already exhausted.
+
+3. **Do NOT regenerate `optimization_summary.json` from prior attempts' artifacts blindly.** When `budget_mode == "diagnostic"`, the JSON's `pipeline_status` should be `"completed with structural diagnosis"`. When `budget_mode == "extended"` and the user lifted the cap, status reflects the latest attempt.
+
+4. **Result frontmatter** — set `report_freshness` to match the handoff and emit `prior_report_path` under `## Artifacts` so the audit trail is preserved.
+
 Do NOT write to `progress.json` — the orchestrator manages progress tracking.

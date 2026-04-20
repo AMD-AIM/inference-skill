@@ -82,6 +82,18 @@ class RunnerState:
         self.blockers_emitted = []
         self.human_extensions = {}
         self.rca_skipped = {}  # phase_key -> reason string when rca_fn is None but rca_artifact is set
+        # budget_mode replaces the legacy ad-hoc budget_override.unlimited.
+        # default = enforce rerun.max_per_phase/max_total
+        # diagnostic = orchestrator-set after systemic RCA accept_finding (no further e2e attempts)
+        # extended = user-authorized only, lifts the per-phase/total caps
+        self.budget_mode = {
+            "mode": "default",
+            "set_by": "orchestrator",
+            "set_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "rationale": "initial state",
+        }
+        # rca_history tracks per-attempt fingerprints for repeated-failure detection
+        self.rca_history = []  # list of {phase, attempt, fingerprint, root_cause_class, timestamp}
 
     def to_progress(self):
         progress = {
@@ -99,6 +111,8 @@ class RunnerState:
             progress["human_extensions"] = dict(self.human_extensions)
         if self.rca_skipped:
             progress["rca_skipped"] = dict(self.rca_skipped)
+        # Always emit budget_mode so its provenance survives restarts.
+        progress["budget_mode"] = dict(self.budget_mode)
         return progress
 
     def write_progress(self):
@@ -144,6 +158,8 @@ class RunnerState:
         state.total_reruns = progress.get("total_reruns", 0)
         state.fallbacks_used = progress.get("fallbacks_used", [])
         state.human_extensions = progress.get("human_extensions", {})
+        if "budget_mode" in progress:
+            state.budget_mode = dict(progress["budget_mode"])
         return state
 
 
@@ -165,6 +181,10 @@ class DeterministicRunner:
         self.rerun_limits = registry["rerun"]
         self.timeouts = registry["timeouts"]
         self.context_sources = registry["context_sources"]
+
+        # Standalone test handle for repeated_rca_fingerprint(). The live
+        # dispatch loop reads state.rca_history (RunnerState) instead.
+        self.rca_history = []
 
         # V2 monitor feature flag
         self.v2_monitor = str(config.get("V2_MONITOR", registry.get("v2_monitor", False))).lower() in ("true", "1")
@@ -339,6 +359,92 @@ class DeterministicRunner:
         lines = combined.split("\n")
         lines = truncate_context(lines, self.max_context_lines)
         return "\n".join(lines)
+
+    def derive_sticky_inputs(self):
+        """Auto-derive stick scalars from filesystem state.
+
+        Currently:
+          - phase_split_inputs_ready: true when results/phase_split/ exists with
+            at least one regular file. Removes the need for any caller to set
+            this manually.
+
+        Returns a dict of derived sticky scalars; callers merge this into the
+        running summary frontmatter.
+        """
+        derived = {}
+        ps_dir = os.path.join(self.output_dir, "results", "phase_split")
+        ps_ready = False
+        if os.path.isdir(ps_dir):
+            for name in os.listdir(ps_dir):
+                if os.path.isfile(os.path.join(ps_dir, name)):
+                    ps_ready = True
+                    break
+        derived["phase_split_inputs_ready"] = ps_ready
+        return derived
+
+    def compute_rca_fingerprint(self, root_cause_class, key_signal_names):
+        """Deterministic fingerprint = sha256(root_cause_class + '|' + sorted(signals))."""
+        signals = ",".join(sorted(key_signal_names or []))
+        material = f"{root_cause_class or ''}|{signals}"
+        return hashlib.sha256(material.encode()).hexdigest()
+
+    def archive_prior_rca(self, phase_key, attempt):
+        """Copy results/<phase>_root_cause.json to <phase>_root_cause_attempt{N}.json
+        before the next attempt overwrites it. Returns the prior fingerprint
+        if the archived file declares one, else None."""
+        phase_meta = self.phases.get(phase_key, {})
+        rca_artifact = phase_meta.get("rca_artifact") or {}
+        rca_path_rel = rca_artifact.get("output")
+        if not rca_path_rel:
+            return None
+        rca_path = os.path.join(self.output_dir, rca_path_rel)
+        if not os.path.isfile(rca_path):
+            return None
+        # Archive
+        base, ext = os.path.splitext(rca_path)
+        archive_path = f"{base}_attempt{attempt}{ext}"
+        try:
+            with open(rca_path) as src:
+                content = src.read()
+            with open(archive_path, "w") as dst:
+                dst.write(content)
+        except OSError:
+            pass
+        # Recover fingerprint from the archived content
+        try:
+            data = json.loads(content)
+        except (ValueError, NameError):
+            return None
+        return data.get("fingerprint")
+
+    def repeated_rca_fingerprint(self, phase_key, current_fingerprint):
+        """Return True if the previous per-phase RCA for this phase shared the
+        same fingerprint as the current one. Reads from state.rca_history
+        (the runner appends each attempt's fingerprint to it)."""
+        if not current_fingerprint:
+            return False
+        prior = [h for h in self.rca_history if h.get("phase") == phase_key]
+        if not prior:
+            return False
+        return prior[-1].get("fingerprint") == current_fingerprint
+
+    def enter_diagnostic_budget_mode(self, state, rationale):
+        """Enter budget_mode = diagnostic. No further e2e benchmark attempts
+        will be dispatched. Caller is responsible for routing to report-generate."""
+        state.budget_mode = {
+            "mode": "diagnostic",
+            "set_by": "orchestrator",
+            "set_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "rationale": rationale,
+        }
+        state.write_progress()
+
+    def budget_caps_enforced(self, state):
+        """Budget caps enforcement is bypassed only in extended mode (user-set).
+        diagnostic mode short-circuits BEFORE the cap check (no further attempts
+        are dispatched at all), so for diagnostic we still report 'enforced'.
+        """
+        return state.budget_mode.get("mode") != "extended"
 
     def write_pipeline_blockers(self, state):
         """Persist state.blockers_emitted to results/pipeline_blockers.json."""
@@ -563,7 +669,82 @@ class DeterministicRunner:
         phase_reruns = state.retry_counts.get(phase_key, 0)
         return True, phase_idx, phase_reruns
 
-    def run(self, dispatch_fn=None, monitor_fn=None, rca_fn=None):
+    def _record_rca_fingerprint(self, state, phase_key, attempt, rca_result):
+        """Compute fingerprint, archive prior RCA, append to rca_history.
+        Returns the fingerprint (or None if not derivable)."""
+        if not rca_result:
+            return None
+        # Archive the prior file BEFORE this attempt's RCA may have overwritten it.
+        # In practice the rca_fn dispatcher writes the file, so the file on disk now
+        # is the *current* attempt's RCA — archive it under attempt={attempt}.
+        self.archive_prior_rca(phase_key, attempt)
+        rcc = rca_result.get("root_cause_class")
+        signals = rca_result.get("key_signal_names", []) or []
+        fp = rca_result.get("fingerprint") or self.compute_rca_fingerprint(rcc, signals)
+        state.rca_history.append({
+            "phase": phase_key,
+            "attempt": attempt,
+            "fingerprint": fp,
+            "root_cause_class": rcc,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+        # Persist
+        history_path = os.path.join(self.output_dir, "results", "rca_history.json")
+        atomic_write_json(history_path, {
+            "schema_version": SCHEMA_VERSION,
+            "history": list(state.rca_history),
+        })
+        return fp
+
+    def _maybe_dispatch_systemic_rca(self, state, phase_key, attempt, current_fp,
+                                     systemic_rca_fn, phase_list):
+        """If the current RCA fingerprint matches the prior attempt's, dispatch
+        the systemic RCA agent and act on its terminal_action_systemic.
+
+        Returns one of:
+          None                         -- no systemic dispatch (no match, or fn missing)
+          {"action": "continue"}       -- resume per-phase retry path
+          {"action": "fallback", "target": <phase>, "target_idx": <idx>}
+          {"action": "accept_finding"} -- enter diagnostic mode, route to report-generate
+        """
+        # repeated_rca_fingerprint compares current to the *last* in history.
+        # The current attempt was just appended, so we look at the prior entry.
+        prior_entries = [h for h in state.rca_history if h.get("phase") == phase_key]
+        if len(prior_entries) < 2 or not current_fp:
+            return None
+        if prior_entries[-2].get("fingerprint") != current_fp:
+            return None
+        if systemic_rca_fn is None:
+            logger.warning(
+                "Repeated RCA fingerprint detected for phase %s (attempt %d) "
+                "but systemic_rca_fn is not wired. Continuing per-phase retry.",
+                phase_key, attempt)
+            return None
+
+        manifest = {
+            "phase": phase_key,
+            "attempt": attempt,
+            "fingerprint": current_fp,
+            "rca_history": list(state.rca_history),
+        }
+        sys_rca = systemic_rca_fn(phase_key, manifest) or {}
+        action = sys_rca.get("terminal_action_systemic", "continue")
+        if action == "fallback":
+            target = sys_rca.get("suggested_fallback_target")
+            if target and target in phase_list:
+                return {"action": "fallback", "target": target,
+                        "target_idx": phase_list.index(target)}
+            logger.warning("systemic RCA returned fallback but target invalid: %r", target)
+            return {"action": "continue"}
+        if action == "accept_finding":
+            self.enter_diagnostic_budget_mode(
+                state,
+                sys_rca.get("summary", "systemic RCA accept_finding"))
+            return {"action": "accept_finding"}
+        return {"action": "continue"}
+
+    def run(self, dispatch_fn=None, monitor_fn=None, rca_fn=None,
+            systemic_rca_fn=None):
         """Execute the dispatch loop.
 
         dispatch_fn: callable(phase_key, handoff_path) -> verdict_dict
@@ -572,6 +753,10 @@ class DeterministicRunner:
             Spawns monitor agent. If None, returns the dispatch verdict directly.
         rca_fn: callable(phase_key, manifest_dict) -> rca_dict
             Spawns RCA/analysis agent. If None, skips RCA on FAIL.
+        systemic_rca_fn: callable(phase_key, manifest_dict) -> systemic_rca_dict
+            Spawns the systemic RCA agent when two consecutive per-phase RCAs
+            share a fingerprint. If None, the orchestrator logs a warning and
+            falls back to the normal per-phase retry path.
         """
         mode = self.resolve_mode()
         phase_list, dep_overrides = self.resolve_phase_list(mode)
@@ -600,6 +785,13 @@ class DeterministicRunner:
         else:
             state = RunnerState(self.output_dir, mode, phase_list)
             phase_idx = 0
+
+        # Auto-derive sticky scalars from filesystem (e.g. phase_split_inputs_ready)
+        # so callers never have to set them manually.
+        derived_sticky = self.derive_sticky_inputs()
+        if derived_sticky:
+            sticky_path = os.path.join(self.output_dir, "monitor", "derived-sticky.json")
+            atomic_write_json(sticky_path, derived_sticky)
 
         state.write_progress()
 
@@ -688,6 +880,46 @@ class DeterministicRunner:
                             phase_key, phase_meta["rca_artifact"].get("output", "?"))
                         state.rca_skipped[phase_key] = "rca_fn_not_wired"
 
+                    # Auto-systemic-RCA: record fingerprint, dispatch systemic
+                    # RCA when the previous attempt's fingerprint matches.
+                    current_fp = self._record_rca_fingerprint(
+                        state, phase_key, attempt, rca_result)
+                    sys_decision = self._maybe_dispatch_systemic_rca(
+                        state, phase_key, attempt, current_fp,
+                        systemic_rca_fn, phase_list)
+                    if sys_decision is not None:
+                        if sys_decision["action"] == "accept_finding":
+                            # Halt e2e attempts; route to report-generate.
+                            if "report-generate" in phase_list:
+                                report_idx = phase_list.index("report-generate")
+                                current_idx = phase_list.index(phase_key)
+                                for skip_key in phase_list[current_idx:report_idx]:
+                                    if skip_key not in state.phases_completed:
+                                        state.phases_completed.append(skip_key)
+                                phase_idx = report_idx
+                                advance_phase = False
+                                break
+                            # No report phase available -- mark complete.
+                            state.phases_completed.append(phase_key)
+                            state.retry_counts[phase_key] = phase_reruns
+                            break
+                        if sys_decision["action"] == "fallback":
+                            target = sys_decision["target"]
+                            already_used = any(
+                                f["phase_key"] == phase_key and f["fallback_target"] == target
+                                for f in state.fallbacks_used
+                            )
+                            if not already_used:
+                                state.fallbacks_used.append({
+                                    "phase_key": phase_key,
+                                    "fallback_target": target,
+                                })
+                            phase_idx = sys_decision["target_idx"]
+                            state.phases_completed = state.phases_completed[:phase_idx]
+                            advance_phase = False
+                            break
+                        # action == "continue" -> fall through to normal retry path
+
                     escalation_result = self._maybe_escalate(phase_key, v, verdict)
                     response = self._determine_response(
                         v, phase_key, phase_meta, state, rca_result,
@@ -744,11 +976,50 @@ class DeterministicRunner:
                             phase_key, phase_meta["rca_artifact"].get("output", "?"))
                         state.rca_skipped[phase_key] = "rca_fn_not_wired"
 
+                    # Auto-systemic-RCA dispatch (V1 path mirrors V2).
+                    current_fp = self._record_rca_fingerprint(
+                        state, phase_key, attempt, rca_result)
+                    sys_decision = self._maybe_dispatch_systemic_rca(
+                        state, phase_key, attempt, current_fp,
+                        systemic_rca_fn, phase_list)
+                    if sys_decision is not None:
+                        if sys_decision["action"] == "accept_finding":
+                            if "report-generate" in phase_list:
+                                report_idx = phase_list.index("report-generate")
+                                current_idx = phase_list.index(phase_key)
+                                for skip_key in phase_list[current_idx:report_idx]:
+                                    if skip_key not in state.phases_completed:
+                                        state.phases_completed.append(skip_key)
+                                phase_idx = report_idx
+                                advance_phase = False
+                                break
+                            state.phases_completed.append(phase_key)
+                            state.retry_counts[phase_key] = phase_reruns
+                            break
+                        if sys_decision["action"] == "fallback":
+                            target = sys_decision["target"]
+                            already_used = any(
+                                f["phase_key"] == phase_key and f["fallback_target"] == target
+                                for f in state.fallbacks_used
+                            )
+                            if not already_used:
+                                state.fallbacks_used.append({
+                                    "phase_key": phase_key,
+                                    "fallback_target": target,
+                                })
+                            phase_idx = sys_decision["target_idx"]
+                            state.phases_completed = state.phases_completed[:phase_idx]
+                            advance_phase = False
+                            break
+                        # continue -> fall through
+
                     state.total_reruns += 1
                     phase_reruns += 1
 
-                    if (phase_reruns > self.rerun_limits["max_per_phase"]
-                            or state.total_reruns > self.rerun_limits["max_total"]):
+                    # Budget caps are bypassed only in extended (user-set) budget_mode.
+                    if (self.budget_caps_enforced(state)
+                            and (phase_reruns > self.rerun_limits["max_per_phase"]
+                                 or state.total_reruns > self.rerun_limits["max_total"])):
                         ft = phase_meta.get("fallback_target")
                         already_used = any(
                             f["phase_key"] == phase_key and f["fallback_target"] == ft

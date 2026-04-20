@@ -481,3 +481,132 @@ class TestV2MonitorConfig:
                 assert rule["category"] in valid_cats, (
                     f"Phase {key}: invalid category '{rule['category']}'"
                 )
+
+
+# ---------------------------------------------------------------------------
+# INV-15: Repeated RCA fingerprint triggers systemic dispatch
+# ---------------------------------------------------------------------------
+
+class TestRepeatedRcaFingerprintTriggersSystemicDispatch:
+    """When two consecutive per-phase RCAs share a fingerprint, the runner
+    must dispatch the systemic RCA (not another per-phase retry)."""
+
+    def test_compute_fingerprint_deterministic(self):
+        import sys
+        sys.path.insert(0, str(SKILL_ROOT / "scripts" / "orchestrate"))
+        from runner import DeterministicRunner
+        reg = _load_registry()
+        r = DeterministicRunner({"MODE": "optimize"}, reg, "/tmp/test_runner_dummy")
+        fp1 = r.compute_rca_fingerprint("wrong_patch_target", ["counters_zero", "headline_low"])
+        fp2 = r.compute_rca_fingerprint("wrong_patch_target", ["headline_low", "counters_zero"])
+        assert fp1 == fp2, "fingerprint must be order-independent in key_signal_names"
+        fp3 = r.compute_rca_fingerprint("dynamo_blocked", ["counters_zero", "headline_low"])
+        assert fp1 != fp3, "different root_cause_class must produce different fingerprint"
+
+    def test_repeated_fingerprint_detection(self):
+        import sys
+        sys.path.insert(0, str(SKILL_ROOT / "scripts" / "orchestrate"))
+        from runner import DeterministicRunner
+        reg = _load_registry()
+        r = DeterministicRunner({"MODE": "optimize"}, reg, "/tmp/test_runner_dummy")
+        fp = r.compute_rca_fingerprint("wrong_patch_target", ["counters_zero"])
+        # No history yet
+        assert not r.repeated_rca_fingerprint("integration", fp)
+        r.rca_history.append({"phase": "integration", "attempt": 1, "fingerprint": fp})
+        assert r.repeated_rca_fingerprint("integration", fp), \
+            "second occurrence with same fingerprint must trigger detection"
+        # Different fingerprint should not match
+        fp_other = r.compute_rca_fingerprint("dynamo_blocked", ["counters_zero"])
+        assert not r.repeated_rca_fingerprint("integration", fp_other)
+
+
+# ---------------------------------------------------------------------------
+# INV-16: WarmupBiasFilter predicate registered on integration phase
+# ---------------------------------------------------------------------------
+
+class TestWarmupBiasFilterMarksArtifact:
+    def test_integration_has_warmup_bias_rule(self):
+        reg = _load_registry()
+        rules_v2 = reg["phases"]["integration"]["quality"]["detection_rules_structured_v2"]
+        named = [r for r in rules_v2 if r.get("name") == "WarmupBiasFilter"]
+        assert len(named) == 1, "WarmupBiasFilter rule must be registered exactly once"
+        rule = named[0]
+        assert rule["field"] == "std_ttft_ratio"
+        assert rule["op"] == "lt"
+        assert float(rule["value"]) == 0.1
+        assert rule["verdict"] == "WARN"
+        assert "sum_patch_call_counters" in rule.get("condition", "")
+
+    def test_integration_scalars_include_warmup_inputs(self):
+        reg = _load_registry()
+        scalars = reg["phases"]["integration"]["monitor_context_fields"]["scalars"]
+        for required in ("std_ttft_baseline", "std_ttft_optimized",
+                         "sum_patch_call_counters", "std_ttft_ratio"):
+            assert required in scalars, f"missing scalar {required} for WarmupBiasFilter"
+
+
+# ---------------------------------------------------------------------------
+# INV-17: GEAKMeasurementBias predicate registered on kernel-optimize phase
+# ---------------------------------------------------------------------------
+
+class TestGeakMeasurementBiasWarnsOnHandoff:
+    def test_kernel_optimize_has_measurement_bias_rule(self):
+        reg = _load_registry()
+        rules_v2 = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured_v2"]
+        named = [r for r in rules_v2 if r.get("name") == "GEAKMeasurementBias"]
+        assert len(named) == 1, "GEAKMeasurementBias rule must be registered exactly once"
+        rule = named[0]
+        assert rule["field"] == "hipGraphLaunch_pct"
+        assert rule["op"] == "gt"
+        assert float(rule["value"]) == 80.0
+        assert rule["verdict"] == "WARN"
+        assert "cuda_graph_replay" in rule.get("condition", "")
+
+    def test_kernel_optimize_scalars_include_measurement_inputs(self):
+        reg = _load_registry()
+        scalars = reg["phases"]["kernel-optimize"]["monitor_context_fields"]["scalars"]
+        for required in ("hipGraphLaunch_pct", "winning_kernel_measurement_env"):
+            assert required in scalars, f"missing scalar {required} for GEAKMeasurementBias"
+
+
+# ---------------------------------------------------------------------------
+# INV-18: Systemic RCA artifact registered + agent doc exists
+# ---------------------------------------------------------------------------
+
+class TestSystemicRcaRegistered:
+    def test_systemic_rca_block_present(self):
+        reg = _load_registry()
+        assert "systemic_rca" in reg, "systemic_rca block must be registered in phase-registry"
+        block = reg["systemic_rca"]
+        assert block["agent"] == "systemic-rca.md"
+        assert block["artifact"] == "results/systemic_root_cause.json"
+
+    def test_systemic_rca_agent_doc_exists(self):
+        agent_doc = SKILL_ROOT / "agents" / "systemic-rca.md"
+        assert agent_doc.is_file(), "agents/systemic-rca.md must exist"
+        text = agent_doc.read_text()
+        for phrase in ("terminal_action_systemic", "accept_finding", "fingerprint"):
+            assert phrase in text, f"systemic-rca.md missing required term: {phrase}"
+
+
+# ---------------------------------------------------------------------------
+# INV-19: budget_mode replaces ad-hoc unlimited override
+# ---------------------------------------------------------------------------
+
+class TestBudgetModeSchema:
+    def test_progress_schema_declares_budget_mode(self):
+        path = PROTOCOLS_DIR / "progress.schema.json"
+        with open(path) as f:
+            schema = json.load(f)
+        bm = schema["properties"]["budget_mode"]
+        assert set(bm["properties"]["mode"]["enum"]) == {"default", "diagnostic", "extended"}
+        assert set(bm["properties"]["set_by"]["enum"]) == {"orchestrator", "user"}
+
+    def test_runner_state_initializes_budget_mode(self):
+        import sys
+        sys.path.insert(0, str(SKILL_ROOT / "scripts" / "orchestrate"))
+        from runner import RunnerState
+        s = RunnerState("/tmp/dummy", "optimize", ["env"])
+        assert s.budget_mode["mode"] == "default"
+        assert s.budget_mode["set_by"] == "orchestrator"
+

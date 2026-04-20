@@ -150,8 +150,8 @@
       "critical": true,
       "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GEAK_OE_DIR", "GPUS", "CONFIG_KEY"],
       "monitor_context_fields": {
-        "source_artifacts": [],
-        "scalars": ["compiled_count", "best_speedup", "winning_kernel_count", "optimization_coverage_status", "expected_improvement_status"]
+        "source_artifacts": ["problems/geak_results.json", "results/profile_analysis.json"],
+        "scalars": ["compiled_count", "best_speedup", "winning_kernel_count", "optimization_coverage_status", "expected_improvement_status", "hipGraphLaunch_pct", "winning_kernel_measurement_env"]
       },
       "quality": {
         "checks": [
@@ -166,7 +166,8 @@
         ],
         "detection_rules_structured_v2": [
           {"field": "effort_waste_detected", "op": "eq", "value": true, "verdict": "WARN", "category": "effort_waste"},
-          {"field": "geak_false_claim_count", "op": "gt", "value": 0, "verdict": "WARN", "category": "geak_false_claim"}
+          {"field": "geak_false_claim_count", "op": "gt", "value": 0, "verdict": "WARN", "category": "geak_false_claim"},
+          {"name": "GEAKMeasurementBias", "field": "hipGraphLaunch_pct", "op": "gt", "value": 80.0, "verdict": "WARN", "category": "geak_false_claim", "condition": "winning_kernel_measurement_env == cuda_graph_replay", "rationale": "Production decode path is dominated by cudagraph replay but the winner was measured outside it; integration must verify counter activation before claiming the win"}
         ]
       },
       "rca_artifact": {
@@ -183,8 +184,8 @@
       "critical": true,
       "required_context": ["OUTPUT_DIR", "CONFIG_KEY", "FRAMEWORK", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "RESULTS_DIR", "TEMPLATES_DIR", "GPUS"],
       "monitor_context_fields": {
-        "source_artifacts": ["results/optimization_comparison.json"],
-        "scalars": ["artifacts_valid", "performance_gate", "e2e_speedup", "ttft_regression_pct", "ttft_upgraded"]
+        "source_artifacts": ["results/optimization_comparison.json", "optimized/integration_plugin/_runtime_report.json"],
+        "scalars": ["artifacts_valid", "performance_gate", "e2e_speedup", "ttft_regression_pct", "ttft_upgraded", "std_ttft_baseline", "std_ttft_optimized", "sum_patch_call_counters", "std_ttft_ratio"]
       },
       "quality": {
         "checks": [
@@ -192,7 +193,7 @@
           { "name": "comparison_exists", "type": "file_exists", "path": "results/optimization_comparison.json" },
           { "name": "integration_manifest_exists", "type": "file_exists", "path": "results/integration_manifest.json" }
         ],
-        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; a top-priority winner is still unintegrated without a structured blocker. Warn when validation_status = warn and the only performance issue is the accepted 0.97 <= speedup < 1.0 band. Performance policy: pass when speedup >= 1.0; warn when 0.97 <= speedup < 1.0; fail when speedup < 0.97. Severe TTFT regression should upgrade a weak result from warn to fail. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json.",
+        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; a top-priority winner is still unintegrated without a structured blocker. Warn when validation_status = warn and the only performance issue is the accepted 0.97 <= speedup < 1.0 band. Performance policy: pass when speedup >= 1.0; warn when 0.97 <= speedup < 1.0; fail when speedup < 0.97. Severe TTFT regression should upgrade a weak result from warn to fail. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json. WarmupBiasFilter (deterministic): when std_ttft_optimized/std_ttft_baseline < 0.1 AND sum_patch_call_counters == 0, the headline e2e is a cache warm-up artifact, not a plugin win — annotate e2e_attributable=false and downgrade the verdict.",
         "detection_rules_structured": [
           {"field": "performance_gate", "op": "eq", "value": "fail", "verdict": "FAIL"},
           {"field": "e2e_speedup", "op": "lt", "value": 0.97, "verdict": "FAIL"},
@@ -202,7 +203,8 @@
         "detection_rules_structured_v2": [
           {"field": "baseline_integrity_match", "op": "eq", "value": false, "verdict": "FAIL", "category": "baseline_drift"},
           {"field": "cross_kernel_delta_pct", "op": "gt", "value": {"$ref": "$CROSS_KERNEL_THRESHOLD"}, "verdict": "WARN", "category": "cross_kernel_interference"},
-          {"field": "stale_artifacts_detected", "op": "eq", "value": true, "verdict": "WARN", "category": "stale_artifact"}
+          {"field": "stale_artifacts_detected", "op": "eq", "value": true, "verdict": "WARN", "category": "stale_artifact"},
+          {"name": "WarmupBiasFilter", "field": "std_ttft_ratio", "op": "lt", "value": 0.1, "verdict": "WARN", "category": "geak_false_claim", "condition": "sum_patch_call_counters == 0", "rationale": "std_ttft optimized/baseline < 0.1 with zero patch counters indicates cache warm-up artifact, not a real win"}
         ]
       },
       "rca_artifact": {
@@ -242,6 +244,27 @@
     "monitor": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
   },
   "rerun": { "max_per_phase": 2, "max_total": 5 },
+  "systemic_rca": {
+    "agent": "systemic-rca.md",
+    "artifact": "results/systemic_root_cause.json",
+    "rca_history_path": "results/rca_history.json",
+    "trigger": "two consecutive per-phase RCAs share the same fingerprint",
+    "analysis_context": [
+      "results/*_root_cause.json",
+      "results/rca_history.json",
+      "agent-results/",
+      "monitor/running-summary.md",
+      "monitor/",
+      "progress.json",
+      "results/optimization_comparison.json",
+      "results/integration_manifest.json",
+      "optimized/integration_plugin/_runtime_counters_*.json",
+      "optimized/integration_plugin/_runtime_report.json",
+      "problems/geak_results.json",
+      "problems/optimization_manifest.json",
+      "results/profile_analysis.json"
+    ]
+  },
   "timeouts": {
     "default_minutes": 30,
     "overrides": {

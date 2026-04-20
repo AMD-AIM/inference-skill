@@ -10,6 +10,8 @@ phase: {phase_key}
 phase_index: {NN}
 attempt: {N}
 mode: "{MODE}"
+report_freshness: "initial" | "post_loop_convergence" | "manual_refresh"
+prior_report_path: "<path/to/optimization_report.md>" | null
 ---
 
 ## Context
@@ -61,6 +63,10 @@ The orchestrator generates handoffs mechanically:
 5. Populate `## Instructions` from the intake selections.
 6. On reruns, append `## Prior Attempt Feedback` from the monitor's review.
 7. On reruns after RCA, append `## Root Cause Analysis` from the RCA artifact.
+8. Set `report_freshness` and `prior_report_path` for `report-generate` handoffs:
+   - `report_freshness: "initial"` and `prior_report_path: null` for the first invocation.
+   - `report_freshness: "post_loop_convergence"` and `prior_report_path: "<existing optimization_report.md>"` when the orchestrator dispatches Phase 9 after entering `budget_mode = diagnostic` (set by systemic RCA `accept_finding`).
+   - `report_freshness: "manual_refresh"` when the user explicitly re-dispatches Phase 9. For all other phases, omit both fields.
 
 ## Validation
 

@@ -7,11 +7,35 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "1.0"
+      "enum": ["1.0", "1.1"]
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["phase", "systemic"],
+      "default": "phase",
+      "description": "phase = single failed phase RCA. systemic = cross-phase RCA spanning the full loop, dispatched when per-phase RCAs repeat their fingerprint."
+    },
+    "fingerprint": {
+      "type": "string",
+      "description": "Deterministic identifier of the RCA's diagnosis: sha256 of `root_cause_class + sorted(key_signal_names)`. Required when scope == \"phase\"; orchestrator uses this to detect repeated failures and escalate to systemic RCA."
+    },
+    "root_cause_class": {
+      "type": "string",
+      "description": "Coarse-grained category of the root cause (e.g., wrong_patch_target, dynamo_blocked, geak_measurement_bias, cache_warmup_artifact). Used together with key_signal_names to produce the fingerprint."
+    },
+    "key_signal_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sorted list of the symbolic signal names (not values) the RCA depended on (e.g., [\"counters_zero\", \"engine_init_clean\"]). Used together with root_cause_class to produce the fingerprint."
+    },
+    "terminal_action_systemic": {
+      "type": ["string", "null"],
+      "enum": ["continue", "fallback", "accept_finding", null],
+      "description": "Systemic-RCA-only field. continue = retry path remains valid; fallback = roll back to a named earlier phase; accept_finding = halt the loop and let report-generate close it out (orchestrator auto-enters budget_mode=diagnostic)."
     },
     "phase": {
       "type": "string",
-      "description": "Phase key that failed"
+      "description": "Phase key that failed (for phase scope) or the phase the systemic RCA was triggered from (for systemic scope)"
     },
     "summary": {
       "type": "string",
