@@ -7,6 +7,11 @@
   "context_keys_preview": 10,
   "context_items_preview": 5,
   "cursor_agent_doc_max_lines": 600,
+  "dispatcher": {
+    "outer_summary_template": "monitor/phase-{NN}-orchestration-summary.md",
+    "outer_max_context_files": 3,
+    "phase_orchestrator_doc": "orchestrator/PHASE-ORCHESTRATOR.md"
+  },
   "phases": {
     "env": {
       "index": 0,
@@ -104,13 +109,13 @@
           { "name": "analysis_produced", "type": "file_exists", "path": "results/profile_analysis.json" },
           { "name": "trace_manifest_exists", "type": "file_exists", "path": "results/trace_manifest.json" }
         ],
-        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable. Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag. Warn when roofline_coverage_pct < 50 (majority of top kernel time lacks roofline data, typically due to CUDA graph wrapping).",
+        "detection_rules": "Fail profile analysis when any of: gzip decompression fails end-to-end; traceEvents are missing; trace files are trivially small or obviously incomplete; required primary trace or phase-split inputs are missing for optimize mode; TraceLens or phase-split roofline is required but not actually usable; roofline_coverage_pct < 50 (majority of top kernel time lacks roofline data, typically due to CUDA graph wrapping). Check trace_manifest.json for per-trace integrity status and phase_split_inputs_ready flag.",
         "detection_rules_structured": [
           {"field": "trace_integrity_status", "op": "eq", "value": "corrupt", "verdict": "FAIL"},
           {"field": "trace_integrity_status", "op": "eq", "value": "missing", "verdict": "FAIL"},
           {"field": "trace_count", "op": "lt", "value": 1, "verdict": "FAIL"},
-          {"field": "phase_split_inputs_ready", "op": "eq", "value": false, "verdict": "WARN"},
-          {"field": "roofline_coverage_pct", "op": "lt", "value": 50, "verdict": "WARN"}
+          {"field": "phase_split_inputs_ready", "op": "eq", "value": false, "verdict": "FAIL"},
+          {"field": "roofline_coverage_pct", "op": "lt", "value": 50, "verdict": "FAIL"}
         ]
       },
       "rca_artifact": {
@@ -145,10 +150,10 @@
           { "name": "manifest_exists", "type": "file_exists", "path": "problems/optimization_manifest.json" },
           { "name": "problems_generated", "type": "metric_threshold", "field": "problems_generated", "min": 1 }
         ],
-        "detection_rules": "Fail when optimization_manifest.json is missing or problems_generated < 1. Warn when max_kernel_types_per_problem > 2 (a single problem file mixes unrelated kernel types, indicating bad grouping — e.g. MoE GEMM + RMSNorm + attention in one file).",
+        "detection_rules": "Fail when optimization_manifest.json is missing, problems_generated < 1, or max_kernel_types_per_problem > 2 (a single problem file mixes unrelated kernel types, indicating bad grouping — e.g. MoE GEMM + RMSNorm + attention in one file).",
         "detection_rules_structured": [
           {"field": "problems_generated", "op": "lt", "value": 1, "verdict": "FAIL"},
-          {"field": "max_kernel_types_per_problem", "op": "gt", "value": 2, "verdict": "WARN"}
+          {"field": "max_kernel_types_per_problem", "op": "gt", "value": 2, "verdict": "FAIL"}
         ]
       },
       "rca_artifact": {
@@ -171,17 +176,17 @@
         "checks": [
           { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 }
         ],
-        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; expected_improvement_status = not_attempted (high-value targets were skipped without any optimization attempt); winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation. Warn instead of FAIL when expected_improvement_status = parity_or_blocked and the blockers are structured (for example true_kernel_parity or framework_limit), so inherently unimprovable targets are captured instead of retried blindly.",
+        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; expected_improvement_status = not_attempted (high-value targets were skipped without any optimization attempt); expected_improvement_status = parity_or_blocked (hard-fail monitor policy still requires RCA/fail-path handling for this condition); winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation.",
         "detection_rules_structured": [
           {"field": "compiled_count", "op": "lt", "value": 1, "verdict": "FAIL"},
           {"field": "best_speedup", "op": "le", "value": 1.0, "verdict": "FAIL", "condition": "expected_improvement_status != parity_or_blocked"},
           {"field": "expected_improvement_status", "op": "eq", "value": "not_attempted", "verdict": "FAIL"},
-          {"field": "expected_improvement_status", "op": "eq", "value": "parity_or_blocked", "verdict": "WARN"}
+          {"field": "expected_improvement_status", "op": "eq", "value": "parity_or_blocked", "verdict": "FAIL"}
         ],
         "detection_rules_structured_v2": [
-          {"field": "effort_waste_detected", "op": "eq", "value": true, "verdict": "WARN", "category": "effort_waste"},
-          {"field": "geak_false_claim_count", "op": "gt", "value": 0, "verdict": "WARN", "category": "geak_false_claim"},
-          {"name": "GEAKMeasurementBias", "field": "hipGraphLaunch_pct", "op": "gt", "value": 80.0, "verdict": "WARN", "category": "geak_false_claim", "condition": "winning_kernel_measurement_env == cuda_graph_replay", "rationale": "Production decode path is dominated by cudagraph replay but the winner was measured outside it; integration must verify counter activation before claiming the win"}
+          {"field": "effort_waste_detected", "op": "eq", "value": true, "verdict": "FAIL", "category": "effort_waste"},
+          {"field": "geak_false_claim_count", "op": "gt", "value": 0, "verdict": "FAIL", "category": "geak_false_claim"},
+          {"name": "GEAKMeasurementBias", "field": "hipGraphLaunch_pct", "op": "gt", "value": 80.0, "verdict": "FAIL", "category": "geak_false_claim", "condition": "winning_kernel_measurement_env == cuda_graph_replay", "rationale": "Production decode path is dominated by cudagraph replay but the winner was measured outside it; integration must verify counter activation before claiming the win"}
         ]
       },
       "rca_artifact": {
@@ -213,18 +218,18 @@
           { "name": "comparison_exists", "type": "file_exists", "path": "results/optimization_comparison.json" },
           { "name": "integration_manifest_exists", "type": "file_exists", "path": "results/integration_manifest.json" }
         ],
-        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; a top-priority winner is still unintegrated without a structured blocker. Warn when validation_status = warn and the only performance issue is the accepted 0.97 <= speedup < 1.0 band. Performance policy: pass when speedup >= 1.0; warn when 0.97 <= speedup < 1.0; fail when speedup < 0.97. Severe TTFT regression should upgrade a weak result from warn to fail. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json. WarmupBiasFilter (deterministic): when std_ttft_optimized/std_ttft_baseline < 0.1 AND sum_patch_call_counters == 0, the headline e2e is a cache warm-up artifact, not a plugin win — annotate e2e_attributable=false and downgrade the verdict.",
+        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; performance_gate = warn (hard-fail monitor policy); e2e_speedup < 1.0; a top-priority winner is still unintegrated without a structured blocker. Performance policy input bands still come from optimization_comparison.json (`pass` / `warn` / `fail`), but monitor verdict handling is PASS/FAIL only. Severe TTFT regression must also fail the phase. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json. WarmupBiasFilter (deterministic): when std_ttft_optimized/std_ttft_baseline < 0.1 AND sum_patch_call_counters == 0, the headline e2e is a cache warm-up artifact, not a plugin win — annotate e2e_attributable=false and treat as FAIL.",
         "detection_rules_structured": [
           {"field": "performance_gate", "op": "eq", "value": "fail", "verdict": "FAIL"},
           {"field": "e2e_speedup", "op": "lt", "value": 0.97, "verdict": "FAIL"},
-          {"field": "e2e_speedup", "op": "lt", "value": 1.0, "verdict": "WARN"},
+          {"field": "e2e_speedup", "op": "lt", "value": 1.0, "verdict": "FAIL"},
           {"field": "ttft_regression_pct", "op": "gt", "value": 20.0, "verdict": "FAIL", "condition": "performance_gate == warn"}
         ],
         "detection_rules_structured_v2": [
           {"field": "baseline_integrity_match", "op": "eq", "value": false, "verdict": "FAIL", "category": "baseline_drift"},
-          {"field": "cross_kernel_delta_pct", "op": "gt", "value": {"$ref": "$CROSS_KERNEL_THRESHOLD"}, "verdict": "WARN", "category": "cross_kernel_interference"},
-          {"field": "stale_artifacts_detected", "op": "eq", "value": true, "verdict": "WARN", "category": "stale_artifact"},
-          {"name": "WarmupBiasFilter", "field": "std_ttft_ratio", "op": "lt", "value": 0.1, "verdict": "WARN", "category": "geak_false_claim", "condition": "sum_patch_call_counters == 0", "rationale": "std_ttft optimized/baseline < 0.1 with zero patch counters indicates cache warm-up artifact, not a real win"}
+          {"field": "cross_kernel_delta_pct", "op": "gt", "value": {"$ref": "$CROSS_KERNEL_THRESHOLD"}, "verdict": "FAIL", "category": "cross_kernel_interference"},
+          {"field": "stale_artifacts_detected", "op": "eq", "value": true, "verdict": "FAIL", "category": "stale_artifact"},
+          {"name": "WarmupBiasFilter", "field": "std_ttft_ratio", "op": "lt", "value": 0.1, "verdict": "FAIL", "category": "geak_false_claim", "condition": "sum_patch_call_counters == 0", "rationale": "std_ttft optimized/baseline < 0.1 with zero patch counters indicates cache warm-up artifact, not a real win"}
         ]
       },
       "rca_artifact": {
@@ -301,9 +306,10 @@
     }
   },
   "_schema_notes": {
-    "monitor_context_fields": "Active — structured context extraction for monitor, used by critical phases",
-    "detection_rules_structured": "Active — typed predicates for verdict automation on critical phases",
-    "parallel_groups": "Active — concurrent phase execution groups for full, optimize, and monitor modes"
+    "monitor_context_fields": "Active — compact context extraction for monitor reviews on critical phases",
+    "detection_rules_structured": "Active — used by monitor/orchestrator guidance; deterministic runner evaluation is enabled when V2_MONITOR=true",
+    "parallel_groups": "Planning metadata for orchestrator-level concurrency; deterministic runner currently executes resolved phase lists sequentially",
+    "human_loop": "Registry default is false; runtime escalation behavior reads HUMAN_LOOP from config and requires V2_MONITOR"
   },
   "context_sources": {
     "CONFIG_KEY":                { "source": "config" },

@@ -1,6 +1,6 @@
 # inference-skill
 
-Standalone distribution repo for the `inferencex-optimize` skill.
+Standalone distribution repo for the `inference-optimize` skill.
 
 This repo packages GPU inference benchmarking, profiling, and kernel optimization workflows as a reusable skill that can be installed once and used from:
 
@@ -10,162 +10,19 @@ This repo packages GPU inference benchmarking, profiling, and kernel optimizatio
 
 Claude Code and OpenCode discover skills from Claude-compatible install locations. Cursor uses a generated `.mdc` rule. One `./install.sh` run sets up all three.
 
-## Features
+## What this repo ships
 
-Full InferenceX benchmark, profiling, and kernel optimization workflow with multi-agent orchestration:
-- Orchestrator-driven dispatch loop with phase agents and declarative phase registry
-- Quality monitoring with configurable levels (standard/strict/minimal) and automatic rerun on failure
-- Phase timeout policy with per-phase overrides
-- Monitor failure handling (non-blocking, preserves rerun budget)
-- Interrupt/resume via `progress.json` state tracking
-- Docker container setup and GPU management
-- Sweep filtering and configuration
-- Benchmark execution and analysis
-- Torch profiler trace collection and TraceLens analysis
-- GEAK-accelerated kernel optimization (Triton + HIP/CK modes)
-- Framework plugin generation (vLLM, SGLang)
-- Report generation with machine-readable summary
+`inference-skill` packages one canonical skill payload:
 
-## Architecture
+- `skills/inference-optimize/` (skill source of truth)
+- `install.sh` (installer for Claude Code, OpenCode, and Cursor)
+- control-plane tests and E2E validator assets
 
-### Multi-agent orchestration
-
-The `inferencex-optimize` skill uses a multi-agent architecture that keeps each agent's context small (~100-200 lines) instead of accumulating the full pipeline (~1,700+ lines) in a single agent.
-
-```mermaid
-flowchart TB
-    User([User])
-    Skill[SKILL.md + INTAKE.md]
-    Orch[Orchestrator]
-    Registry[(phase-registry.json)]
-    Monitor[Monitor Agent]
-    Summary[(running-summary.md)]
-
-    User -->|config key + options| Skill
-    Skill -->|resolved variables| Orch
-    Orch -->|reads phase metadata| Registry
-
-    subgraph Phase Dispatch Loop
-        Handoff[Generate Handoff]
-        Agent[Phase Agent N]
-        Result[Phase Result]
-        Review[Monitor Review]
-
-        Orch --> Handoff
-        Handoff -->|to-phase-NN.md| Agent
-        Agent -->|phase-NN-result.md| Result
-        Result --> Review
-        Review -->|verdict| Orch
-    end
-
-    Monitor -.->|evaluates| Review
-    Monitor -.->|updates| Summary
-
-    subgraph Subagents
-        Coder[Coding Agent]
-        Analyzer[Analysis Agent]
-    end
-
-    Agent -->|spawns| Coder
-    Agent -->|spawns| Analyzer
-```
-
-### Pipeline phases
-
-Each workflow mode maps to a subset of 10 phases:
-
-```mermaid
-flowchart LR
-    P0[0 Env Setup] --> P1[1 Config Parse]
-    P1 --> P2[2 Benchmark]
-    P2 --> P3[3 Bench Analyze]
-    P3 --> P4[4 Profiling]
-    P4 --> P5[5 Profile Analyze]
-    P5 --> P6[6 Problem Gen]
-    P6 --> P7[7 Kernel Optimize]
-    P7 --> P8[8 Integration]
-    P8 --> P9[9 Report Gen]
-```
-
-| Mode | Phases |
-|------|--------|
-| benchmark | 0 → 1 → 2 → 3 |
-| profile | 0 → 1 → 4 → 5 |
-| full | 0 → 1 → 2 → 3 → 4 → 5 |
-| optimize | 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 |
-| optimize-only | 0 → 1 → 6 → 7 → 8 → 9 (requires prior profile artifacts) |
-
-### Token budget
-
-| Component | Context size | What it reads |
-|-----------|-------------|---------------|
-| Orchestrator | ~500 lines | ORCHESTRATOR.md + registry + current review |
-| Phase agent | ~100-200 lines | agent doc + handoff |
-| Monitor | ~60-100 lines | monitor doc + summary + result |
-| Single-agent (old) | ~1,700+ lines | all phase docs cumulative |
-
-## Guide
-
-For verified OpenCode and Cursor usage, see [GUIDE.md](GUIDE.md).
-
-## Intended UX
-
-```text
-Use inferencex-optimize skill for qwen3.5-bf16-mi355x-sglang.
-```
-
-The agent should drive a short guided setup:
-- first ask exactly three high-level question groups: `Run plan`, `Output`, and `GPUs`
-- ask those questions together as one grouped form, not one-by-one
-- then do lightweight discovery before asking `tp`, `seq-len`, and `conc`
-- offer a smoke fast path with recommended defaults or per-filter review
-- emit visible status updates between each stage so the user knows what is happening
-- summarize the plan
-- start work
-
-## Repo layout
-
-```text
-inference-skill/
-  install.sh
-  LICENSE
-  CHANGELOG.md
-  pyproject.toml                        # pytest config
-  tests/README.md                       # Points to canonical test location
-  skills/
-    inferencex-optimize/
-      SKILL.md
-      INTAKE.md
-      RUNTIME.md
-      EXAMPLES.md
-      INSTALL.md
-      LICENSE
-      orchestrator/                     # Multi-agent orchestration
-        ORCHESTRATOR.md
-        phase-registry.json
-        monitor.md
-      agents/                           # Self-contained phase agents
-        phase-00-env-setup.md ... phase-09-report-generate.md
-        coding-agent.md
-        analysis-agent.md
-      protocols/                        # Communication schemas
-        phase-result.schema.md
-        monitor-feedback.schema.md
-        handoff-format.md
-        rerun-protocol.md
-        analyzer-manifest.schema.md
-      phases/README.md                  # Archive pointer to agents/
-      templates/
-      scripts/                          # Organized by category
-        env/ container/ profiling/ optimize/ plugin/ report/
-        tests/                          # Unit tests for pure-logic scripts
-      tests/                            # E2E validator
-      resources/
-```
+The implementation itself remains benchmark-framework agnostic while targeting the external [InferenceX repository](https://github.com/SemiAnalysisAI/InferenceX) during runtime execution.
 
 ## Install
 
-Clone the repo and install globally:
+Global install:
 
 ```bash
 git clone https://github.com/AMD-AIM/inference-skill.git
@@ -173,13 +30,13 @@ cd inference-skill
 ./install.sh
 ```
 
-Install into a specific project:
+Project-local install:
 
 ```bash
 ./install.sh --project /path/to/project
 ```
 
-Create a linked install for local development:
+Linked install for local development:
 
 ```bash
 ./install.sh --project /path/to/project --link
@@ -190,54 +47,89 @@ Create a linked install for local development:
 Global install writes to:
 
 ```text
-~/.claude/skills/inferencex-optimize       # skill files (Claude Code + OpenCode)
-~/.cursor/skills/inferencex-optimize       # symlink (Cursor native skill)
-~/.cursor/rules/inferencex-optimize.mdc    # Cursor agent-requested rule
+~/.claude/skills/inference-optimize       # skill files (Claude Code + OpenCode)
+~/.cursor/skills/inference-optimize       # symlink (Cursor native skill)
+~/.cursor/rules/inference-optimize.mdc    # Cursor agent-requested rule
 ```
 
 Project install writes to the same three locations under the project directory.
 
-## Source of truth
+## Quick verification
 
-The skill lives under `skills/inferencex-optimize/`.
+```bash
+./install.sh --verify
+opencode debug skill
+ls ~/.cursor/rules/inference-optimize.mdc
+```
 
-This directory is the source of truth:
-- `SKILL.md` - skill definition and metadata
-- guided intake flow
-- runtime defaults and bootstrap rules
-- interaction examples
-- phase instructions
-- helper scripts
-- packaged test assets
+Expected discovery name: `inference-optimize`.
+
+## Usage prompt
+
+```text
+Use inference-optimize skill for qwen3.5-bf16-mi355x-sglang.
+```
+
+For verified OpenCode and Cursor flows, see [GUIDE.md](GUIDE.md).
+
+## Source-of-truth map
+
+All operational contracts live under `skills/inference-optimize/`:
+
+- `SKILL.md`: entrypoint behavior, file read order, mode/config references
+- `INTAKE.md`: guided setup question flow
+- `RUNTIME.md`: bootstrap, required inputs, runtime guardrails
+- `orchestrator/ORCHESTRATOR.md`: outer dispatcher contract
+- `orchestrator/PHASE-ORCHESTRATOR.md`: per-phase inner loop contract
+- `orchestrator/monitor.md`: monitor-agent behavior
+- `orchestrator/phase-registry.json`: phase metadata, dependencies, quality checks
+- `protocols/*.md|*.json`: schema and protocol contracts
+
+Repo-root docs (`README.md`, `GUIDE.md`) are install and operator guides, not runtime contract sources.
+
+## Repository layout
+
+```text
+inference-skill/
+  install.sh
+  pyproject.toml
+  .github/workflows/control-plane.yml
+  skills/
+    inference-optimize/
+      SKILL.md
+      INTAKE.md
+      RUNTIME.md
+      orchestrator/
+      agents/
+      protocols/
+      scripts/
+      templates/
+      tests/
+      resources/
+```
 
 ## Testing
 
-### Unit tests
-
-Pure-logic script tests run without GPUs:
+Run control-plane tests from repo root:
 
 ```bash
-pytest skills/inferencex-optimize/scripts/tests/ -v
+pytest -v
 ```
 
-Covers `resolve_geak_mode`, `validate_config_key`, `load_optimization_manifest`, and `classify_kernel` (30 tests).
-
-### E2E validation
-
-The E2E validator checks pipeline artifacts after a full run:
+Run script-only tests:
 
 ```bash
-python3 skills/inferencex-optimize/tests/e2e_optimize_test.py --output-dir <path>
+pytest skills/inference-optimize/scripts/tests/ -v
 ```
 
-E2E assets are packaged inside the installed skill directory:
+Run E2E validator against an output directory:
 
-- `~/.claude/skills/inferencex-optimize/tests/E2E_TEST.md`
-- `~/.claude/skills/inferencex-optimize/tests/e2e_optimize_test.py`
-- `~/.claude/skills/inferencex-optimize/resources/TraceLens-internal.tar.gz`
+```bash
+python3 skills/inference-optimize/tests/e2e_optimize_test.py --output-dir <path>
+```
 
 ## Development workflow
 
-1. Edit files under `skills/inferencex-optimize/`
-2. Reinstall with `./install.sh` or use `--link` during development
-3. Validate the installed result from the destination skill directory
+1. Edit files under `skills/inference-optimize/`.
+2. Reinstall with `./install.sh` (or use `--link`).
+3. Re-run tests and re-verify installed targets.

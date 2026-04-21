@@ -147,13 +147,14 @@ class TestV1Regression:
 
         assert current_hash == golden_hash
 
-    def test_v1_warn_path_remains_non_rca(self):
-        """V1 WARN verdict should not spawn RCA and should continue execution."""
+    def test_v1_warn_path_is_promoted_to_fail_with_rca(self):
+        """Legacy WARN verdicts are normalized to FAIL and enter RCA/fail handling."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _build_config(tmpdir, "benchmark")
             config["V2_MONITOR"] = False
             _create_artifacts(tmpdir)
             registry = json.loads(REGISTRY_PATH.read_text())
+            registry["rerun"] = {"max_per_phase": 1, "max_total": 1}
             rca_calls = []
 
             def dispatch_fn(phase_key, handoff_path):
@@ -171,5 +172,5 @@ class TestV1Regression:
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)
 
-            assert state.status == "completed"
-            assert rca_calls == []
+            assert state.status == "failed"
+            assert len(rca_calls) >= 1

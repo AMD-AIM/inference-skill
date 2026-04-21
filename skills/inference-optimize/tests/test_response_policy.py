@@ -25,10 +25,10 @@ class TestResponsePolicy:
         resp = determine_response("PASS", None, "benchmark", {}, state)
         assert resp["action"] == "continue"
 
-    def test_warn_continues(self):
+    def test_legacy_warn_is_treated_as_fail(self):
         state = MockRunnerState()
         resp = determine_response("WARN", None, "benchmark", {}, state)
-        assert resp["action"] == "continue"
+        assert resp["action"] == "retry"
 
     def test_safety_stop_overrides_everything(self):
         state = MockRunnerState()

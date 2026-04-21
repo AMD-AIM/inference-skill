@@ -21,8 +21,8 @@ You read at most **4 files** per invocation: this document, the running summary,
 
 The orchestrator tailors your prompt based on `MONITOR_LEVEL` from `config.json`:
 
-- **standard** (manual override): You receive `phase.quality.checks` for critical phases, or a generic result-exists check for non-critical phases.
-- **strict**: You receive `phase.quality.checks` for ALL phases (every phase is treated as critical). Any WARN verdict you issue will be escalated to FAIL by the orchestrator.
+- **standard**: You receive `phase.quality.checks` for critical phases, or a generic result-exists check for non-critical phases.
+- **strict**: You receive `phase.quality.checks` for ALL phases (every phase is treated as critical). Conditions that previously mapped to WARN are treated as FAIL in this hard-fail policy.
 - **minimal**: You only check that the result file exists and status is not `failed`. Skip quality analysis entirely.
 
 For skill-guided runs, intake sets `MONITOR_LEVEL=strict` automatically before execution.
@@ -47,12 +47,11 @@ When the orchestrator's prompt includes `detection_rules` text, apply it as reas
 
 All JSON-artifact scalars you need for detection rules are pre-extracted by the orchestrator into `monitor/phase-{NN}-context.json`. Read that file — do **not** open `results/*.json` directly. The context JSON contains fields like `performance_gate`, `e2e_speedup`, `artifacts_valid`, `ttft_regression_pct`, `phase_split_inputs_ready`, etc. depending on the phase.
 
-Detection rules require judgment — they may involve conditional logic across multiple fields. A detection rule can produce FAIL or WARN depending on severity.
+Detection rules require judgment — they may involve conditional logic across multiple fields. Under the hard-fail policy, any triggered detection concern is FAIL.
 
 ### Verdict assignment
 
 - **PASS**: All mechanical checks pass AND detection rules raise no concerns.
-- **WARN**: All mechanical checks pass but detection rules identify minor issues (output is still usable). Also use WARN when a target is inherently unimprovable (e.g., `expected_improvement_status = parity_or_blocked`) or when Phase 08 lands in the accepted `performance_gate = warn` band without a more serious blocker.
 - **FAIL**: Any mechanical check fails outright, OR detection rules identify a critical issue (e.g., regression, missing critical artifact, unsafe downstream comparison).
 
 ### For non-critical phases (no quality checks)
@@ -64,7 +63,6 @@ Perform a generic check:
 Assign verdict:
 - **PASS**: Result exists and status is not an error.
 - **FAIL**: Result missing or status indicates failure.
-- No WARN for non-critical phases.
 
 ## Per-attempt review files
 
@@ -77,27 +75,16 @@ This is mandatory for the `integration` phase (Phase 8): `monitor/phase-08-revie
 
 ## Review Document Format
 
-Write `monitor/phase-{NN}-review.md` per `protocols/monitor-feedback.schema.md`:
+Write `monitor/phase-{NN}-review.md` using the canonical contract in
+`protocols/monitor-feedback.schema.md`.
 
-```markdown
----
-phase: {phase_key}
-phase_index: {NN}
-verdict: PASS | WARN | FAIL
-failure_type: infrastructure | logic | data_quality  # only on non-PASS
----
-## Summary
-(1-2 sentence assessment)
+Requirements:
 
-## Check Results
-(per-check pass/fail with details)
-
-## Failure Details
-(only on non-PASS: what went wrong, failure_type justification)
-
-## Rerun Guidance
-(only on FAIL: what the retry agent should do differently)
-```
+- Always include frontmatter with `phase`, `phase_index`, and `verdict`.
+- Include `failure_type` on FAIL verdicts.
+- Include `## Summary` and `## Check Results` sections on every review.
+- Include `## Failure Details` and `## Rerun Guidance` on FAIL verdicts.
+- For retries, also write `monitor/phase-{NN}-review-attempt{N}.md`.
 
 ## Failure Taxonomy
 
@@ -151,9 +138,9 @@ When the orchestrator sets `V2_MONITOR: true` in your prompt, apply the two-laye
 ### Two-Layer Verdict Model
 
 - **Layer 1 (L1)**: Deterministic predicates evaluated by the runner before you are spawned. Results are written to `monitor/phase-{NN}-predicate.json`. L1 produces a floor verdict: if L1 says FAIL, the final verdict is FAIL regardless of your assessment.
-- **Layer 2 (L2)**: Your LLM-based judgment. You can **upgrade** the L1 verdict (PASS->WARN, PASS->FAIL, WARN->FAIL) but **never downgrade** it (FAIL cannot become WARN or PASS).
+- **Layer 2 (L2)**: Your LLM-based judgment. You can **upgrade** the L1 verdict (PASS->FAIL) but **never downgrade** it (FAIL cannot become PASS). Legacy WARN inputs are normalized to FAIL by the runner.
 
-The final verdict is `max(L1, L2)` by severity: PASS < WARN < FAIL.
+The final verdict is `max(L1, L2)` by severity: PASS < FAIL. Legacy WARN values are treated as FAIL.
 
 ### V2 Inputs
 
@@ -177,15 +164,15 @@ Read only the files the orchestrator includes in your prompt. Do not open files 
 
 1. Read `monitor/phase-{NN}-predicate.json`. Note which rules triggered and their `problem_category` values.
 2. If L1 verdict is FAIL, your verdict must also be FAIL. Focus your review on confirming the failure category and providing rerun guidance.
-3. If L1 verdict is PASS or WARN, apply your judgment across the 9-category failure taxonomy. You may upgrade the verdict if you detect issues L1 cannot catch — particularly the `logic` category (wrong optimization approach, flawed RCA reasoning).
+3. If L1 verdict is PASS, apply your judgment across the 9-category failure taxonomy. You may upgrade to FAIL if you detect issues L1 cannot catch — particularly the `logic` category (wrong optimization approach, flawed RCA reasoning).
 4. If you believe escalation to a human is warranted, set `escalation_required: true` in your review frontmatter.
 
 ### Named L1 predicates (deterministic safety nets)
 
 These predicates run in the runner's `_evaluate_v2` path, before you are spawned, against the scalars in `phase-{NN}-context.json`. Their results are visible in `phase-{NN}-predicate.json`.
 
-- **`WarmupBiasFilter`** — applied to **integration** (Phase 8). Triggers WARN when `std_ttft_optimized / std_ttft_baseline < 0.1` AND `sum_patch_call_counters == 0`. Rationale: the headline e2e speedup is then a cache warm-up artifact (the optimized run's TTFT distribution is suspiciously tight while the baseline's was wide), not a plugin win. The runner sets `sticky.e2e_attributable = false` when this predicate fires; your Layer 2 review should label the headline `cache_warmup_artifact` and not treat it as a real win.
-- **`GEAKMeasurementBias`** — applied to **kernel-optimize** (Phase 7). Triggers WARN when `hipGraphLaunch_pct > 80%` AND any winning kernel's `winning_kernel_measurement_env == "cuda_graph_replay"`. Rationale: production decode is dominated by cudagraph replay but the GEAK winner was measured outside it; integration must verify counter activation before claiming the win. Surface the warning in `handoff/to-phase-08.md`.
+- **`WarmupBiasFilter`** — applied to **integration** (Phase 8). Triggers FAIL when `std_ttft_optimized / std_ttft_baseline < 0.1` AND `sum_patch_call_counters == 0`. Rationale: the headline e2e speedup is then a cache warm-up artifact (the optimized run's TTFT distribution is suspiciously tight while the baseline's was wide), not a plugin win. The runner sets `sticky.e2e_attributable = false` when this predicate fires; your Layer 2 review should label the headline `cache_warmup_artifact` and treat it as a failure signal.
+- **`GEAKMeasurementBias`** — applied to **kernel-optimize** (Phase 7). Triggers FAIL when `hipGraphLaunch_pct > 80%` AND any winning kernel's `winning_kernel_measurement_env == "cuda_graph_replay"`. Rationale: production decode is dominated by cudagraph replay but the GEAK winner was measured outside it; integration must verify counter activation before claiming the win. Surface this as a failure in `handoff/to-phase-08.md`.
 
 ### 9-Category Failure Taxonomy (V2)
 
@@ -205,15 +192,15 @@ Categories 1-3 are evaluated in V1 mode. Categories 4-9 are V2-only. L2 evaluate
 
 ### V2 Review Document Format
 
-Same as V1 format, with these additional frontmatter fields:
+Use the same base file shape from `protocols/monitor-feedback.schema.md`, with these additional frontmatter fields:
 
 ```yaml
 ---
 phase: {phase_key}
 phase_index: {NN}
-verdict: PASS | WARN | FAIL
+verdict: PASS | FAIL
 failure_type: infrastructure | logic | data_quality | performance_regression | effort_waste | cross_kernel_interference | geak_false_claim | baseline_drift | stale_artifact
-l1_verdict: PASS | WARN | FAIL   # from predicate.json
+l1_verdict: PASS | FAIL   # from predicate.json
 escalation_required: false | "human" | "systemic_rca" | "manual_edit"
                                   # false = no escalation
                                   # "human" = human-in-the-loop intervention (requires HUMAN_LOOP)

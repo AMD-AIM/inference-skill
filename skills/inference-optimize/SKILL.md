@@ -77,19 +77,21 @@ Read these in this order:
 1. Before Round 1: no extra file reads required.
 2. After Round 1 answers: [`INTAKE.md`](INTAKE.md)
 3. Before discovery/bootstrap: [`RUNTIME.md`](RUNTIME.md)
-4. Before execution: read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and [`orchestrator/phase-registry.json`](orchestrator/phase-registry.json). Phase agents read their own `agents/phase-NN-*.md` docs -- the orchestrator does not read them.
+4. Before execution: read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and [`orchestrator/phase-registry.json`](orchestrator/phase-registry.json). The main agent runs as the **outer dispatcher** and spawns one fresh phase-orchestrator subagent per phase. The phase-orchestrator subagent reads [`orchestrator/PHASE-ORCHESTRATOR.md`](orchestrator/PHASE-ORCHESTRATOR.md) itself — the main agent does NOT read it. Phase agents read their own `agents/phase-NN-*.md` docs.
 5. Read [`EXAMPLES.md`](EXAMPLES.md) only if interaction quality has drifted or you are editing/maintaining this skill.
-6. For monitor mode: read both [`orchestrator/MONITOR-MODE.md`](orchestrator/MONITOR-MODE.md) and [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md). MONITOR-MODE.md defines the presentation format and phase-specific rich output. The orchestrator drives the dispatch loop.
+6. For monitor mode: read [`orchestrator/ORCHESTRATOR.md`](orchestrator/ORCHESTRATOR.md) and follow its `Transparent Monitor Presentation` section for per-phase rich output format.
 
 ## Multi-agent orchestration
 
-After intake and bootstrap, the orchestrator dispatches work to specialized agents:
+After intake and bootstrap, the main agent acts as a thin **outer dispatcher** that rotates a fresh subagent per phase. This bounds context per phase and structurally enforces the multi-agent contract.
 
+- **Outer dispatcher** (the main agent): reads `ORCHESTRATOR.md` + `phase-registry.json`, then for each phase spawns one phase-orchestrator subagent and reads back its small summary file. Holds at most this doc + registry + latest summary + `progress.json` between phases.
+- **Phase-orchestrator** (per-phase subagent, fresh context): reads `orchestrator/PHASE-ORCHESTRATOR.md` and runs the inner dispatch loop for exactly one phase — handoff write/validate, phase-agent spawn, monitor spawn, RCA spawn on FAIL, retry/fallback. Has a hard self-checklist: cannot return a summary unless `monitor/phase-NN-review.md` exists, has a `verdict:` line, and is newer than the phase result file. Returns one `monitor/phase-NN-orchestration-summary.md` (≤30 lines).
 - **Phase agents**: Self-contained per-phase agents under `agents/`. Each reads its own doc + a handoff from `handoff/to-phase-NN.md`. Write results to `agent-results/phase-NN-result.md`.
 - **Monitor agent**: Evaluates each phase result using `orchestrator/monitor.md`. Maintains `monitor/running-summary.md` for cross-phase awareness. Writes verdicts to `monitor/phase-NN-review.md`.
 - **Coder/Analyzer subagents**: Spawned by phase agents for specific tasks (kernel writing, data analysis).
 
-Communication schemas are in `protocols/`. The orchestrator never reads phase docs or runbooks directly.
+Communication schemas are in `protocols/`. The outer dispatcher never reads phase docs, phase results, monitor reviews, or RCA artifacts.
 
 ## Platform notes
 
@@ -108,7 +110,7 @@ The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical cont
 - `profile`: `env -> config -> profile -> profile-analyze`
 - `optimize`: `env -> config -> benchmark -> benchmark-analyze -> profile -> profile-analyze -> problem-generate -> kernel-optimize -> integration -> report-generate`. Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
 - `optimize-only`: `env -> config -> problem-generate -> kernel-optimize -> integration -> report-generate` (requires existing profile analysis artifacts from a prior run). Supports GEAK-accelerated kernel optimization when installed + API key configured. Falls back to manual kernel writing otherwise.
-- `monitor`: Upgraded optimize mode with full transparency. Runs the same phases as optimize, but the main agent surfaces the full monitor sub-agent findings (quality checks, detection rules, scalar metrics, per-kernel status) to the user after every phase boundary. During intake, strict monitoring is fixed (`MONITOR_LEVEL=strict`) before confirmation. Read `orchestrator/MONITOR-MODE.md`.
+- `monitor`: Upgraded optimize mode with full transparency. Runs the same phases as optimize, but the main agent surfaces the full monitor sub-agent findings (quality checks, detection rules, scalar metrics, per-kernel status) to the user after every phase boundary. During intake, strict monitoring is fixed (`MONITOR_LEVEL=strict`) before confirmation. Follow `orchestrator/ORCHESTRATOR.md` (`Transparent Monitor Presentation`).
 
 Choose the narrowest mode that matches the user's goal. For a smoke run, prefer a narrow configuration and confirm before widening to a full sweep. For optimization, prefer `optimize` for a fresh end-to-end run. Use `optimize-only` when profile data already exists and the user wants to skip re-profiling.
 
@@ -133,7 +135,8 @@ To revert from the deterministic runner to the legacy LLM orchestrator, set `USE
 - [Runner-LLM Boundary](protocols/runner-llm-boundary.md) — code vs. LLM responsibility split
 
 ### Orchestration
-- [Orchestrator](orchestrator/ORCHESTRATOR.md)
+- [Orchestrator (Outer Dispatcher)](orchestrator/ORCHESTRATOR.md)
+- [Phase-Orchestrator (per-phase subagent)](orchestrator/PHASE-ORCHESTRATOR.md)
 - [Phase Registry](orchestrator/phase-registry.json)
 - [Monitor](orchestrator/monitor.md)
 - [Deterministic Runner](scripts/orchestrate/runner.py)

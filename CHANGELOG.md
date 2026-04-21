@@ -13,7 +13,7 @@ Multi-agent architecture rebuild of the InferenceX optimization pipeline.
 - Declarative `conditional_deps` in phase registry for skip-integration flow
 - Phase timeout policy with per-phase overrides
 - Interrupt/resume guidance via `progress.json` state tracking
-- Monitor failure handling (non-blocking, does not consume rerun budget)
+- Monitor failure handling (critical phases fail closed; non-critical monitor failures remain non-blocking and do not consume rerun budget)
 - E2E validator (`tests/e2e_optimize_test.py`) with multi-agent workspace validation
 
 ### Changed
@@ -23,6 +23,6 @@ Multi-agent architecture rebuild of the InferenceX optimization pipeline.
 - `MONITOR_LEVEL` dispatch now uses 3-branch selection (minimal/strict/standard)
 
 ### Removed
-- `vllm-optimize` skill (consolidated into `inferencex-optimize`)
+- `vllm-optimize` skill (consolidated into `inference-optimize`)
 - `benchmark+profile` mode alias (use `full` instead)
 - Deprecated `--dest` flag from `install.sh`

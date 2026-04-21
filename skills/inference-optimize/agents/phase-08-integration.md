@@ -145,7 +145,7 @@ python3 "{{SCRIPTS_DIR}}/report/validate_optimization.py" --results-dir "{{RESUL
 
 `validate_optimization.py` writes `{{RESULTS_DIR}}/optimization_comparison.json` containing baseline vs optimized throughput, computed speedup, and validation flags — attach this file to the Phase 9 bundle.
 
-Keep the baseline + optimized JSON filenames referenced in the validator logs. Treat `artifacts_valid = false` or `performance_gate = fail` as validation failure. A `performance_gate = warn` result is still a usable measured outcome: record it honestly, preserve the comparison JSON, and let the monitor/reporting flow decide whether it should remain a WARN or trigger a retry because of other blockers.
+Keep the baseline + optimized JSON filenames referenced in the validator logs. Treat `artifacts_valid = false` or `performance_gate = fail` as validation failure. A `performance_gate = warn` result is still a usable measured outcome: record it honestly, preserve the comparison JSON, and let the monitor/reporting flow decide whether it should be treated as FAIL under hard-fail monitor policy or retried due to other blockers.
 
 When reporting externally, quote **total token throughput** fields exactly as emitted by the benchmark JSON (do not normalize to per-GPU rates unless the baseline file already does). If multiple JSON files match the optimized filename pattern, prefer the newest mtime and archive the others under `{{RESULTS_DIR}}/archive/` to avoid validator ambiguity.
 

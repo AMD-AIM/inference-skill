@@ -1,6 +1,7 @@
-# Phase Docs (Archive)
+# Phase Docs (Optional Archive)
 
 The original phase runbooks that lived here (`00-env-setup.md` through `09-report-generate.md`) have been superseded by the multi-agent architecture.
+This directory is retained only as an archive pointer for backward-compatible references.
 
 Canonical phase agent docs are now at:
 

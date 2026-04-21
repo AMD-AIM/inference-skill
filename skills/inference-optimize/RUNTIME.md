@@ -183,18 +183,33 @@ Set `USE_RUNNER=false` in the run configuration to revert to the legacy LLM orch
 
 Architecture details: `docs/ARCHITECTURE.md`. Parity verification: `docs/PARITY_CONTRACT.md`.
 
+## Contract boundaries
+
+To avoid documentation drift, treat these as canonical:
+
+- Orchestration mechanics: `orchestrator/ORCHESTRATOR.md` and `orchestrator/PHASE-ORCHESTRATOR.md`
+- Monitor review artifact shape: `protocols/monitor-feedback.schema.md`
+- Registry behavior: `orchestrator/phase-registry.json`
+
+Notes:
+
+- `parallel_groups` in the registry is planning metadata for orchestrator-level concurrency; the deterministic runner executes the resolved phase list sequentially.
+- `human_loop` defaults in the registry, but runtime escalation behavior is controlled by `HUMAN_LOOP` in `config.json` and requires `V2_MONITOR=true`.
+
 ## Multi-agent orchestration
 
-When running in multi-agent mode, the orchestrator manages the execution loop:
+When running in multi-agent mode, the main agent acts as a **thin outer dispatcher** and rotates a fresh **phase-orchestrator subagent** per phase:
 
-- Read `orchestrator/ORCHESTRATOR.md` for the dispatch loop protocol
-- Read `orchestrator/phase-registry.json` for phase metadata, mode maps, and quality criteria
-- Write `handoff/to-phase-NN.md` for each phase agent
-- Spawn phase agents that read their own `agents/phase-NN-*.md`
-- Spawn monitor agents after each phase per `orchestrator/monitor.md`
-- Monitor writes reviews to `monitor/phase-NN-review.md` and updates `monitor/running-summary.md`
-- Phase agents write results to `agent-results/phase-NN-result.md`
-- Communication schemas are defined in `protocols/`
+- Outer dispatcher reads `orchestrator/ORCHESTRATOR.md` and `orchestrator/phase-registry.json` only.
+- For each phase, the outer dispatcher spawns ONE phase-orchestrator subagent with paths to `orchestrator/PHASE-ORCHESTRATOR.md`, the registry, the prior orchestration-summary, and the phase scalars (`phase_key`, `phase_index`, `OUTPUT_DIR`, `SCRIPTS_DIR`).
+- The phase-orchestrator runs the inner dispatch loop for exactly one phase (handoff write/validate, phase-agent spawn, monitor spawn, RCA spawn on FAIL, retry/fallback). It writes:
+  - `handoff/to-phase-NN.md` (with `validate_handoff.py` validation)
+  - `monitor/phase-NN-review.md` (via the spawned monitor agent — never authored by the phase-orchestrator itself)
+  - `monitor/phase-NN-orchestration-summary.md` (≤30 lines; the only thing the outer dispatcher reads back)
+  - `progress.json` updates for that phase
+- Phase agents write results to `agent-results/phase-NN-result.md`. The monitor agent writes `monitor/phase-NN-review.md` and updates `monitor/running-summary.md`.
+- The phase-orchestrator's hard self-checklist refuses to return a summary unless `monitor/phase-NN-review.md` exists with a `verdict:` line and is newer than the phase result file. This structurally prevents the outer dispatcher from advancing on a phase whose monitor never ran.
+- Communication schemas are defined in `protocols/`.
 
 ## Platform dispatch
 

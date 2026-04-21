@@ -22,7 +22,7 @@ The ordered sequence of phase keys dispatched during the run, including phases s
 
 ### Verdict Sequence
 
-The ordered sequence of monitor verdicts (PASS / WARN / FAIL) for each dispatched phase, including verdicts from retried attempts.
+The ordered sequence of monitor verdicts (PASS / FAIL) for each dispatched phase, including verdicts from retried attempts.
 
 ```json
 {

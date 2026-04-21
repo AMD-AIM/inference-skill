@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = [
-    "skills/inferencex-optimize/scripts/tests",
-    "skills/inferencex-optimize/tests",
+    "skills/inference-optimize/scripts/tests",
+    "skills/inference-optimize/tests",
 ]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

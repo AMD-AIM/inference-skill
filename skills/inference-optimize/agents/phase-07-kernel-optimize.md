@@ -194,7 +194,7 @@ Include these scalar fields in `## Key Findings` for monitor consumption:
 
 For targets that are inherently unimprovable (at parity with baseline, or blocked by framework/vendor limits), classify them as `parity_or_blocked` **ONLY after at least one GEAK or manual attempt has been made and the measured speedup is <= 1.0**. Targets with zero attempts MUST be classified as `not_attempted` — this triggers a monitor FAIL so the phase retries with those targets attempted. Document the reason per target in `geak_results.json` (e.g., `true_kernel_parity`, `framework_limit`). This distinction prevents the monitor from triggering endless retries on targets that genuinely cannot be improved, while ensuring high-value targets are never skipped without trying.
 
-Report the measured `best_speedup` honestly even when it is `<= 1.0`. The monitor uses `expected_improvement_status` plus the structured blocker reasons to decide WARN versus FAIL; do not inflate or coerce the scalar just to satisfy a gate.
+Report the measured `best_speedup` honestly even when it is `<= 1.0`. The monitor uses `expected_improvement_status` plus the structured blocker reasons to decide PASS versus FAIL under hard-fail policy; do not inflate or coerce the scalar just to satisfy a gate.
 
 If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact path and adjust your approach based on the retry recommendation. Use `next_attempt_mode` from the RCA to decide between GEAK retry, manual fallback, or coding-agent help. Targets classified as `true_kernel_parity` in the RCA's `blocker_classifications` should be skipped on retry.
 

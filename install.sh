@@ -6,7 +6,7 @@ MODE="copy"
 
 usage() {
   cat <<'EOF'
-Install the InferenceX Optimize skill for Claude Code, OpenCode, and Cursor.
+Install the inference-optimize skill for Claude Code, OpenCode, and Cursor.
 
 Usage:
   ./install.sh
@@ -84,7 +84,6 @@ install_skill() {
   if [[ "$SKILL_NAME" == "inference-optimize" ]]; then
     require_file "$SOURCE_DIR/INSTALL.md"
     require_file "$SOURCE_DIR/LICENSE"
-    require_dir "$SOURCE_DIR/phases"
     require_dir "$SOURCE_DIR/templates"
     require_dir "$SOURCE_DIR/scripts"
     require_dir "$SOURCE_DIR/orchestrator"
@@ -144,7 +143,7 @@ install_skill() {
   # Derive rule description from SKILL.md frontmatter
   local BASE_DESC
   BASE_DESC="$(awk '/^description:/{sub(/^description: *"?/,""); sub(/"$/,""); print; exit}' "${DEST_DIR}/SKILL.md")"
-  local DESC="${BASE_DESC} Use this rule when the user names a config key or asks to run any phase of the InferenceX pipeline."
+  local DESC="${BASE_DESC} Use this rule when the user names a config key or asks to run any phase of the inference-optimize pipeline."
 
   MDC_CONTENT="---
 description: >-
@@ -176,7 +175,7 @@ verify_skill() {
   done
 
   # Required directories
-  for d in orchestrator agents protocols scripts templates phases tests; do
+  for d in orchestrator agents protocols scripts templates tests; do
     if [[ -d "$SOURCE_DIR/$d" ]]; then
       echo "  OK  $d/"
     else
@@ -184,6 +183,13 @@ verify_skill() {
       ERRORS=$((ERRORS + 1))
     fi
   done
+
+  # Optional archive directory: retained for backwards references.
+  if [[ -d "$SOURCE_DIR/phases" ]]; then
+    echo "  OK  phases/ (optional archive pointer)"
+  else
+    echo "  INFO  phases/ not found (optional archive pointer)"
+  fi
 
   # Orchestrator files
   for f in orchestrator/ORCHESTRATOR.md orchestrator/phase-registry.json orchestrator/monitor.md; do

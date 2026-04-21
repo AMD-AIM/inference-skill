@@ -28,7 +28,7 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
     """Map (verdict, context) -> response action.
 
     Args:
-        verdict: "PASS", "WARN", or "FAIL"
+        verdict: "PASS" or "FAIL" (legacy "WARN" is treated as "FAIL")
         failure_type: Category string (e.g. "infrastructure", "logic")
         phase_key: Phase identifier
         phase_meta: Phase metadata from registry (fallback_target, terminal_policy, etc.)
@@ -52,9 +52,8 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
     # Non-FAIL verdicts
     if verdict == "PASS":
         return {"action": "continue", "target": None, "reason": "Phase passed"}
-
     if verdict == "WARN":
-        return {"action": "continue", "target": None, "reason": "Phase passed with warnings"}
+        verdict = "FAIL"
 
     # --- FAIL verdict: evaluate priority rules ---
 

@@ -32,7 +32,7 @@ Markdown-driven phase agents, monitor agent, and RCA agent. These write attempt-
 
 - **Phase agents**: `agents/phase-00-env-setup.md` through `agents/phase-09-report-generate.md`.
 - **Monitor agent**: `orchestrator/monitor.md` — spawned fresh after each phase.
-- **RCA agent**: `agents/rca-agent.md` — spawned on critical-phase FAIL and advisory WARN paths.
+- **RCA agent**: `agents/rca-agent.md` — spawned on critical-phase FAIL paths.
 
 ### Evidence Plane
 
@@ -55,7 +55,7 @@ These are enforced by `tests/test_invariants.py`, not just prose.
 | INV-4 | Attempt artifacts are immutable and attempt-scoped; retries append, never mutate. | Commit 4 |
 | INV-5 | The deterministic runner is the default orchestration path; legacy remains available via explicit rollback (`USE_RUNNER=false`) with parity/rollback proof. | Commit 7+ |
 | INV-6 | LLM judgment stays only where it adds value: intake UX, monitor explanation, RCA interpretation. Mechanical work moves to code. | Commit 4 |
-| INV-7 | Release-critical PASS/WARN/FAIL authority comes from schemas, validators, report logic, runner state, and structured predicates. Prose monitor output is explanatory evidence, not final authority. | Commit 5 |
+| INV-7 | Release-critical PASS/FAIL authority comes from schemas, validators, report logic, runner state, and structured predicates. Prose monitor output is explanatory evidence, not final authority. | Commit 5 |
 | INV-8 | Registry fields must be implemented and tested or absent. No dormant documented contracts. | All commits |
 
 ## Evidence Lifecycle Rules
@@ -107,7 +107,7 @@ V2 Monitor adds deterministic L1 predicates as a floor below the existing L2 (LL
 
 ### L1/L2 Relationship
 
-L1 evaluates structured predicate rules against phase context scalars. L2 (LLM judgment) can only upgrade verdicts (PASS->WARN, WARN->FAIL), never downgrade.
+L1 evaluates structured predicate rules against phase context scalars. L2 (LLM judgment) can only upgrade verdicts (PASS->FAIL), never downgrade.
 
 ### Predicate Categories
 
@@ -128,7 +128,7 @@ The L1 predicate taxonomy covers nine categories:
 | ID | Invariant | Notes |
 |----|-----------|-------|
 | INV-9 | `V2_MONITOR=false` preserves exact V1 behavior (verified by golden-file regression tests). | Commit 8+ |
-| INV-10 | REDIRECT and ABORT are response actions, never verdicts. Verdicts are strictly PASS/WARN/FAIL. | Commit 8+ |
+| INV-10 | REDIRECT and ABORT are response actions, never verdicts. Verdicts are strictly PASS/FAIL. | Commit 8+ |
 | INV-11 | Phase agents are idempotent — they overwrite outputs unconditionally, never skip-if-exists. | Commit 8+ |
 
 ### Predicate Result Shape

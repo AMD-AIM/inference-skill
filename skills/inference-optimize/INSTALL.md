@@ -40,7 +40,7 @@ Symlinks instead of copying, so edits in the repo checkout are immediately refle
 - `orchestrator/` -- `ORCHESTRATOR.md`, `phase-registry.json`, `monitor.md`
 - `agents/` -- 10 phase agent docs + `coding-agent.md` + `analysis-agent.md`
 - `protocols/` -- communication schemas (handoff format, result schema, etc.)
-- `phases/*.md` -- reference archive of original phase runbooks
+- `phases/README.md` -- optional archive pointer to the canonical `agents/phase-NN-*.md` docs
 - `templates/` -- report templates and schemas
 - `scripts/{env,container,profiling,optimize,plugin,report}/` -- ~30 helper scripts organized by category
 - `tests/E2E_TEST.md` + `tests/e2e_optimize_test.py` -- E2E runbook and validator

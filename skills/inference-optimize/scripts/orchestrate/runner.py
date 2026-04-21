@@ -207,7 +207,6 @@ class DeterministicRunner:
 
         # V2 monitor feature flag
         self.v2_monitor = str(config.get("V2_MONITOR", registry.get("v2_monitor", False))).lower() in ("true", "1")
-        self.strict_mode = str(config.get("MONITOR_LEVEL", "")).lower() == "strict"
         self.human_loop = str(config.get("HUMAN_LOOP", "false")).lower() in ("true", "1")
         self._validate_v2_config()
 
@@ -657,11 +656,12 @@ class DeterministicRunner:
         combined = l1_verdict if VERDICT_RANK.get(l1_verdict, 0) >= VERDICT_RANK.get(v, 0) else v
         return combined
 
-    def _handle_strict_warn(self, phase_key, phase_reruns):
-        """Handle WARN in strict mode. One retry attempt, then accept as WARN."""
-        if phase_reruns < 1:
-            return ("strict_warn_retry", None)
-        return ("continue", None)
+    @staticmethod
+    def normalize_monitor_verdict(verdict_value):
+        """Normalize legacy WARN monitor verdicts to hard FAIL."""
+        if verdict_value == "WARN":
+            return "FAIL"
+        return verdict_value
 
     def _maybe_escalate(self, phase_key, v, verdict):
         """Check if human escalation is needed. Returns escalation result or None."""
@@ -918,7 +918,7 @@ class DeterministicRunner:
             Spawns monitor agent. If None, pass-through is only allowed in
             shadow/test paths (dispatch_fn is None or runner.shadow=True).
         rca_fn: callable(phase_key, manifest_dict) -> rca_dict
-            Spawns RCA/analysis agent. If None, skips RCA on WARN/FAIL.
+            Spawns RCA/analysis agent. If None, skips RCA on FAIL.
         systemic_rca_fn: callable(phase_key, manifest_dict) -> systemic_rca_dict
             Spawns the systemic RCA agent when two consecutive per-phase RCAs
             share a fingerprint. If None, the orchestrator logs a warning and
@@ -1023,42 +1023,22 @@ class DeterministicRunner:
                 else:
                     verdict = dispatch_verdict
 
+                normalized_verdict = self.normalize_monitor_verdict(
+                    verdict.get("verdict", "PASS")
+                )
                 state.verdict_sequence.append({
                     "phase": phase_key,
                     "attempt": attempt,
-                    "verdict": verdict.get("verdict", "PASS"),
+                    "verdict": normalized_verdict,
                 })
 
-                v = verdict.get("verdict", "PASS")
+                v = normalized_verdict
 
                 if self.v2_monitor:
                     # --- V2 path ---
                     v2_verdict = self._evaluate_v2(phase_key, verdict, v)
-                    v = v2_verdict
+                    v = self.normalize_monitor_verdict(v2_verdict)
                     phase_meta = self.phases[phase_key]
-
-                    if v == "WARN" and self.strict_mode:
-                        action, _ = self._handle_strict_warn(phase_key, phase_reruns)
-                        if action == "strict_warn_retry":
-                            state.total_reruns += 1
-                            phase_reruns += 1
-                            continue
-
-                    if v == "WARN":
-                        # Advisory RCA: keep WARN non-blocking while preserving RCA artifacts.
-                        # This mirrors the orchestrator contract for critical phases.
-                        if phase_meta.get("critical"):
-                            self._invoke_phase_rca(
-                                phase_key,
-                                phase_meta,
-                                verdict,
-                                "WARN",
-                                rca_fn,
-                                state,
-                            )
-                        state.phases_completed.append(phase_key)
-                        state.retry_counts[phase_key] = phase_reruns
-                        break
 
                     if v == "PASS":
                         state.phases_completed.append(phase_key)
@@ -1148,7 +1128,7 @@ class DeterministicRunner:
                         return state
                 else:
                     # --- V1 path (unchanged) ---
-                    if v == "PASS" or v == "WARN":
+                    if v == "PASS":
                         state.phases_completed.append(phase_key)
                         state.retry_counts[phase_key] = phase_reruns
                         break

@@ -347,12 +347,13 @@ class TestDeterministicRunner:
 
             assert "integration" not in state.phases_completed
 
-    def test_optimize_large_context_keeps_monitor_and_warn_rca_active(self):
+    def test_optimize_large_context_promotes_warn_to_fail_rca(self):
         registry = _load_registry()
         config = _minimal_config("optimize")
         config["V2_MONITOR"] = "true"
 
         monitor_calls = []
+        monitor_call_counts = {}
         rca_calls = []
 
         def dispatch_fn(phase_key, handoff_path):
@@ -360,7 +361,8 @@ class TestDeterministicRunner:
 
         def monitor_fn(phase_key, result_path, summary_path, checks):
             monitor_calls.append(phase_key)
-            if phase_key == "kernel-optimize":
+            monitor_call_counts[phase_key] = monitor_call_counts.get(phase_key, 0) + 1
+            if phase_key == "kernel-optimize" and monitor_call_counts[phase_key] == 1:
                 return {"verdict": "WARN", "failure_type": "logic"}
             return {"verdict": "PASS"}
 
@@ -384,11 +386,12 @@ class TestDeterministicRunner:
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)
 
             assert state.status == "completed"
-            assert len(monitor_calls) == len(registry["modes"]["optimize"])
+            assert len(monitor_calls) == len(registry["modes"]["optimize"]) + 1
+            assert monitor_call_counts.get("kernel-optimize") == 2
             assert len(rca_calls) == 1
             phase_key, manifest = rca_calls[0]
             assert phase_key == "kernel-optimize"
-            assert manifest["verdict_severity"] == "WARN"
+            assert manifest["verdict_severity"] == "FAIL"
 
             handoff_path = os.path.join(tmpdir, "handoff", "to-phase-06.md")
             with open(handoff_path) as f:

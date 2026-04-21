@@ -179,7 +179,7 @@ class TestLlmBoundary:
 
 
 # ---------------------------------------------------------------------------
-# INV-7: Release-critical PASS/WARN/FAIL authority comes from schemas,
+# INV-7: Release-critical PASS/FAIL authority comes from schemas,
 #         validators, report logic, runner state, and structured predicates
 # ---------------------------------------------------------------------------
 
@@ -506,8 +506,8 @@ class TestV2MonitorConfig:
             rules_v2 = phase.get("quality", {}).get("detection_rules_structured_v2", [])
             for rule in rules + rules_v2:
                 verdict = rule.get("verdict", "")
-                assert verdict in ("PASS", "WARN", "FAIL"), (
-                    f"Phase {key}: verdict '{verdict}' must be PASS/WARN/FAIL, not a response action"
+                assert verdict in ("PASS", "FAIL"), (
+                    f"Phase {key}: verdict '{verdict}' must be PASS/FAIL, not a response action"
                 )
 
     def test_v2_rules_have_categories(self):
@@ -578,7 +578,7 @@ class TestWarmupBiasFilterMarksArtifact:
         assert rule["field"] == "std_ttft_ratio"
         assert rule["op"] == "lt"
         assert float(rule["value"]) == 0.1
-        assert rule["verdict"] == "WARN"
+        assert rule["verdict"] == "FAIL"
         assert "sum_patch_call_counters" in rule.get("condition", "")
 
     def test_integration_scalars_include_warmup_inputs(self):
@@ -593,7 +593,7 @@ class TestWarmupBiasFilterMarksArtifact:
 # INV-17: GEAKMeasurementBias predicate registered on kernel-optimize phase
 # ---------------------------------------------------------------------------
 
-class TestGeakMeasurementBiasWarnsOnHandoff:
+class TestGeakMeasurementBiasFailsOnHandoff:
     def test_kernel_optimize_has_measurement_bias_rule(self):
         reg = _load_registry()
         rules_v2 = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured_v2"]
@@ -603,7 +603,7 @@ class TestGeakMeasurementBiasWarnsOnHandoff:
         assert rule["field"] == "hipGraphLaunch_pct"
         assert rule["op"] == "gt"
         assert float(rule["value"]) == 80.0
-        assert rule["verdict"] == "WARN"
+        assert rule["verdict"] == "FAIL"
         assert "cuda_graph_replay" in rule.get("condition", "")
 
     def test_kernel_optimize_scalars_include_measurement_inputs(self):
@@ -636,6 +636,59 @@ class TestSystemicRcaRegistered:
 # ---------------------------------------------------------------------------
 # INV-19: budget_mode replaces ad-hoc unlimited override
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# INV-20: Per-phase orchestrator subagent rotation (no in-context phase loop)
+# ---------------------------------------------------------------------------
+
+class TestPhaseOrchestratorRotation:
+    """The outer dispatcher must delegate the per-phase loop to a fresh
+    phase-orchestrator subagent. This bounds context per phase and structurally
+    prevents the outer dispatcher from self-authoring monitor verdicts."""
+
+    def test_phase_orchestrator_doc_exists(self):
+        path = ORCHESTRATOR_DIR / "PHASE-ORCHESTRATOR.md"
+        assert path.is_file(), "orchestrator/PHASE-ORCHESTRATOR.md must exist"
+        text = path.read_text()
+        assert "Phase-Orchestrator Agent" in text or "phase-orchestrator" in text.lower()
+
+    def test_outer_loop_does_not_inline_phase_loop(self):
+        """ORCHESTRATOR.md must not contain the inner spawn primitives —
+        those moved into PHASE-ORCHESTRATOR.md."""
+        orch = (ORCHESTRATOR_DIR / "ORCHESTRATOR.md").read_text()
+        for forbidden in ("spawn_monitor", "spawn_rca", "spawn_agent"):
+            assert forbidden not in orch, (
+                f"ORCHESTRATOR.md must not reference '{forbidden}' — "
+                f"the inner dispatch loop now lives in PHASE-ORCHESTRATOR.md"
+            )
+        po = (ORCHESTRATOR_DIR / "PHASE-ORCHESTRATOR.md").read_text()
+        for required in ("spawn_phase_agent", "spawn_monitor_agent", "spawn_rca_agent"):
+            assert required in po, (
+                f"PHASE-ORCHESTRATOR.md must spawn its own subagents "
+                f"(missing reference to '{required}')"
+            )
+
+    def test_phase_orchestrator_self_check_present(self):
+        """The phase-orchestrator must hard-gate returning a summary on the
+        existence of monitor/phase-NN-review.md authored by a separate monitor."""
+        po = (ORCHESTRATOR_DIR / "PHASE-ORCHESTRATOR.md").read_text()
+        assert "Self-Checklist Gate" in po, (
+            "PHASE-ORCHESTRATOR.md must define a Self-Checklist Gate section"
+        )
+        assert "monitor/phase-{NN}-review.md" in po
+        assert "verdict:" in po
+        assert "monitor_missing" in po, (
+            "PHASE-ORCHESTRATOR.md must define the structured 'monitor_missing' "
+            "error returned to the outer dispatcher"
+        )
+
+    def test_dispatcher_block_in_registry(self):
+        reg = _load_registry()
+        assert "dispatcher" in reg, "registry must declare a 'dispatcher' block"
+        d = reg["dispatcher"]
+        assert d["phase_orchestrator_doc"] == "orchestrator/PHASE-ORCHESTRATOR.md"
+        assert "{NN}" in d["outer_summary_template"]
+
 
 class TestBudgetModeSchema:
     def test_progress_schema_declares_budget_mode(self):

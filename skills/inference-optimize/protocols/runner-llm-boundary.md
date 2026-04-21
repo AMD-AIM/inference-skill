@@ -72,15 +72,15 @@ When the runner detects a failure, it classifies it:
 When `V2_MONITOR=true`, the verdict determination uses a two-layer model:
 
 - **Layer 1 (runner, deterministic)**: Structured predicates from `detection_rules_structured_v2` in the registry, evaluated by `predicate_engine.evaluate_predicates_v2()`. Produces a floor verdict, problem categories, and per-rule details. Results written to `monitor/phase-{NN}-predicate.json`.
-- **Layer 2 (LLM monitor)**: Judgment-based evaluation by the monitor agent. Receives L1 results plus expanded file inputs. Can **upgrade** the L1 verdict (PASS->WARN, WARN->FAIL) but **never downgrade** it.
+- **Layer 2 (LLM monitor)**: Judgment-based evaluation by the monitor agent. Receives L1 results plus expanded file inputs. Can **upgrade** the L1 verdict from PASS to FAIL but never downgrade FAIL to PASS. Legacy `WARN` inputs are normalized to FAIL.
 
-Final verdict = `max(L1, L2)` by severity rank (PASS=0, WARN=1, FAIL=2).
+Final verdict = `max(L1, L2)` by severity rank (PASS=0, FAIL=1). Legacy WARN values are treated as FAIL.
 
 If L2 fails (exception, timeout, malformed output), the runner falls back to the L1 verdict. This is safe because L1 is a floor — L2 can only upgrade.
 
 ### Verdict vs Response
 
-PASS, WARN, and FAIL are **verdicts** — they describe what was observed. REDIRECT and ABORT are **response actions** — they describe what to do about it. The response policy engine (`response_policy.py`) maps verdicts to actions using a priority chain:
+PASS and FAIL are **verdicts** — they describe what was observed. REDIRECT and ABORT are **response actions** — they describe what to do about it. The response policy engine (`response_policy.py`) maps verdicts to actions using a priority chain:
 
 1. Safety stop (RCA `stop_with_blocker`) -> abort (non-overridable)
 2. Human override (escalation response) -> follow human's choice

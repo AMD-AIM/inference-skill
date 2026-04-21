@@ -72,7 +72,7 @@ class TestCrossKernelThreshold:
         context = {"cross_kernel_delta_pct": 18.0}
         thresholds = {"CROSS_KERNEL_THRESHOLD": threshold}
         verdict, _, categories = evaluate_predicates_v2(rules, context, thresholds)
-        assert verdict == "WARN"
+        assert verdict == "FAIL"
         assert "cross_kernel_interference" in categories
 
     def test_below_threshold_passes(self):

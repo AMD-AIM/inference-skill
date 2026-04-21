@@ -60,7 +60,8 @@ def _check_condition(condition_str: str, context: dict) -> bool:
     return True
 
 
-VERDICT_RANK = {"PASS": 0, "WARN": 1, "FAIL": 2}
+# Legacy WARN is treated as FAIL to enforce hard-fail monitor semantics.
+VERDICT_RANK = {"PASS": 0, "FAIL": 1, "WARN": 1}
 
 # Valid problem categories for the 9-category failure taxonomy
 VALID_CATEGORIES = {
@@ -68,6 +69,13 @@ VALID_CATEGORIES = {
     "effort_waste", "cross_kernel_interference", "geak_false_claim",
     "baseline_drift", "stale_artifact",
 }
+
+
+def _normalize_verdict(verdict: str) -> str:
+    """Normalize legacy WARN verdicts to hard FAIL."""
+    if verdict == "WARN":
+        return "FAIL"
+    return verdict
 
 
 def _resolve_value(value, thresholds):
@@ -94,7 +102,7 @@ def evaluate_predicates(
     """Evaluate structured predicates against context data.
 
     Returns (verdict, details):
-        verdict  -- "PASS" | "WARN" | "FAIL"
+        verdict  -- "PASS" | "FAIL" (legacy WARN is normalized to FAIL)
         details  -- list of per-rule evaluation results
     """
     details = []
@@ -105,7 +113,7 @@ def evaluate_predicates(
         op = rule["op"]
         raw_expected = rule.get("value")
         expected = _resolve_value(raw_expected, thresholds) if thresholds is not None else raw_expected
-        rule_verdict = rule.get("verdict", "FAIL")
+        rule_verdict = _normalize_verdict(rule.get("verdict", "FAIL"))
         condition = rule.get("condition")
 
         actual = context.get(field)
@@ -162,7 +170,7 @@ def evaluate_predicates_v2(
     problem_category from the optional 'category' field on rules.
 
     Returns (verdict, details, problem_categories):
-        verdict           -- "PASS" | "WARN" | "FAIL"
+        verdict           -- "PASS" | "FAIL" (legacy WARN is normalized to FAIL)
         details           -- list of per-rule evaluation results with category
         problem_categories -- deduplicated list of triggered categories
     """

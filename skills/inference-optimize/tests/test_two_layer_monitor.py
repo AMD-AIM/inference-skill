@@ -12,19 +12,21 @@ from scripts.orchestrate.predicate_engine import VERDICT_RANK, evaluate_predicat
 
 
 def _max_verdict(v1, v2):
-    """Combine two verdicts: higher severity wins."""
-    return v1 if VERDICT_RANK.get(v1, 0) >= VERDICT_RANK.get(v2, 0) else v2
+    """Combine two verdicts with legacy WARN normalized to FAIL."""
+    nv1 = "FAIL" if v1 == "WARN" else v1
+    nv2 = "FAIL" if v2 == "WARN" else v2
+    return nv1 if VERDICT_RANK.get(nv1, 0) >= VERDICT_RANK.get(nv2, 0) else nv2
 
 
 class TestTwoLayerMonitor:
-    """Full L1 x L2 verdict matrix (9 cases)."""
+    """L1 x L2 verdict matrix with hard-fail WARN normalization."""
 
     @pytest.mark.parametrize("l1,l2,expected", [
         ("PASS", "PASS", "PASS"),
-        ("PASS", "WARN", "WARN"),
+        ("PASS", "WARN", "FAIL"),
         ("PASS", "FAIL", "FAIL"),
-        ("WARN", "PASS", "WARN"),   # Can't downgrade
-        ("WARN", "WARN", "WARN"),
+        ("WARN", "PASS", "FAIL"),   # legacy WARN normalized to FAIL
+        ("WARN", "WARN", "FAIL"),
         ("WARN", "FAIL", "FAIL"),
         ("FAIL", "PASS", "FAIL"),   # Can't downgrade
         ("FAIL", "WARN", "FAIL"),   # Can't downgrade
@@ -37,12 +39,12 @@ class TestTwoLayerMonitor:
     def test_l2_failure_falls_back_to_l1(self):
         """If L2 raises an exception, fall back to L1 verdict."""
         # Simulate L2 failure: use L1 only
-        l1_verdict = "WARN"
+        l1_verdict = "FAIL"
         try:
             raise RuntimeError("LLM monitor unavailable")
         except Exception:
             final = l1_verdict  # Safe floor
-        assert final == "WARN"
+        assert final == "FAIL"
 
     def test_v2_predicates_with_category(self):
         """evaluate_predicates_v2 enriches details with problem_category."""
@@ -54,7 +56,7 @@ class TestTwoLayerMonitor:
         ]
         context = {"effort_waste_detected": True, "geak_false_claim_count": 2}
         verdict, details, categories = evaluate_predicates_v2(rules, context)
-        assert verdict == "WARN"
+        assert verdict == "FAIL"
         assert "effort_waste" in categories
         assert "geak_false_claim" in categories
         assert details[0]["category"] == "effort_waste"
@@ -80,7 +82,7 @@ class TestTwoLayerMonitor:
         context = {"cross_kernel_delta_pct": 18.2}
         thresholds = {"CROSS_KERNEL_THRESHOLD": 15.0}
         verdict, details, categories = evaluate_predicates_v2(rules, context, thresholds)
-        assert verdict == "WARN"
+        assert verdict == "FAIL"
         assert "cross_kernel_interference" in categories
 
     def test_ref_not_triggered(self):

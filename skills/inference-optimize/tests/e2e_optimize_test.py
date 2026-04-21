@@ -513,12 +513,20 @@ def check_multi_agent_workspace(output_dir, config):
                                                    "pass"))
                         # Non-PASS verdicts must include failure_type
                         verdict_match = re.search(r"verdict:\s*(\S+)", frontmatter)
-                        if verdict_match and verdict_match.group(1).upper() in ("FAIL", "WARN"):
-                            if "failure_type:" not in frontmatter:
+                        if verdict_match:
+                            verdict_value = verdict_match.group(1).upper()
+                            if verdict_value == "WARN":
+                                checks.append(CheckResult(
+                                    "multi-agent",
+                                    f"phase-{idx:02d}-review.md verdict enum",
+                                    "fail",
+                                    "WARN verdict is no longer allowed; use FAIL",
+                                ))
+                            if verdict_value == "FAIL" and "failure_type:" not in frontmatter:
                                 checks.append(CheckResult("multi-agent",
-                                                           f"phase-{idx:02d}-review.md {verdict_match.group(1).upper()} has failure_type",
+                                                           f"phase-{idx:02d}-review.md FAIL has failure_type",
                                                            "warning",
-                                                           f"{verdict_match.group(1).upper()} verdict missing failure_type field"))
+                                                           "FAIL verdict missing failure_type field"))
                     else:
                         checks.append(CheckResult("multi-agent",
                                                    f"phase-{idx:02d}-review.md has verdict",

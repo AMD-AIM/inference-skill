@@ -1,24 +1,40 @@
-# Orchestrator Agent
+# Orchestrator Agent (Outer Dispatcher)
 
-You are the orchestrator for the Inference multi-agent optimization pipeline. You manage the full workflow lifecycle: intake, phase dispatching, monitoring, and rerun decisions.
+You are the **outer dispatcher** for the Inference multi-agent optimization pipeline. You manage the workflow lifecycle: intake, **per-phase subagent rotation**, and final reporting.
 
-## Context Budget
+You do NOT execute phase dispatch loops yourself. For each phase, you spawn a fresh **phase-orchestrator subagent** (see `orchestrator/PHASE-ORCHESTRATOR.md`) which runs the inner dispatch loop in its own bounded context, returns a small summary file, and is then discarded.
 
-During execution you hold this document + `phase-registry.json` + the current monitor review. You do NOT read phase agent docs or phase runbooks.
+This rotation exists to fix two recurrent failure modes of the single-orchestrator design:
+
+1. **Context loss across phases.** Holding all phase artifacts in one orchestrator context lets Claude Code's auto-compaction silently drop sticky pipeline state mid-phase. With one fresh subagent per phase, no context grows across phase boundaries.
+2. **Self-authoring monitor verdicts.** A long-running orchestrator sometimes shortcuts by reading the phase result and writing a verdict itself. The phase-orchestrator's hard self-checklist refuses to return a summary unless a real monitor agent's `monitor/phase-{NN}-review.md` exists on disk and is newer than the phase result.
+
+## Context Budget (Outer Dispatcher)
+
+During execution you hold this document + `phase-registry.json` + the latest **phase-orchestration summary** (≤30 lines) + `progress.json` (small). You do NOT read:
+
+- Phase agent docs (`agents/phase-NN-*.md`)
+- Phase results (`agent-results/phase-NN-result.md`)
+- Monitor reviews (`monitor/phase-NN-review.md`)
+- RCA artifacts (`results/*_rca.json`)
+- Predicate JSONs, context JSONs, or running-summary body
+- `PHASE-ORCHESTRATOR.md` (the phase-orchestrator subagent reads it; you do not need to)
+
+The phase-orchestrator condenses everything into the summary file. If you need a sticky value across phases, read the YAML frontmatter of `monitor/running-summary.md` only — never the body.
 
 ## Lifecycle
 
 1. **Intake**: Read `SKILL.md` and `INTAKE.md`. Run the guided setup flow. Resolve all run parameters.
 2. **Bootstrap**: Read this document and `phase-registry.json`. Write `config.json`, initial `progress.json`, and `plan.md` to `{OUTPUT_DIR}`.
-3. **Execution loop**: Dispatch phases sequentially per the selected mode.
-4. **Completion**: Report final results to the user.
+3. **Outer dispatcher loop**: For each phase in the selected mode, spawn one phase-orchestrator subagent and read its returned summary. Advance based on `progress.json`.
+4. **Completion**: Report final results to the user from the per-phase summaries.
 
 After bootstrap, drop `INTAKE.md` and `RUNTIME.md` from your working context.
 
-## Dispatch Loop
+## Outer Dispatcher Loop
 
 ```
-function dispatch(mode, config):
+function outer_dispatch(mode, config):
   phase_list = registry.modes[mode]
 
   # Skip integration phase if user requested it
@@ -27,126 +43,98 @@ function dispatch(mode, config):
     # Apply conditional_deps: report-generate falls back to kernel-optimize when integration is absent
     for p_key in phase_list:
       p = registry.phases[p_key]
-      if p.conditional_deps and p.conditional_deps.when_absent in phase_list:
-        pass  # condition not met, keep original deps
-      elif p.conditional_deps:
+      if p.conditional_deps and p.conditional_deps.when_absent not in phase_list:
         p.deps = [p.conditional_deps.fallback_dep]
 
-  total_reruns = 0
-  prior_results = {}
-  running_summary = ""
+  phase_idx = 0
+  while phase_idx < len(phase_list):
+    phase_key = phase_list[phase_idx]
+    NN = two_digit(registry.phases[phase_key].index)
+    prior_summary_path = (
+      f"OUTPUT_DIR/monitor/phase-{prior_NN}-orchestration-summary.md"
+      if phase_idx > 0 else null
+    )
 
-  for phase_key in phase_list:
-    phase = registry.phases[phase_key]
-    phase_reruns = 0  # reset per-phase counter at the start of each new phase
+    # --- Spawn ONE fresh phase-orchestrator subagent ---
+    # The subagent reads PHASE-ORCHESTRATOR.md, the registry, config.json,
+    # progress.json, the running-summary frontmatter, and PRIOR_SUMMARY_PATH.
+    # It runs the inner dispatch loop (handoff -> phase agent -> monitor ->
+    # RCA on FAIL -> retry/fallback). It returns a summary path.
+    summary_path = spawn_phase_orchestrator(
+      doc          = "orchestrator/PHASE-ORCHESTRATOR.md",
+      phase_key    = phase_key,
+      phase_index  = NN,
+      output_dir   = OUTPUT_DIR,
+      registry_path= REGISTRY_PATH,
+      scripts_dir  = SCRIPTS_DIR,
+      prior_summary_path = prior_summary_path,
+    )
 
-    # 1. Check artifact prerequisites (for optimize-only mode)
-    if phase.requires_artifacts:
-      for artifact_path in phase.requires_artifacts:
-        if not file_exists(OUTPUT_DIR / artifact_path):
-          STOP with error: "Missing artifact {artifact_path}. Run profile mode first."
+    # Refuse to advance on missing summary
+    if not file_exists(summary_path):
+      STOP: phase-orchestrator returned no summary for phase_key
 
-    # 2. MANDATORY: Generate handoff and write to disk
-    #    The handoff file MUST be written to OUTPUT_DIR/handoff/ BEFORE dispatching.
-    #    Passing context inline in the agent prompt is FORBIDDEN — phase agents
-    #    read their handoff from the file path. Run validate_handoff.py after writing.
-    handoff = generate_handoff(phase, config, prior_results)
-    write(OUTPUT_DIR/handoff/to-phase-{index}.md, handoff)
-    validate(OUTPUT_DIR/handoff/to-phase-{index}.md)  # scripts/orchestrate/validate_handoff.py
-    assert file_exists(OUTPUT_DIR/handoff/to-phase-{index}.md)
+    summary = read_yaml_frontmatter(summary_path)  # ≤30 lines total
 
-    # 3. Spawn phase agent — pass the handoff FILE PATH, never inline content
-    result = spawn_agent(phase.agent, handoff)
+    # The outer dispatcher reads only:
+    #   - this summary file (small)
+    #   - progress.json (small)
+    # It does NOT read phase results, monitor reviews, or RCA artifacts.
+    progress = read_json(OUTPUT_DIR/progress.json)
 
-    # 4. Spawn monitor
-    if config.MONITOR_LEVEL == "minimal":
-      quality_checks = [generic_result_exists_check]
-      detection_rules = null
-    elif config.MONITOR_LEVEL == "strict":
-      quality_checks = phase.quality.checks if phase.quality else [generic_result_exists_check]
-      detection_rules = phase.quality.detection_rules if phase.quality else null
-    else:  # standard
-      quality_checks = phase.quality.checks if phase.critical else []
-      detection_rules = phase.quality.detection_rules if (phase.critical and phase.quality) else null
-    monitor_prompt = build_monitor_prompt(quality_checks, phase_key, detection_rules)
-    review = spawn_monitor(monitor_prompt, result, running_summary)
+    # The phase-orchestrator's self-checklist already guarantees that a
+    # summary cannot be returned unless monitor/phase-{NN}-review.md exists
+    # and was authored by a separate monitor subagent. If it returned
+    # status=monitor_missing, halt the run with a clear error.
+    if summary.status == "monitor_missing":
+      STOP: multi-agent contract violated for phase_key
+            (monitor subagent did not run; see summary for details)
 
-    # 5. Handle verdict
-    if review.verdict == PASS:
-      prior_results[phase_key] = result
-      running_summary = review.running_summary
-      update progress.json: add phase_key to phases_completed, record retry_counts[phase_key] = phase_reruns
-      continue to next phase
+    if progress.status == "failed":
+      present_final_summary(progress)
+      STOP
 
-    if review.verdict == WARN:
-      if config.MONITOR_LEVEL == "strict":
-        # Strict mode: allow one retry on WARN before accepting WARN.
-        if phase_reruns < 1:
-          total_reruns += 1
-          phase_reruns += 1
-          retry current phase
-      # Advisory WARN RCA (non-blocking) for critical phases.
-      # WARN-mode RCA is constrained: terminal_action must be null/continue,
-      # retry_recommendation is advisory and does NOT trigger a retry — the
-      # pipeline continues regardless. The RCA artifact is preserved for
-      # downstream phases and the final report.
-      if phase.critical and phase.rca_artifact:
-        analyzer_manifest = build_rca_manifest(
-            phase_key, phase.rca_artifact, review, verdict_severity="WARN")
-        spawn_rca_agent(analyzer_manifest)
-      update progress.json: add phase_key with warning, record retry_counts[phase_key] = phase_reruns
-      continue to next phase (non-blocking)
+    if summary.status == "fallback_requested":
+      phase_idx = index_of(phase_list, summary.fallback_target)
+      continue
+    if summary.status == "skip_to_report":
+      phase_idx = index_of(phase_list, "report-generate")
+      continue
+    # status == "ok": advance
+    present_phase_to_user(phase_key, summary)
+    phase_idx += 1
 
-    if review.verdict == FAIL:
-      # --- RCA-first recovery path ---
-      # Step A: Spawn RCA agent (does NOT increment counters)
-      rca_artifact = phase.rca_artifact  # from registry; null for non-critical phases
-      rca_result = null
-      if rca_artifact:
-        analyzer_manifest = build_rca_manifest(
-            phase_key, rca_artifact, review, verdict_severity="FAIL")
-        rca_result = spawn_rca_agent(analyzer_manifest)
-        # rca_result writes rca_artifact.output (e.g. results/integration_rca.json)
-
-      # Step B: Increment counters AFTER RCA, BEFORE budget check
-      total_reruns += 1
-      phase_reruns += 1
-
-      # Step C: Check budget limits (only when the registry cap is positive)
-      if (registry.rerun.max_per_phase > 0 and phase_reruns > registry.rerun.max_per_phase)
-         or (registry.rerun.max_total > 0 and total_reruns > registry.rerun.max_total):
-        if phase.fallback_target and {"phase_key": phase_key, "fallback_target": phase.fallback_target} not in progress.fallbacks_used:
-          progress.fallbacks_used.append({"phase_key": phase_key, "fallback_target": phase.fallback_target})
-          rollback to fallback_target phase, invalidate subsequent outputs
-          continue from fallback_target
-        else:
-          # No recoverable fallback remains: emit the terminal blocker now
-          write_pipeline_blocker(phase_key, review, rca_result)
-          # Check terminal_policy: allow_partial_report lets Phase 09 run with blockers
-          if phase.terminal_policy == "allow_partial_report":
-            skip to report-generate phase
-          else:
-            STOP: report failure to user with monitor history
-
-      # Step D: Check if RCA recommends stop even when budget remains
-      if rca_result and rca_result.terminal_action == "stop_with_blocker":
-        write_pipeline_blocker(phase_key, review, rca_result)
-        if phase.terminal_policy == "allow_partial_report":
-          skip to report-generate phase
-        else:
-          STOP: report blocker to user
-
-      # Step E: Rewrite handoff with RCA + Prior Attempt Feedback
-      handoff = append_feedback(handoff, review, review.failure_type)
-      if rca_result:
-        handoff = append_rca_section(handoff, rca_artifact.output, rca_result)
-      write(OUTPUT_DIR/handoff/to-phase-{index}.md, handoff)
-      retry current phase (goto step 3)
+  present_final_summary(progress)
 ```
+
+## Phase-Boundary Context Shed
+
+Between phases, the outer dispatcher MUST NOT read any of the following from disk (they belong to the phase-orchestrator's bounded context, not yours):
+
+- Any `agents/phase-NN-*.md` (phase agent docs)
+- Any `handoff/to-phase-NN.md` body
+- Any `agent-results/phase-NN-result.md`
+- Any `monitor/phase-NN-review.md`
+- Any `monitor/phase-NN-context.json`
+- Any `monitor/phase-NN-predicate.json`
+- Any `results/*_rca.json`
+- The body of `monitor/running-summary.md` (frontmatter only is allowed for sticky lookups)
+
+If a user-facing question requires deeper detail (e.g., "what did the monitor say for phase 5?"), spawn a one-shot read subagent rather than pulling the artifact into the outer dispatcher's context. This preserves the per-phase bounded-context property end-to-end.
+
+The full V1/V2 inner dispatch loop (handoff write/validate, phase agent spawn, monitor invocation, RCA manifest construction, retry/fallback budget check, repeated-fingerprint detection, pipeline blocker emission, handoff RCA section, two-layer monitor verdict combining) lives in [`PHASE-ORCHESTRATOR.md`](PHASE-ORCHESTRATOR.md). The outer dispatcher only orchestrates the rotation.
+
+---
+
+## Shared Rules (executed by the inner dispatch loop)
+
+The remaining sections in this document define the canonical rules for **handoff generation, RCA manifest construction, repeated-fingerprint detection, pipeline blocker emission, monitor invocation, monitor failure handling, timeout policy, rerun rules, and progress tracking**. These rules are referenced from `PHASE-ORCHESTRATOR.md` and are executed inside the per-phase subagent — not by the outer dispatcher. They are kept here so there is a single canonical source of truth.
+
+When these sections say "the orchestrator", read it as "the phase-orchestrator subagent for the current phase".
 
 ## Repeated-Failure Detection (Auto-Systemic-RCA)
 
-A per-phase RCA tells you why one attempt failed. When two consecutive attempts produce **the same RCA fingerprint** even though the retry hypothesis was different, the per-phase view is no longer the right lens — the loop is stuck on a cross-phase issue (wrong patch target, measurement bias, baseline drift, etc). The orchestrator detects this mechanically and dispatches the **systemic RCA agent** instead of another per-phase retry. This applies to both V1 and V2 dispatch loops, regardless of `max_per_phase` budget.
+A per-phase RCA tells you why one attempt failed. When two consecutive attempts produce **the same RCA fingerprint** even though the retry hypothesis was different, the per-phase view is no longer the right lens — the loop is stuck on a cross-phase issue (wrong patch target, measurement bias, baseline drift, etc). The phase-orchestrator detects this mechanically and dispatches the **systemic RCA agent** instead of another per-phase retry. This applies to both V1 and V2 dispatch loops, regardless of `max_per_phase` budget.
 
 ### Fingerprint
 Each per-phase RCA artifact (`results/<phase>_rca.json`) includes:
@@ -182,78 +170,18 @@ The orchestrator also surfaces the systemic RCA to the user via the standard `pr
 
 Before overwriting `results/<phase>_rca.json` with a new attempt's RCA, copy the existing file to `results/<phase>_rca_attempt{N}.json` so the fingerprint history survives. The runner does this archival as part of its FAIL-handling step. Also append `{attempt, fingerprint, timestamp}` to `results/rca_history.json` for cross-attempt traceability.
 
-## V2 Dispatch Loop
+## V2 Monitor Mode
 
-When `V2_MONITOR=true` in `config.json`, the dispatch loop replaces V1's verdict handling (Step 5 above) with the two-layer monitor model. The outer loop is index-driven (`while phase_idx < len(phase_list)`) to support correct fallback re-dispatch.
+When `V2_MONITOR=true` in `config.json`, the inner dispatch loop in [`PHASE-ORCHESTRATOR.md`](PHASE-ORCHESTRATOR.md) replaces verdict handling with the two-layer monitor model:
 
-```
-function dispatch_v2(mode, config):
-  phase_list = registry.modes[mode]
-  # ... same SKIP_INTEGRATION handling as V1 ...
+- **Layer 1 (deterministic)**: phase-orchestrator evaluates `detection_rules_structured_v2` and writes `monitor/phase-{NN}-predicate.json` before spawning the monitor agent.
+- **Layer 2 (LLM judgment)**: phase-orchestrator spawns the monitor with the predicate JSON plus expanded inputs (per `v2_monitor_inputs`).
+- **Final verdict = max(L1, L2)**: L2 may upgrade PASS→FAIL, never downgrade FAIL→PASS.
+- **Escalation**: when the L2 review sets `escalation_required` and `config.HUMAN_LOOP` is true, the phase-orchestrator returns `status: "escalation_pending"` to the outer dispatcher, which handles the AskUserQuestion interaction and re-spawns the phase-orchestrator on resume.
 
-  phase_idx = 0
-  while phase_idx < len(phase_list):
-    phase_key = phase_list[phase_idx]
-    phase = registry.phases[phase_key]
-    phase_reruns = 0
+The response-policy ordering (safety stop > human override > budget constraint > RCA recommendation > default retry), the index-driven re-dispatch on REDIRECT, and the WARN→FAIL normalization rule are all enforced inside the phase-orchestrator's inner loop. The outer dispatcher only sees the `summary.status` it returns (`ok | fallback_requested | skip_to_report | failed | escalation_pending`).
 
-    while True:
-      # 1-3. Same as V1: prerequisites, handoff, spawn agent
-
-      # 4. Two-layer monitor
-      # 4a. Layer 1 (deterministic): evaluate detection_rules_structured_v2
-      l1_verdict, l1_details, problem_categories = evaluate_predicates_v2(
-          phase.quality.detection_rules_structured_v2, context, thresholds)
-      write monitor/phase-{NN}-predicate.json
-
-      # 4b. Layer 2 (LLM judgment): spawn monitor with expanded inputs
-      #     Monitor reads: running-summary.md, phase result, predicate.json,
-      #     plus phase-specific files from registry v2_monitor_inputs
-      l2_verdict = spawn_monitor_v2(monitor_prompt, v2_input_files)
-
-      # 4c. Final verdict = max(L1, L2) — L2 can upgrade, never downgrade
-      verdict = max(l1_verdict, l2_verdict) by PASS < WARN < FAIL
-
-      # 5. Handle verdict
-      if verdict == PASS:
-        record phase completed; phase_idx += 1; break
-
-      if verdict == WARN:
-        if config.MONITOR_LEVEL == "strict" and phase_reruns < 1:
-          phase_reruns += 1; continue  # strict_warn_retry
-        record phase completed; phase_idx += 1; break
-
-      if verdict == FAIL:
-        # Check escalation
-        if l2_verdict.escalation_required and config.HUMAN_LOOP:
-          write escalation-request-phase-{NN}.json
-          return state with status="escalation_pending"
-          # Claude handles AskUserQuestion, writes response, re-invokes run()
-
-        # Apply response policy (priority order):
-        # 1. Safety stop (RCA stop_with_blocker) -> abort
-        # 2. Human override -> follow human's choice
-        # 3. Budget constraint -> redirect(fallback) or abort
-        # 4. RCA recommendation -> retry or fallback
-        # 5. Default -> retry
-        response = determine_response(verdict, phase_key, ...)
-
-        if response.action == "retry":
-          phase_reruns += 1; continue
-        elif response.action == "redirect":
-          phase_idx = index_of(response.target); continue  # re-dispatch from target
-        elif response.action == "abort":
-          write blocker; STOP
-```
-
-Key differences from V1:
-- Index-driven outer loop fixes the fallback re-dispatch bug (V1 `break` skips fallback phase)
-- Two-layer verdict: L1 predicates as floor, L2 LLM judgment on top
-- REDIRECT and ABORT are response actions, not verdicts (INV-10)
-- `strict_warn_retry` signal never enters the FAIL path
-- Escalation uses signal-and-resume: `run()` returns, Claude handles human interaction, re-invokes `run()`
-
-When `V2_MONITOR=false`, the V1 dispatch loop above is used exactly as-is — no V2 code paths execute.
+When `V2_MONITOR=false`, the V1 inner loop runs as-is — no V2 code paths execute inside the phase-orchestrator.
 
 ## Handoff Generation
 
@@ -285,7 +213,6 @@ The RCA agent (`agents/rca-agent.md`) is spawned in two situations:
 
 - **FAIL on a critical phase**: full RCA may recommend any `retry_recommendation` and
   may set `terminal_action: stop_with_blocker` to halt the pipeline.
-- **WARN on a critical phase**: advisory RCA. In strict mode, one WARN retry is allowed first; if WARN persists (or in standard mode immediately), the orchestrator preserves the RCA artifact for downstream consumers but does NOT consume the recommendation as a control-flow signal — execution continues to the next phase. WARN-mode RCA must not emit `terminal_action: stop_with_blocker` (the agent enforces this).
 
 Both paths build the manifest the same way. Skip RCA when `phase.rca_artifact` is null
 (non-critical phases have no analysis context registered).
@@ -297,7 +224,7 @@ Manifest construction:
    - `task` = `"Root cause analysis for {phase_key} {verdict_severity}: {monitor.failure_type}"`
    - `output_path` = `rca_artifact.output` (e.g. `"results/integration_rca.json"`)
    - `phase_key` = the failing phase's canonical key
-   - `verdict_severity` = `"WARN"` or `"FAIL"` (controls allowable terminal actions)
+   - `verdict_severity` = `"FAIL"` (controls allowable terminal actions)
    - `files` = one entry per item in `rca_artifact.analysis_context`, with:
      - `path` = the context item path
      - `description` = auto-generated from the file name
@@ -316,7 +243,6 @@ If the RCA agent fails (timeout, crash, malformed output):
 - Record an RCA failure note in the rewritten handoff.
 - One plain retry is still allowed whenever retries are uncapped or finite retry budget remains.
 - If finite retry budget is exhausted, emit a structured blocker and apply normal fallback or stop rules.
-- For the WARN-mode advisory path, an RCA failure is logged but does not block phase progression.
 
 ## Pipeline Blocker Emission
 
@@ -360,7 +286,7 @@ After each phase agent completes:
 
 1. Read `MONITOR_LEVEL` from `config.json`:
    - `standard` (manual override): Use `phase.quality.checks` for critical phases, generic result-exists check for non-critical
-   - `strict`: Apply `phase.quality.checks` to ALL phases (treat every phase as critical), and FAIL on any WARN verdict
+   - `strict`: Apply `phase.quality.checks` to ALL phases (treat every phase as critical)
    - `minimal`: Only check that the result file exists and status is not `failed` — skip quality analysis
    - In skill-guided runs, intake fixes `MONITOR_LEVEL=strict` before execution.
 2. Build a monitor prompt containing:
@@ -381,7 +307,7 @@ After each phase agent completes:
    - `monitor/phase-{NN}-context.json` (if generated in step 3)
    - The orchestrator must not self-author the review or inline a verdict; monitor verdicts must come from this separate monitor agent.
 5. Read the monitor's review from `monitor/phase-NN-review.md`
-6. Act on the verdict per the dispatch loop (if `strict`, escalate WARN to FAIL)
+6. Act on the verdict per the dispatch loop
 
 ## Monitor Failure Handling
 
@@ -428,7 +354,7 @@ Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-o
 
 ## Progress Tracking
 
-The orchestrator is the sole writer of `progress.json`. Phase agents never write to it.
+The **phase-orchestrator subagent** for the currently executing phase is the sole writer of `progress.json`. Phase agents never write to it. The outer dispatcher only reads `progress.json` (once per phase boundary) to decide whether to advance, fall back, skip to report, or stop.
 
 Maintain `progress.json` with:
 - `phases_completed`: array of canonical phase keys (tracks which phases finished)
@@ -442,7 +368,7 @@ Phase keys match the canonical names from the registry: `env`, `config`, `benchm
 
 **Naming note**: `progress.json.phases_completed` is an *array* of phase keys. The summary JSON (`optimization_summary.json`) uses a separate *boolean* field `all_phases_completed` (true when `pipeline_status` is `completed` or `completed with warnings`). These are intentionally different: the array tracks incremental progress, the boolean summarizes the final outcome.
 
-Update `progress.json` after each monitor review (PASS, WARN, or FAIL). On FAIL+retry, update `current_phase` and `retry_counts` before re-dispatching. On rollback, remove rolled-back phases from `phases_completed`.
+Update `progress.json` after each monitor review (PASS or FAIL). On FAIL+retry, update `current_phase` and `retry_counts` before re-dispatching. On rollback, remove rolled-back phases from `phases_completed`.
 
 ## Platform Spawning
 
@@ -452,6 +378,7 @@ Full protocol details and context-budget rules are in `protocols/platform-dispat
 
 | Agent Role | `subagent_type` | `model` | Prompt Shape |
 |---|---|---|---|
+| Phase-orchestrator | `generalPurpose` | inherit | Compact prompt with path to `PHASE-ORCHESTRATOR.md`, registry path, prior-summary path, `phase_key`, `phase_index`, `OUTPUT_DIR`, `SCRIPTS_DIR` |
 | Phase agent | `generalPurpose` | inherit | Compact prompt with path references to phase doc + handoff |
 | Monitor agent | `generalPurpose` | `fast` | Compact prompt with path references to monitor inputs |
 | Analysis agent | `generalPurpose` | inherit | Compact prompt with analysis doc + manifest paths (bounded context paths) |
@@ -467,6 +394,7 @@ Prompt assembly for phase agents: prefer path-based dispatch (phase doc path + h
 
 | Agent Role | Tool | Prompt Shape |
 |---|---|---|
+| Phase-orchestrator | `Agent` | Path to `orchestrator/PHASE-ORCHESTRATOR.md` + `phase-registry.json` + prior-summary path + `phase_key`/`phase_index`/`OUTPUT_DIR`/`SCRIPTS_DIR`. The subagent runs the inner dispatch loop and returns its summary file path. |
 | Phase agent | `Agent` | **Step 1**: Write handoff to `handoff/to-phase-NN.md`. **Step 2**: Validate with `validate_handoff.py`. **Step 3**: Spawn agent with path to handoff file. Agent reads from disk — NEVER inline content. |
 | Monitor agent | `Agent` | Paths to monitor docs + result + summary |
 | Analysis agent | `Agent` | Path to `analysis-agent.md` + manifest file |
@@ -498,12 +426,12 @@ after it completes. To provide progress visibility:
 
 ### Transparent Monitor Presentation
 
-After every monitor review, the orchestrator MUST present the full monitor findings to the user — not just the verdict string. The user sees everything the monitor sub-agent evaluated.
+After every monitor review, the user MUST see the full monitor findings — not just the verdict string. Because the outer dispatcher does not read review files (see Phase-Boundary Context Shed), this presentation is performed **by the phase-orchestrator subagent itself**, immediately after its monitor returns and before it writes the orchestration summary file.
 
-**After reading the monitor's verdict from `monitor/phase-{NN}-review.md`:**
+**Phase-orchestrator step (after the monitor's review file is on disk):**
 
 1. Read `monitor/phase-{NN}-review.md` first.
-2. Read `monitor/phase-{NN}-context.json` only when it exists **and** the phase is critical or verdict is WARN/FAIL.
+2. Read `monitor/phase-{NN}-context.json` only when it exists **and** the phase is critical or verdict is FAIL.
 3. Read only the sticky/frontmatter portion of `monitor/running-summary.md` unless deeper trend analysis is needed.
 4. Present a structured digest to the user in this format:
 
@@ -524,7 +452,7 @@ After every monitor review, the orchestrator MUST present the full monitor findi
 **Key Scalars:**
 | Metric | Value | Threshold | Status |
 |--------|-------|-----------|--------|
-| {metric} | {value} | {threshold or —} | {PASS|WARN|FAIL} |
+| {metric} | {value} | {threshold or —} | {PASS|FAIL} |
 
 **Running Totals:**
 - Phases completed: {N}/{total}
@@ -532,7 +460,7 @@ After every monitor review, the orchestrator MUST present the full monitor findi
 - Sticky values: {key metrics from running-summary.md frontmatter}
 ```
 
-5. For WARN or FAIL verdicts: present the **Failure Details** and **Rerun Guidance** sections from the review doc.
+5. For FAIL verdicts: present the **Failure Details** and **Rerun Guidance** sections from the review doc.
 
 6. **Phase-specific rich output** — surface extra data for these phases:
 
@@ -549,7 +477,7 @@ After every monitor review, the orchestrator MUST present the full monitor findi
 ```
 # Final Summary: {CONFIG_KEY}
 
-## Overall Verdict: {PASS | WARN | FAIL}
+## Overall Verdict: {PASS | FAIL}
 
 ## Per-Phase Results
 | Phase | Index | Critical | Verdict | Key Finding |
@@ -565,7 +493,7 @@ After every monitor review, the orchestrator MUST present the full monitor findi
 - Kernels Optimized: {compiled}/{total} ({blocked} blocked)
 
 ## Recommendations
-- {actionable recommendations based on WARN/FAIL phases}
+- {actionable recommendations based on FAIL phases}
 ```
 
 **Integration into dispatch loop**: Add a `present_monitor_findings()` call after step 5 (verdict handling) and before continuing to the next phase:
@@ -580,7 +508,7 @@ After every monitor review, the orchestrator MUST present the full monitor findi
     # Continue to next phase
 ```
 
-This step runs for ALL verdicts (PASS, WARN, FAIL) — the user always sees the full diagnostic output. For FAIL, it runs before the retry/RCA logic so the user understands why the retry is happening.
+This step runs for ALL verdicts (PASS, FAIL) — the user always sees the full diagnostic output. For FAIL, it runs before the retry/RCA logic so the user understands why the retry is happening.
 
 ## Interrupt and Resume
 

@@ -73,7 +73,7 @@ class TestConditionalPredicates:
 
 
 class TestVerdictPriority:
-    def test_fail_overrides_warn(self):
+    def test_fail_overrides_legacy_warn(self):
         rules = [
             {"field": "speedup", "op": "lt", "value": 1.0, "verdict": "WARN"},
             {"field": "speedup", "op": "lt", "value": 0.97, "verdict": "FAIL"},
@@ -81,13 +81,13 @@ class TestVerdictPriority:
         v, _ = evaluate_predicates(rules, {"speedup": 0.90})
         assert v == "FAIL"
 
-    def test_warn_when_no_fail(self):
+    def test_legacy_warn_normalizes_to_fail(self):
         rules = [
             {"field": "speedup", "op": "lt", "value": 1.0, "verdict": "WARN"},
             {"field": "speedup", "op": "lt", "value": 0.97, "verdict": "FAIL"},
         ]
         v, _ = evaluate_predicates(rules, {"speedup": 0.98})
-        assert v == "WARN"
+        assert v == "FAIL"
 
     def test_pass_when_all_clear(self):
         rules = [
@@ -117,13 +117,13 @@ class TestIntegrationPredicates:
         v, _ = evaluate_predicates(rules, context)
         assert v == "FAIL"
 
-    def test_integration_warn_band(self):
+    def test_integration_warn_band_is_hard_fail(self):
         reg = _load_registry()
         rules = reg["phases"]["integration"]["quality"]["detection_rules_structured"]
         context = {"performance_gate": "warn", "e2e_speedup": 0.98,
                     "ttft_regression_pct": 2.0}
         v, _ = evaluate_predicates(rules, context)
-        assert v == "WARN"
+        assert v == "FAIL"
 
     def test_integration_ttft_upgrade(self):
         reg = _load_registry()
@@ -153,13 +153,13 @@ class TestBenchmarkPredicates:
 
 
 class TestKernelOptimizePredicates:
-    def test_parity_or_blocked_warns(self):
+    def test_parity_or_blocked_is_hard_fail(self):
         reg = _load_registry()
         rules = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured"]
         context = {"compiled_count": 2, "best_speedup": 1.0,
                     "expected_improvement_status": "parity_or_blocked"}
         v, _ = evaluate_predicates(rules, context)
-        assert v == "WARN"
+        assert v == "FAIL"
 
     def test_compile_failure(self):
         reg = _load_registry()
@@ -181,6 +181,6 @@ class TestAllRegistryPredicatesValid:
                 assert "field" in rule, f"Phase {key} rule {i}: missing 'field'"
                 assert "op" in rule, f"Phase {key} rule {i}: missing 'op'"
                 assert "verdict" in rule, f"Phase {key} rule {i}: missing 'verdict'"
-                assert rule["verdict"] in ("PASS", "WARN", "FAIL"), (
+                assert rule["verdict"] in ("PASS", "FAIL"), (
                     f"Phase {key} rule {i}: invalid verdict {rule['verdict']}"
                 )

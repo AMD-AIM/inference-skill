@@ -20,6 +20,7 @@ When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host
 
 | Agent Role | `subagent_type` | `model` | Prompt Shape |
 |---|---|---|---|
+| Phase-orchestrator | `generalPurpose` | inherit | Compact prompt with paths to `orchestrator/PHASE-ORCHESTRATOR.md` + `phase-registry.json` + prior `monitor/phase-{NN-1}-orchestration-summary.md` (or null) + scalars: `phase_key`, `phase_index`, `OUTPUT_DIR`, `SCRIPTS_DIR`. Returns the path to `monitor/phase-{NN}-orchestration-summary.md`. |
 | Phase agent | `generalPurpose` | inherit | Compact prompt with file-path references (`agents/phase-NN-*.md` + `handoff/to-phase-NN.md`) |
 | Monitor agent | `generalPurpose` | `fast` | Compact prompt with paths to `monitor.md`, result, summary, optional context JSON |
 | Analysis agent | `generalPurpose` | inherit | Compact prompt with `analysis-agent.md` path + manifest path + bounded context paths |
@@ -37,7 +38,7 @@ When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host
 
 **Analysis agents** (routine in-phase data analysis): Pass `agents/analysis-agent.md` and analyzer manifest paths. If the manifest enumerates many context files, pass only a bounded subset directly and let the subagent pull additional files as needed.
 
-**RCA agents** (orchestrator-level root cause on monitor WARN/FAIL): Pass `agents/rca-agent.md` and analyzer manifest paths; avoid pre-inlining entire `analysis_context` trees. **Prepend the literal keyword `ultrathink` as the first token of the assembled prompt** — Cursor uses this keyword to enable the maximum reasoning-effort budget.
+**RCA agents** (orchestrator-level root cause on monitor FAIL): Pass `agents/rca-agent.md` and analyzer manifest paths; avoid pre-inlining entire `analysis_context` trees. **Prepend the literal keyword `ultrathink` as the first token of the assembled prompt** — Cursor uses this keyword to enable the maximum reasoning-effort budget.
 
 ### Question Tool
 
@@ -49,6 +50,7 @@ Use `AskQuestion` tool for guided setup forms (SKILL.md intake flow).
 
 | Agent Role | Tool | Prompt Shape |
 |---|---|---|
+| Phase-orchestrator | `Agent` | Path to `orchestrator/PHASE-ORCHESTRATOR.md` + `phase-registry.json` + prior orchestration-summary path (or null) + scalars: `phase_key`, `phase_index`, `OUTPUT_DIR`, `SCRIPTS_DIR`. The subagent runs the inner dispatch loop in a fresh context and returns the path to its summary file. |
 | Phase agent | `Agent` | Path to `handoff/to-phase-NN.md` (agent reads from disk) |
 | Monitor agent | `Agent` | Paths to monitor docs + result + summary |
 | Analysis agent | `Agent` | Path to `analysis-agent.md` + analyzer manifest file |

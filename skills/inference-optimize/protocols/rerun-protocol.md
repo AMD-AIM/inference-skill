@@ -143,7 +143,7 @@ When `HUMAN_LOOP=true` and `V2_MONITOR=true`, the orchestrator uses a signal-and
 
 | Current State | Event | Next State |
 |---|---|---|
-| running | phase PASS/WARN | running |
+| running | phase PASS/FAIL | running |
 | running | all phases complete | completed |
 | running | budget exhausted (no fallback) | failed |
 | running | RCA stop_with_blocker | failed |

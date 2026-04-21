@@ -19,7 +19,7 @@
     },
     "verdict": {
       "type": "string",
-      "enum": ["PASS", "WARN", "FAIL"]
+      "enum": ["PASS", "FAIL"]
     },
     "failure_type": {
       "type": ["string", "null"],

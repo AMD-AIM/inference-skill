@@ -157,8 +157,8 @@ purposes (Framework, Output, GPUs, discovery, and filter questions all still app
 Before final confirmation for `mode=monitor`, always set `MONITOR_LEVEL=strict`.
 Do not ask the user to choose between standard/strict/minimal for monitor workflow.
 
-At runtime, `orchestrator/MONITOR-MODE.md` is read alongside
-`orchestrator/ORCHESTRATOR.md`, and the per-phase digest is surfaced after each phase boundary.
+At runtime, read `orchestrator/ORCHESTRATOR.md` and follow the
+`Transparent Monitor Presentation` section so the per-phase digest is surfaced after each phase boundary.
 
 ## Lightweight discovery before filter questions
 
