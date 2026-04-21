@@ -55,37 +55,13 @@ PYEOF
 echo "[$(date +%T)] [Step 2] GPU kernel breakdown at each concurrency..."
 T_START=$(date +%s)
 
-python3 -u - << 'PYEOF'
-import json, os, glob, subprocess, sys
-
-meta = json.load(open("{{RESULTS_DIR}}/profile_meta.json"))
-os.makedirs("{{RESULTS_DIR}}/gap_analysis", exist_ok=True)
-any_ok = False
-
-for cs, m in sorted(meta.items(), key=lambda x: int(x[0])):
-    conc = int(cs)
-    td = m["trace_dir"]
-    traces = glob.glob(td+"/*.json*")
-    if not traces:
-        print(f"  SKIP conc={conc}: no traces in {td}/  [FAIL]"); continue
-
-    out = f"{{RESULTS_DIR}}/gap_analysis/gap_c{conc}.json"
-    mode = "decode-only" if m.get("decode_only") else "prefill+decode"
-    print(f"\n  Analyzing conc={conc} [{mode}]  ({len(traces)} trace(s))...", flush=True)
-
-    r = subprocess.run([sys.executable, "{{SCRIPTS_DIR}}/kernel_breakdown.py",
-        "--trace-dir", td, "--output", out,
-        "--label", f"conc={conc} ({mode})", "--top-n", "30"],
-        capture_output=False)   # output goes directly to stdout → brace group → tee
-
-    if r.returncode != 0:
-        print(f"  ERROR: kernel_breakdown.py failed for conc={conc}  [FAIL]")
-    else:
-        any_ok = True
-
-if not any_ok:
-    print("  ERROR: No concurrency could be analyzed"); sys.exit(1)
-PYEOF
+# run_breakdown.py launches one kernel_breakdown.py per trace dir IN PARALLEL,
+# then collects output in concurrency order. Serial parsing took ~45s per trace.
+python3 {{SCRIPTS_DIR}}/run_breakdown.py \
+    --profile-meta "{{RESULTS_DIR}}/profile_meta.json" \
+    --scripts-dir  "{{SCRIPTS_DIR}}" \
+    --output-dir   "{{RESULTS_DIR}}/gap_analysis" \
+    --top-n 30
 
 T_END=$(date +%s)
 echo "[$(date +%T)] [Step 2] Kernel breakdown done. ($(( T_END - T_START ))s elapsed)"
@@ -140,17 +116,52 @@ PYEOF
 # ── Step 4: Extract real GEMM shapes ──────────────────────────────────────
 echo "[$(date +%T)] [Step 4] Extracting real GEMM shapes from trace (record_shapes=True required)..."
 
-# Use highest-concurrency trace — most representative of serving workload
-PRIMARY_TRACE=$(python3 -c "
-import json,glob,os
-m=json.load(open('{{RESULTS_DIR}}/profile_meta.json'))
-print(m[str(max(int(k) for k in m))]['trace_dir'])
-" 2>/dev/null)
+# Extract real shapes from ALL profiled traces and take the union.
+# This is critical for correctness when using small concurrency levels (e.g., 1,4,16):
+# the peak trace (conc=16) captures only M=16 GEMM shapes. Shapes at M=1 (conc=1) and
+# M=4 (conc=4) are only visible in the lower-concurrency traces. Without unioning,
+# tuning only covers the peak concurrency and conc=1/4 see zero E2E improvement.
+python3 -u - << 'PYEOF'
+import json, os, subprocess, sys, glob
 
-echo "  Using trace dir: $PRIMARY_TRACE"
-python3 {{SCRIPTS_DIR}}/extract_shapes.py \
-    --trace-dir "$PRIMARY_TRACE" \
-    --output "{{RESULTS_DIR}}/real_shapes.json"
+meta    = json.load(open("{{RESULTS_DIR}}/profile_meta.json"))
+results_dir = "{{RESULTS_DIR}}"
+scripts_dir = "{{SCRIPTS_DIR}}"
+merged_mkn  = {}   # (M,K,N) → total_calls
+
+for cs, m in sorted(meta.items(), key=lambda x: int(x[0])):
+    td = m["trace_dir"]
+    if not glob.glob(td + "/*.json*"):
+        print(f"  SKIP conc={cs}: no traces", flush=True); continue
+    tmp_out = f"{results_dir}/real_shapes_c{cs}.json"
+    r = subprocess.run([sys.executable, f"{scripts_dir}/extract_shapes.py",
+                        "--trace-dir", td, "--output", tmp_out],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  WARN: extract_shapes failed for conc={cs}: {r.stderr[:200]}", flush=True)
+        continue
+    d = json.load(open(tmp_out))
+    n_shapes = d.get("total_shapes", 0)
+    m_vals   = d.get("unique_m_values", [])
+    print(f"  conc={cs}: {n_shapes} shapes  M_values={m_vals}", flush=True)
+    for entry in d.get("shapes", []) + d.get("top_shapes_by_calls", []):
+        key = tuple(entry["MKN"])
+        merged_mkn[key] = merged_mkn.get(key, 0) + entry.get("calls", 1)
+
+# Build merged real_shapes.json
+all_shapes = sorted(merged_mkn.keys(), key=lambda k: -merged_mkn[k])
+m_vals = sorted(set(k[0] for k in all_shapes))
+out = {
+    "total_shapes": len(all_shapes),
+    "unique_m_values": m_vals,
+    "shapes": [{"MKN": list(k), "calls": merged_mkn[k]} for k in all_shapes],
+    "top_shapes_by_calls": [{"MKN": list(k), "calls": merged_mkn[k]} for k in all_shapes[:20]],
+    "source": "union of all profiled traces",
+}
+with open(f"{results_dir}/real_shapes.json", "w") as f:
+    json.dump(out, f, indent=2)
+print(f"  Merged real shapes: {len(all_shapes)} unique  M_values={m_vals}  [OK]", flush=True)
+PYEOF
 
 python3 -u - << 'PYEOF'
 import json, os, sys

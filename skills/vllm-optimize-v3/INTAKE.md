@@ -96,8 +96,8 @@ Send all at once after discovery:
 - header: `Concurrency`
 - question: `Which concurrency sweep?`
 - options:
-  - `Full sweep (Recommended)` — 4,8,16,32,64,128
-  - `Smoke` — 4,16,64
+  - `Standard (Recommended)` — 1,4,16  (single-user + light + medium load; covers the key serving regimes)
+  - `Full sweep` — 1,4,16,32,64,128  (adds high-concurrency; takes ~3× longer to benchmark)
   - `Custom` — ask follow-up
 
 ### Q7 (only if MODE=optimize): Optimization budget

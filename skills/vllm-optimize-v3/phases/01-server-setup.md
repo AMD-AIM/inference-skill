@@ -8,8 +8,27 @@ Kill previous vLLM (by PID file), select GPU, set env vars (including TunableOps
 **CRITICAL**: `PYTORCH_TUNABLEOP_*` env vars must be set here — before server starts — so EngineCore inherits them at fork.
 
 ## Kill vLLM pattern (used here and in Phase 5)
+vLLM's recommended shutdown is **SIGTERM** (triggers uvicorn graceful shutdown + engine cleanup).
+`kill -9` skips cleanup and leaves orphan `multiprocessing.resource_tracker` children holding
+`/dev/kfd` open, which prevents ROCm from releasing VRAM even after the main process dies.
+
 ```bash
-kill -9 $(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null) 2>/dev/null || true; sleep 3
+# vLLM graceful shutdown: SIGTERM → wait 30s → SIGKILL fallback
+_kill_vllm() {
+    local pid=$1
+    [ -z "$pid" ] && return
+    kill -0 $pid 2>/dev/null || return   # already gone
+    echo "  Stopping PID=$pid (SIGTERM)..."
+    kill -SIGTERM $pid 2>/dev/null || true
+    for _w in $(seq 1 30); do
+        kill -0 $pid 2>/dev/null || { echo "  Exited cleanly after ${_w}s."; return; }
+        sleep 1
+    done
+    echo "  Still alive after 30s — sending SIGKILL"
+    kill -9 $pid 2>/dev/null || true
+    sleep 2
+}
+_kill_vllm $(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
 ```
 
 ## Execution
@@ -30,20 +49,72 @@ set -euo pipefail
 
 echo "[$(date +%T)] === Phase 1/6: server — STARTING ==="
 
-# ── Step 1: Kill previous vLLM ───────────────────────────────────────────
-echo "[$(date +%T)] [Step 1] Stopping any previous vLLM (PID file only)..."
-# Constraint 3: never touch /opt/, /usr/, pip packages.
-# Kill only the PID this skill started — saved to vllm.pid on startup.
-# VLLM::EngineCore is a child of that PID and dies with it.
-OLD_PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
-if [ -n "$OLD_PID" ]; then
-    echo "  Killing previous PID=$OLD_PID"
-    kill -9 $OLD_PID 2>/dev/null || true
-    sleep 3
-    echo "  Done."
+# ── Step 1: Kill ALL vLLM processes + EngineCore ─────────────────────────
+echo "[$(date +%T)] [Step 1] Killing all vLLM processes..."
+
+# Step 1a: Kill API server processes (both launch styles)
+VLLM_PIDS=$(ps aux | grep -E '[v]llm.entrypoints.openai.api_server|[v]llm serve ' | awk '{print $2}' || true)
+if [ -n "$VLLM_PIDS" ]; then
+    echo "  API server PIDs: $VLLM_PIDS — SIGTERM..."
+    echo "$VLLM_PIDS" | xargs kill -SIGTERM 2>/dev/null || true
+    sleep 5
+    SURVIVORS=$(ps aux | grep -E '[v]llm.entrypoints.openai.api_server|[v]llm serve ' | awk '{print $2}' || true)
+    if [ -n "$SURVIVORS" ]; then
+        echo "  Survivors: $SURVIVORS — SIGKILL"
+        echo "$SURVIVORS" | xargs kill -9 2>/dev/null || true
+        sleep 2
+    fi
 else
-    echo "  No previous vLLM PID found (first run)."
+    echo "  No API server processes found."
 fi
+
+# Step 1b: Kill any VLLM::EngineCore holding /dev/kfd (orphaned GPU workers).
+# These survive API server death and keep VRAM allocated until explicitly killed.
+python3 -u - << 'PYEOF'
+import os, signal, time
+
+def find_kfd_holders():
+    pids = []
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f'/proc/{pid}/fd'):
+                try:
+                    if 'kfd' in os.readlink(f'/proc/{pid}/fd/{fd}'):
+                        pids.append(int(pid))
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return pids
+
+holders = find_kfd_holders()
+if not holders:
+    print("  No /dev/kfd holders found — VRAM clean.")
+else:
+    print(f"  /dev/kfd holders: {holders} — SIGTERM...")
+    for pid in holders:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+    time.sleep(5)
+    remaining = find_kfd_holders()
+    if remaining:
+        print(f"  Still alive: {remaining} — SIGKILL")
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        time.sleep(2)
+    print("  EngineCore cleared.")
+PYEOF
+
+rm -f "{{OUTPUT_DIR}}/vllm.pid"
+echo "[$(date +%T)] [Step 1] Done."
 
 # ── Step 2: Select GPU ────────────────────────────────────────────────────
 echo "[$(date +%T)] [Step 2] Selecting GPU..."
@@ -176,7 +247,8 @@ for i in $(seq 1 36); do
         echo "  FATAL error in vLLM log:"
         grep -E 'out of memory|OOMKilled|ValidationError|ModuleNotFoundError|Address already in use' \
             "$VLLM_LOG" | tail -3
-        kill -9 $VLLM_PID 2>/dev/null || true; exit 1
+        kill -SIGTERM $VLLM_PID 2>/dev/null || true; sleep 3
+        kill -0 $VLLM_PID 2>/dev/null && kill -9 $VLLM_PID 2>/dev/null || true; exit 1
     fi
     HTTP=$(curl -s -o/dev/null -w '%{http_code}' \
         -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null)

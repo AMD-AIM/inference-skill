@@ -63,13 +63,58 @@ echo "  Input:  {{RESULTS_DIR}}/untuned_shapes_final.csv"
 echo "  Output: {{OPTIMIZED_DIR}}/tuned_gemm.csv"
 T_TUNE_START=$(date +%s)
 
-CUDA_VISIBLE_DEVICES=$(cat "{{OUTPUT_DIR}}/vllm.pid" &>/dev/null && \
-    cat /proc/$(cat "{{OUTPUT_DIR}}/vllm.pid")/environ 2>/dev/null | \
-    tr '\0' '\n' | grep CUDA_VISIBLE_DEVICES | cut -d= -f2 || \
-    python3 {{SCRIPTS_DIR}}/select_gpus.py 1)
+# Select a GPU for offline tuning that is DIFFERENT from the vLLM serving GPU.
+# Running tuning on the same GPU as vLLM causes PyTorch CUDA context contention
+# and results in a 30+ minute silent hang.
+VLLM_GPU=$(cat "{{OUTPUT_DIR}}/gpu_selection.txt" 2>/dev/null || echo "")
+TUNE_GPU=$(python3 - << 'PYEOF'
+import subprocess, os, sys
+vllm_gpu_str = open("{{OUTPUT_DIR}}/gpu_selection.txt").read().strip() \
+    if os.path.exists("{{OUTPUT_DIR}}/gpu_selection.txt") else ""
+vllm_gpus = set(vllm_gpu_str.split(',')) if vllm_gpu_str else set()
+# Enumerate all GPUs via rocm-smi
+r = subprocess.run(['rocm-smi','--showuse','--csv'], capture_output=True, text=True, timeout=10)
+all_gpus = []
+for line in r.stdout.splitlines():
+    parts = [p.strip() for p in line.split(',')]
+    if parts and parts[0].isdigit():
+        all_gpus.append(parts[0])
+if not all_gpus:
+    import torch
+    all_gpus = [str(i) for i in range(torch.cuda.device_count())]
+# Pick least-busy GPU that vLLM is not using
+for g in all_gpus:
+    if g not in vllm_gpus:
+        print(g); sys.exit(0)
+# Fallback: same GPU (will warn below)
+print(all_gpus[0] if all_gpus else "0")
+PYEOF
+)
+export CUDA_VISIBLE_DEVICES="$TUNE_GPU"
+if [ "$TUNE_GPU" = "$VLLM_GPU" ]; then
+    echo "  WARNING: no free GPU found — tuning on same GPU as vLLM ($VLLM_GPU). May contend."
+else
+    echo "  Tuning GPU: $TUNE_GPU  (vLLM GPU: ${VLLM_GPU:-unknown})  [SEPARATE — no contention]"
+fi
+
+# filter_shapes.py filters untuned_shapes_final.csv to only shapes in the profiler trace.
+# untuned_shapes collects ALL shapes seen at all concurrencies (benchmark + prefill).
+# real_shapes.json has only the shapes executed at peak serving concurrency (~62 shapes).
+# This reduces tuning input by ~90% and saves 30+ minutes of offline tuning time.
+python3 {{SCRIPTS_DIR}}/filter_shapes.py \
+    --untuned      "{{RESULTS_DIR}}/untuned_shapes_final.csv" \
+    --real-shapes  "{{RESULTS_DIR}}/real_shapes.json" \
+    --output       "{{RESULTS_DIR}}/untuned_shapes_real_only.csv"
+
+# Gate: filter_shapes.py must succeed and produce a non-empty output file.
+[ -f "{{RESULTS_DIR}}/untuned_shapes_real_only.csv" ] || {
+    echo "FATAL: filter_shapes.py did not produce untuned_shapes_real_only.csv"; exit 1
+}
+N_FILTERED=$(grep -c "^Gemm" "{{RESULTS_DIR}}/untuned_shapes_real_only.csv" 2>/dev/null || echo 0)
+echo "  Tuning $N_FILTERED real shapes..."
 
 python3 {{SCRIPTS_DIR}}/tune_gemm_shapes.py \
-    --untuned  "{{RESULTS_DIR}}/untuned_shapes_final.csv" \
+    --untuned  "{{RESULTS_DIR}}/untuned_shapes_real_only.csv" \
     --output   "{{OPTIMIZED_DIR}}/tuned_gemm.csv" \
     --max-iter 50 \
     --max-duration 20

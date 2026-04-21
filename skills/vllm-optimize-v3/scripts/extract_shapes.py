@@ -62,7 +62,8 @@ def extract_shapes_from_events(events):
     """
     # Target ops that correspond to GEMM
     GEMM_OPS = {"aten::mm", "aten::addmm", "aten::linear", "aten::matmul",
-                "aten::bmm", "aten::baddbmm"}
+                "aten::bmm", "aten::baddbmm",
+                "vllm::rocm_unquantized_gemm"}  # vLLM custom GEMM (only op at small batch)
 
     shape_counts = defaultdict(int)  # (M, K, N) -> count
 
@@ -79,6 +80,9 @@ def extract_shapes_from_events(events):
         # aten::mm: inputs = [A (M,K), B (K,N)]
         # aten::addmm: inputs = [bias, A (M,K), B (K,N)]  → skip bias
         # aten::linear: inputs = [input (M,K), weight (N,K)] → B is transposed
+        # vllm::rocm_unquantized_gemm: inputs = [A (M,K), B (N,K), output]
+        #   B is the weight matrix stored transposed as (N, K) — same layout as aten::linear
+        #   At small batch (M=1), vLLM dispatches directly to this op; aten::mm is absent.
         try:
             if name == "aten::mm":
                 if len(dims) >= 2 and len(dims[0]) == 2 and len(dims[1]) == 2:
@@ -94,9 +98,9 @@ def extract_shapes_from_events(events):
                     if K == K2 and M > 0 and K > 0 and N > 0:
                         shape_counts[(M, K, N)] += 1
 
-            elif name == "aten::linear":
+            elif name in ("aten::linear", "vllm::rocm_unquantized_gemm"):
+                # Both have weight stored as (N, K) — transposed relative to aten::mm
                 if len(dims) >= 2 and len(dims[0]) >= 2 and len(dims[1]) == 2:
-                    # input: (..., K), weight: (N, K) — weight is transposed
                     K  = dims[0][-1]
                     N, K2 = dims[1]
                     M  = 1

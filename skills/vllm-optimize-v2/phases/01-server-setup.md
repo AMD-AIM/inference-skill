@@ -8,8 +8,27 @@ Kill previous vLLM (by PID file), select GPU, set env vars (including TunableOps
 **CRITICAL**: `PYTORCH_TUNABLEOP_*` env vars must be set here — before server starts — so EngineCore inherits them at fork.
 
 ## Kill vLLM pattern (used here and in Phase 5)
+vLLM's recommended shutdown is **SIGTERM** (triggers uvicorn graceful shutdown + engine cleanup).
+`kill -9` skips cleanup and leaves orphan `multiprocessing.resource_tracker` children holding
+`/dev/kfd` open, which prevents ROCm from releasing VRAM even after the main process dies.
+
 ```bash
-kill -9 $(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null) 2>/dev/null || true; sleep 3
+# vLLM graceful shutdown: SIGTERM → wait 30s → SIGKILL fallback
+_kill_vllm() {
+    local pid=$1
+    [ -z "$pid" ] && return
+    kill -0 $pid 2>/dev/null || return   # already gone
+    echo "  Stopping PID=$pid (SIGTERM)..."
+    kill -SIGTERM $pid 2>/dev/null || true
+    for _w in $(seq 1 30); do
+        kill -0 $pid 2>/dev/null || { echo "  Exited cleanly after ${_w}s."; return; }
+        sleep 1
+    done
+    echo "  Still alive after 30s — sending SIGKILL"
+    kill -9 $pid 2>/dev/null || true
+    sleep 2
+}
+_kill_vllm $(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
 ```
 
 ## Execution
@@ -37,9 +56,20 @@ echo "[$(date +%T)] [Step 1] Stopping any previous vLLM (PID file only)..."
 # VLLM::EngineCore is a child of that PID and dies with it.
 OLD_PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
 if [ -n "$OLD_PID" ]; then
-    echo "  Killing previous PID=$OLD_PID"
-    kill -9 $OLD_PID 2>/dev/null || true
-    sleep 3
+    echo "  Stopping previous PID=$OLD_PID..."
+    # SIGTERM first — allows vLLM uvicorn + EngineCore to clean up ROCm/CUDA contexts
+    kill -SIGTERM $OLD_PID 2>/dev/null || true
+    for _w in $(seq 1 30); do
+        kill -0 $OLD_PID 2>/dev/null || { echo "  Exited cleanly after ${_w}s."; break; }
+        sleep 1
+    done
+    # SIGKILL fallback only if still alive
+    if kill -0 $OLD_PID 2>/dev/null; then
+        echo "  Still alive — SIGKILL"
+        kill -9 $OLD_PID 2>/dev/null || true
+        sleep 2
+    fi
+    rm -f "{{OUTPUT_DIR}}/vllm.pid"
     echo "  Done."
 else
     echo "  No previous vLLM PID found (first run)."
@@ -49,6 +79,9 @@ fi
 echo "[$(date +%T)] [Step 2] Selecting GPU..."
 SELECTED=$(python3 {{SCRIPTS_DIR}}/select_gpus.py {{TP}})
 export CUDA_VISIBLE_DEVICES="$SELECTED"
+# Save GPU selection to file — used by Phase 4 (tuning) and Phase 5 (restart).
+# This avoids reading /proc/{PID}/environ which is fragile and permission-sensitive.
+echo "$SELECTED" > "{{OUTPUT_DIR}}/gpu_selection.txt"
 python3 -u - << 'PYEOF'
 import subprocess, os
 selected = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
@@ -60,11 +93,12 @@ for line in r.stdout.splitlines():
             print(f"  Selected GPU {gpu_id}: {line.split(':')[-1].strip()}")
 PYEOF
 echo "  CUDA_VISIBLE_DEVICES=$SELECTED"
+echo "  GPU selection saved → {{OUTPUT_DIR}}/gpu_selection.txt"
 
 # ── Step 3: Environment variables ─────────────────────────────────────────
 echo "[$(date +%T)] [Step 3] Setting env vars..."
-export HF_ENDPOINT="${HF_ENDPOINT:-}"
-export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-}"
+export HF_ENDPOINT="${HF_ENDPOINT:-http://134.199.133.77}"
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 export HF_HOME="${HF_HOME:-/root/.cache/huggingface}"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export VLLM_RPC_TIMEOUT=1800000
@@ -103,14 +137,28 @@ if os.path.isdir(model):
         print(f"  Model: {model} ({len(ws)} weight file(s))")
     open("{{OUTPUT_DIR}}/resolved_model_path.txt","w").write(model)
 else:
+    import glob as _glob
     name = model.split("/")[-1]
+    # Case-insensitive search in /app/ — prevents re-download when cache exists
+    # with different capitalization (e.g. Qwen3.5-4b vs Qwen3.5-4B).
+    local = None
+    for candidate in sorted(_glob.glob("/app/*/")):
+        dirname = os.path.basename(candidate.rstrip('/'))
+        if dirname.lower() == name.lower():
+            cfg = os.path.join(candidate.rstrip('/'), "config.json")
+            if os.path.isfile(cfg):
+                ws = [f for f in os.listdir(candidate.rstrip('/'))
+                      if f.endswith(('.safetensors', '.bin'))]
+                if ws:
+                    local = candidate.rstrip('/')
+                    break
+    if local:
+        ws = [f for f in os.listdir(local) if f.endswith(('.safetensors', '.bin'))]
+        print(f"  Model cached: {local} ({len(ws)} files)")
+        open("{{OUTPUT_DIR}}/resolved_model_path.txt","w").write(local)
+        sys.exit(0)
+    # Not found locally — download
     local = f"/app/{name}"
-    if os.path.isdir(local) and os.path.isfile(f"{local}/config.json"):
-        ws = [f for f in os.listdir(local) if f.endswith(('.safetensors','.bin'))]
-        if ws:
-            print(f"  Model cached: {local} ({len(ws)} files)")
-            open("{{OUTPUT_DIR}}/resolved_model_path.txt","w").write(local)
-            sys.exit(0)
     print(f"  Downloading: {model} → {local}...")
     r = subprocess.run(["hf","download",model,"--local-dir",local], timeout=3600)
     if r.returncode != 0: print("  ERROR: download failed"); sys.exit(1)
@@ -158,7 +206,8 @@ for i in $(seq 1 36); do
         echo "  FATAL error in vLLM log:"
         grep -E 'out of memory|OOMKilled|ValidationError|ModuleNotFoundError|Address already in use' \
             "$VLLM_LOG" | tail -3
-        kill -9 $VLLM_PID 2>/dev/null || true; exit 1
+        kill -SIGTERM $VLLM_PID 2>/dev/null || true; sleep 3
+        kill -0 $VLLM_PID 2>/dev/null && kill -9 $VLLM_PID 2>/dev/null || true; exit 1
     fi
     HTTP=$(curl -s -o/dev/null -w '%{http_code}' \
         -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null)

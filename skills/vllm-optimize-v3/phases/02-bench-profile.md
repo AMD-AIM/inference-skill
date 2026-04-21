@@ -102,13 +102,18 @@ PYEOF
 T_BENCH_END=$(date +%s)
 echo "[$(date +%T)] [Step 1] Benchmark done. ($(( T_BENCH_END - T_BENCH_START ))s elapsed)"
 
-# ── Step 2: Profile at each concurrency ───────────────────────────────────
-echo "[$(date +%T)] [Step 2] Profiling (decode-only by default)..."
+# ── Step 2: Profile at PROFILE_CONCURRENCY_LEVELS only ───────────────────
+# PROFILE_CONCURRENCY_LEVELS = {{PROFILE_CONCURRENCY_LEVELS}}  (lowest + peak only)
+# Profiling all concurrencies wastes ~21 min. We only need:
+#   - peak concurrency: for real GEMM shape extraction (Phase 3 primary trace)
+#   - lowest concurrency: to characterize CPU-gap behaviour
+# The benchmark comparison table in Phase 3 uses the Step 1 TPS data (all concurrencies).
+echo "[$(date +%T)] [Step 2] Profiling decode-only at [{{PROFILE_CONCURRENCY_LEVELS}}] only..."
 T_PROF_START=$(date +%s)
 
 PREFILL_WAIT=$(python3 -c "print(max(5, int({{ISL}}/500)+5))")
 INCLUDE_PREFILL="${PROFILE_INCLUDE_PREFILL:-0}"
-echo "  prefill_wait=${PREFILL_WAIT}s  include_prefill=${INCLUDE_PREFILL}"
+echo "  profiling concurrencies: [{{PROFILE_CONCURRENCY_LEVELS}}]  prefill_wait=${PREFILL_WAIT}s"
 
 python3 -u - << 'PYEOF'
 import requests, json, time, concurrent.futures, os, glob, shutil
@@ -122,6 +127,11 @@ RESULTS_DIR = "{{RESULTS_DIR}}"
 PREFILL_WAIT    = int(os.environ.get("PREFILL_WAIT","5"))
 INCLUDE_PREFILL = os.environ.get("PROFILE_INCLUDE_PREFILL","0") == "1"
 prompt = "The quick brown fox jumps over the lazy dog. " * (ISL // 10 + 1)
+
+# Use PROFILE_CONCURRENCY_LEVELS (2 levels: lowest + peak), not all CONCURRENCY_LEVELS.
+# PROFILE_CONCURRENCY_LEVELS is set during intake from RUNTIME.md variable derivation.
+profile_concs = [{{PROFILE_CONCURRENCY_LEVELS}}]
+print(f"  Profile concurrencies: {profile_concs}", flush=True)
 
 def clear_base_traces():
     """Remove only files directly in PROFILE_DIR (not subdirectories)."""
@@ -157,7 +167,7 @@ def wait_for_traces(dest_dir, min_bytes=50_000, max_wait=120):
     return glob.glob(f"{PROFILE_DIR}/*.json.gz")
 
 meta = {}
-for conc in [{{CONCURRENCY_LEVELS}}]:
+for conc in profile_concs:
     n = max(conc*2, 4)
     dest = os.path.join(PROFILE_DIR, f"conc_{conc}")
     os.makedirs(dest, exist_ok=True)

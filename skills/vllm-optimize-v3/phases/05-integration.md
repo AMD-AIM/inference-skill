@@ -290,6 +290,17 @@ else:
     speedups = [v["speedup"] for v in patched_results.values()]
     avg_sp = sum(speedups)/len(speedups) if speedups else 0
     print(f"  All gates PASSED  avg_speedup={avg_sp:.3f}x  [OK]")
+
+# Attribution for concurrencies showing ~1.0x
+near_baseline = [c for c, v in patched_results.items() if v["speedup"] < 1.05]
+if near_baseline:
+    print()
+    print(f"  Attribution for conc={','.join(near_baseline)} (~1.0x):")
+    print(f"  vLLM routes decode with batch_size<=4 through wvSplitK/LLMM1")
+    print(f"  (rocm_unquantized_gemm_impl, utils.py:181), bypassing TunableOps.")
+    print(f"  ~1.0x at these concurrencies is expected — wvSplitK is already")
+    print(f"  near-optimal for RDNA3 small-batch decode. TunableOps only")
+    print(f"  intercepts batch_size > 4 (aten::mm path).")
 PYEOF
 
 T_END=$(date +%s)

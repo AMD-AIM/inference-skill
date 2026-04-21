@@ -16,6 +16,7 @@ Resolve ALL of these before loading any phase doc. Replace `{{VAR}}` in phase do
 | `RESULTS_DIR` | `{{OUTPUT_DIR}}/results` | derived |
 | `REPORT_DIR` | `{{OUTPUT_DIR}}/report` | derived |
 | `SCRIPTS_DIR` | `{{OUTPUT_DIR}}/scripts` | derived |
+| `SKILL_DIR` | `${HOME}/.claude/skills/vllm-optimize` | fixed installed path |
 | `PROBLEMS_DIR` | `{{OUTPUT_DIR}}/problems` | derived |
 | `OPTIMIZED_DIR` | `{{OUTPUT_DIR}}/optimized` | derived |
 | `PROGRESS_FILE` | `{{OUTPUT_DIR}}/progress.json` | derived |
@@ -26,6 +27,7 @@ Resolve ALL of these before loading any phase doc. Replace `{{VAR}}` in phase do
 | `ISL` | 1024 | Intake Q5 |
 | `OSL` | 1024 | Intake Q5 |
 | `CONCURRENCY_LEVELS` | `4,8,16,32,64,128` | Intake Q6 |
+| `PROFILE_CONCURRENCY_LEVELS` | lowest and highest of CONCURRENCY_LEVELS | derived: `min,max` |
 | `DTYPE` | `bfloat16` (AMD) / `float16` (NVIDIA) | auto from GPU_VENDOR |
 | `MAX_MODEL_LEN` | 4096 | fixed |
 | `GPU_MEM_UTIL` | 0.90 | fixed |
@@ -36,6 +38,10 @@ Resolve ALL of these before loading any phase doc. Replace `{{VAR}}` in phase do
 | `MODE` | `optimize` | Intake Q1 |
 | `HF_ENDPOINT` | `""` | auto-detected |
 | `HF_HUB_DISABLE_XET` | `""` | auto-detected |
+
+**Deriving `PROFILE_CONCURRENCY_LEVELS`:** Set this to the lowest and highest values of `CONCURRENCY_LEVELS`.
+Example: if `CONCURRENCY_LEVELS=4,8,16,32,64,128`, then `PROFILE_CONCURRENCY_LEVELS=4,128`.
+Profiling at all concurrencies wastes 21+ minutes; Phase 3 only uses the peak trace for shape extraction.
 
 ---
 
@@ -49,8 +55,10 @@ mkdir -p "{{OUTPUT_DIR}}" "{{PROFILE_DIR}}" "{{RESULTS_DIR}}" \
          "{{OUTPUT_DIR}}/logs"
 
 # Copy bundled scripts to SCRIPTS_DIR
-SKILL_SCRIPTS="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/scripts"
+# Use the fixed installed path — ${BASH_SOURCE[0]} is unreliable in agent bash heredocs.
+SKILL_SCRIPTS="${HOME}/.claude/skills/vllm-optimize/scripts"
 cp "$SKILL_SCRIPTS"/*.py "{{SCRIPTS_DIR}}/"
+echo "  Scripts copied from $SKILL_SCRIPTS to {{SCRIPTS_DIR}}/ ($(ls {{SCRIPTS_DIR}}/*.py | wc -l) files)"
 
 # Write config.json
 python3 -c "
@@ -176,6 +184,42 @@ Update `{{PROGRESS_FILE}}` at the START and END of each phase:
 5. All long-running commands: print config + log path + expected duration before starting.
 6. Surface progress every 30-60 seconds during benchmark/profile runs.
 7. On any phase failure: write `status: failed` to progress.json, print the error, stop.
+
+### Critical Agent Execution Rules (non-negotiable)
+
+8. **Never split a phase into multiple bash calls.** Each phase doc contains one `{ ... } 2>&1 | tee -a "$PHASE_LOG"` block. Execute it as a **single bash call** with a sufficiently large timeout. Splitting destroys the log and breaks the tee wrapper.
+   - Phase 0: timeout 120s
+   - Phase 1: timeout 600s  (server startup can take 5+ min)
+   - Phase 2: timeout 3600s (bench + profiling at high concurrency can exceed 30 min)
+   - Phase 3: timeout 600s
+   - Phase 4: timeout 3600s (TunableOps tuning can take 30+ min)
+   - Phase 5: timeout 3600s (two E2E benchmark sweeps + server restart)
+   - Phase 6: timeout 120s
+
+9. **Always use SIGTERM first, never `kill -9` directly** to stop vLLM. `kill -9` skips
+   uvicorn/EngineCore cleanup and leaves orphan `multiprocessing.resource_tracker` children
+   holding `/dev/kfd` open — ROCm will NOT release VRAM until those children exit.
+   The correct pattern (used in Phase 1, Phase 5, Phase 6):
+   ```bash
+   PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
+   if [ -n "$PID" ]; then
+       kill -SIGTERM $PID 2>/dev/null || true
+       for _w in $(seq 1 30); do
+           kill -0 $PID 2>/dev/null || break
+           sleep 1
+       done
+       kill -0 $PID 2>/dev/null && kill -9 $PID 2>/dev/null || true
+       sleep 2
+       rm -f "{{OUTPUT_DIR}}/vllm.pid"
+   fi
+   ```
+   Never use `pkill -f` patterns either — they scan all processes and hang on zombies.
+   NOTE: EngineCore does NOT die automatically when the parent is killed with SIGKILL.
+   kill -9 only kills the targeted PID; EngineCore becomes an orphan child of PID 1 and
+   continues holding the GPU context. SIGTERM is required because it triggers the vLLM
+   shutdown chain which signals EngineCore to exit before the APIServer itself exits.
+
+10. **Never read `/proc/{PID}/environ`** to detect environment variables of a running process. Use the `gpu_selection.txt` file written by Phase 1 instead.
 
 ---
 

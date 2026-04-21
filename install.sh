@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# vllm-optimize points to vllm-optimize-v2 (rebuilt implementation)
+# The skills/ directory has a vllm-optimize symlink → vllm-optimize-v2
 SKILL_NAMES=("inferencex-optimize" "vllm-optimize")
 MODE="copy"
 
@@ -101,19 +103,16 @@ install_skill() {
 
   mkdir -p "$(dirname "$DEST_DIR")"
 
-  BACKUP_ROOT="$(dirname "$DEST_DIR")/.skill-backups/$SKILL_NAME"
-
+  # Remove existing install (copy or symlink) before reinstalling.
+  # No backup is created — the source repo is the canonical version.
   if [[ -e "$DEST_DIR" || -L "$DEST_DIR" ]]; then
-    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$BACKUP_ROOT"
-    BACKUP_PATH="${BACKUP_ROOT}/${TIMESTAMP}"
-    mv "$DEST_DIR" "$BACKUP_PATH"
-    echo "Backed up existing install to: $BACKUP_PATH"
+    rm -rf "$DEST_DIR"
   fi
 
   if [[ "$MODE" == "link" ]]; then
     ln -s "$SOURCE_DIR" "$DEST_DIR"
     echo "  Linked: $SKILL_NAME -> $SOURCE_DIR"
+    echo "  (Changes to repo files take effect immediately — no reinstall needed)"
   else
     mkdir -p "$DEST_DIR"
     cp -R "$SOURCE_DIR"/. "$DEST_DIR"/

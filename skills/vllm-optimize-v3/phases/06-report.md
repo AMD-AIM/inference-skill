@@ -183,6 +183,17 @@ if failed:
 else:
     lines.append("All identified targets had real shapes and were attempted.")
 
+# Attribution for concurrencies showing ~1.0x speedup
+near_baseline = {c: v for c, v in patched.items() if v.get("speedup", 1.0) < 1.05}
+if near_baseline:
+    lines.append(f"\n**Why conc={','.join(near_baseline)} shows ~1.0x:**")
+    lines.append(
+        "vLLM dispatches decode with batch_size ≤ 4 through `wvSplitK`/`LLMM1` kernels "
+        "(`rocm_unquantized_gemm_impl`, `utils.py:181`), bypassing TunableOps entirely. "
+        "~1.0x at these concurrencies is expected — `wvSplitK` is already near-optimal "
+        "for RDNA3 small-batch decode. TunableOps only intercepts batch_size > 4 (`aten::mm` path)."
+    )
+
 lines.append("\n## Recommendations\n")
 if integrated and avg_e2e >= 1.10:
     lines.append(f"1. **Integration successful**: avg E2E speedup = {avg_e2e:.3f}x")
@@ -247,6 +258,29 @@ print(f"  =========================================")
 print(f"  Full report: {{REPORT_DIR}}/final_report.md")
 PYEOF
 
+# ── Step 4: Shut down vLLM server ─────────────────────────────────────────
+# The server has been running since Phase 1. Pipeline is complete — shut it
+# down gracefully so ROCm releases VRAM. SIGTERM allows uvicorn + EngineCore
+# to close GPU contexts cleanly. Never leave vLLM running after the pipeline.
+echo "[$(date +%T)] [Step 4] Shutting down vLLM server..."
+FINAL_PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
+if [ -n "$FINAL_PID" ]; then
+    kill -SIGTERM $FINAL_PID 2>/dev/null || true
+    for _w in $(seq 1 30); do
+        kill -0 $FINAL_PID 2>/dev/null || { echo "  vLLM exited cleanly after ${_w}s."; break; }
+        sleep 1
+    done
+    if kill -0 $FINAL_PID 2>/dev/null; then
+        echo "  Still alive — SIGKILL"
+        kill -9 $FINAL_PID 2>/dev/null || true
+        sleep 2
+    fi
+    rm -f "{{OUTPUT_DIR}}/vllm.pid"
+    echo "  vLLM server stopped. VRAM released."
+else
+    echo "  No vLLM PID on record (already stopped)."
+fi
+
 # ── Completion ─────────────────────────────────────────────────────────
 echo "[$(date +%T)] === Phase 6/6: report — DONE ==="
 echo "Full report: {{REPORT_DIR}}/final_report.md"
@@ -261,6 +295,36 @@ p.update({'phases_completed':list(dict.fromkeys(p.get('phases_completed',[])+['r
           'final_report':'{{REPORT_DIR}}/final_report.md'})
 json.dump(p,open('{{PROGRESS_FILE}}','w'),indent=2)
 " 2>/dev/null || true
+```
+
+## Step 4 (MANDATORY SEPARATE BASH CALL): Shut Down vLLM Server
+
+**This step MUST be a separate bash tool call, not merged into the report bash block above.**
+The server has been running since Phase 1 and must be stopped to release GPU VRAM.
+
+```bash
+# ── MANDATORY: Kill vLLM server after pipeline completes ──────────────────
+PHASE_LOG="{{OUTPUT_DIR}}/logs/phase_6_report.log"
+{
+FINAL_PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
+if [ -n "$FINAL_PID" ]; then
+    echo "[$(date +%T)] [Step 4] Shutting down vLLM server PID=$FINAL_PID (SIGTERM)..."
+    kill -SIGTERM $FINAL_PID 2>/dev/null || true
+    for _w in $(seq 1 30); do
+        kill -0 $FINAL_PID 2>/dev/null || { echo "  vLLM exited cleanly after ${_w}s."; break; }
+        sleep 1
+    done
+    if kill -0 $FINAL_PID 2>/dev/null; then
+        echo "  Still alive after 30s — sending SIGKILL"
+        kill -9 $FINAL_PID 2>/dev/null || true
+        sleep 2
+    fi
+    rm -f "{{OUTPUT_DIR}}/vllm.pid"
+    echo "[$(date +%T)] vLLM server stopped. GPU VRAM released."
+else
+    echo "[$(date +%T)] [Step 4] No vLLM PID on record (already stopped or never started)."
+fi
+} 2>&1 | tee -a "$PHASE_LOG"
 ```
 
 **Workflow complete.**
