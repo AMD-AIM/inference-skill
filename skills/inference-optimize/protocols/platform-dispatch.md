@@ -8,11 +8,13 @@ The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical cont
 | `monitor_fn` | `(phase_key, result_path, summary_path, checks) -> verdict_dict` | Spawn monitor agent, return verdict |
 | `rca_fn` | `(phase_key, manifest_dict) -> rca_dict` | Spawn RCA/analysis agent, return analysis |
 
-When a callback is `None`, the runner applies its default: `dispatch_fn` returns PASS (shadow mode), `rca_fn` is skipped.
+When a callback is `None`, the runner applies its default only in shadow/test scenarios. `dispatch_fn=None` is still valid in shadow mode (simulated PASS path).
 
 `monitor_fn=None` is only valid for shadow/unit-test paths. Real runs must wire `monitor_fn` so verdicts come from a separate monitor agent. In non-shadow runs with `dispatch_fn` wired, the runner fails closed with `error_type: monitor_error` when `monitor_fn` is missing.
 
-When a phase has a non-null `rca_artifact` in `phase-registry.json` and the host platform supplies `rca_fn=None`, the runner emits a `WARNING`-level log line and records `rca_skipped[phase_key] = "rca_fn_not_wired"` in `progress.json`. RCA is not silently absent: integrators are expected to wire `rca_fn` for any platform that runs the optimize/profile modes end-to-end. Shadow-mode and unit-test runs may legitimately leave `rca_fn=None`; the warning makes the absence auditable.
+`rca_fn=None` is also shadow/test-only when the resolved phase list includes critical phases with non-null `rca_artifact`. In non-shadow runs with `dispatch_fn` wired, the runner fails closed at startup with `error_type: rca_error` when such RCA-required phases are present and `rca_fn` is missing.
+
+The internal `rca_skipped[phase_key] = "rca_fn_not_wired"` marker remains as a defensive fallback for shadow/test paths and should not appear in properly wired real runs.
 
 ## Cursor
 

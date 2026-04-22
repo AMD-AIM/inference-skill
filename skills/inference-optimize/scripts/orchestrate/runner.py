@@ -88,7 +88,7 @@ class RunnerState:
         self.verdict_sequence = []
         self.blockers_emitted = []
         self.human_extensions = {}
-        self.rca_skipped = {}  # phase_key -> reason string when rca_fn is None but rca_artifact is set
+        self.rca_skipped = {}  # phase_key -> reason string for shadow/test RCA callback fallback
         # budget_mode replaces the legacy ad-hoc budget_override.unlimited.
         # default = enforce positive rerun.max_per_phase/max_total caps from registry
         # diagnostic = orchestrator-set after systemic RCA accept_finding (no further e2e attempts)
@@ -249,6 +249,15 @@ class DeterministicRunner:
             if not os.path.exists(path):
                 errors.append(f"Missing artifact: {artifact}")
         return errors
+
+    def phases_requiring_rca(self, phase_list):
+        """Return critical phases in this run that require RCA wiring."""
+        required = []
+        for phase_key in phase_list:
+            phase_meta = self.phases.get(phase_key, {})
+            if phase_meta.get("critical") and phase_meta.get("rca_artifact"):
+                required.append(phase_key)
+        return required
 
     def _resolve_from_config(self, source, var):
         """Resolve a variable from config source."""
@@ -775,7 +784,12 @@ class DeterministicRunner:
         return {"action": "retry", "phase_reruns": phase_reruns}
 
     def _invoke_phase_rca(self, phase_key, phase_meta, verdict, verdict_severity, rca_fn, state):
-        """Run per-phase RCA if configured; record missing RCA wiring explicitly."""
+        """Run per-phase RCA if configured.
+
+        Non-shadow runs should fail closed earlier in run() when rca_fn is
+        missing for RCA-required phases. The branch below remains as a
+        defensive fallback for shadow/test paths.
+        """
         rca_artifact = phase_meta.get("rca_artifact")
         if not rca_artifact:
             return None
@@ -783,7 +797,8 @@ class DeterministicRunner:
         if rca_fn is None:
             logger.warning(
                 "rca_fn not wired; skipping RCA for phase %s "
-                "(rca_artifact=%s). Wire rca_fn in platform-dispatch to enable.",
+                "(rca_artifact=%s). This fallback is intended only for "
+                "shadow/test paths; real runs should fail closed at startup.",
                 phase_key,
                 rca_artifact.get("output", "?"),
             )
@@ -918,7 +933,9 @@ class DeterministicRunner:
             Spawns monitor agent. If None, pass-through is only allowed in
             shadow/test paths (dispatch_fn is None or runner.shadow=True).
         rca_fn: callable(phase_key, manifest_dict) -> rca_dict
-            Spawns RCA/analysis agent. If None, skips RCA on FAIL.
+            Spawns RCA/analysis agent. In non-shadow runs with dispatch_fn
+            wired, this callback must be present whenever the resolved
+            phase list includes critical phases with non-null rca_artifact.
         systemic_rca_fn: callable(phase_key, manifest_dict) -> systemic_rca_dict
             Spawns the systemic RCA agent when two consecutive per-phase RCAs
             share a fingerprint. If None, the orchestrator logs a warning and
@@ -969,6 +986,21 @@ class DeterministicRunner:
             )
             logger.error(message)
             self.write_runner_failure("monitor_error", message)
+            state.status = "failed"
+            state.write_progress()
+            state.write_parity_manifest()
+            return state
+
+        rca_required_phases = self.phases_requiring_rca(phase_list)
+        if dispatch_fn is not None and rca_fn is None and not self.shadow and rca_required_phases:
+            message = (
+                "rca_fn not wired for non-shadow run. "
+                "Critical phases require independent RCA callbacks: "
+                f"{', '.join(rca_required_phases)}. "
+                "RCA pass-through is only allowed in shadow/test paths."
+            )
+            logger.error(message)
+            self.write_runner_failure("rca_error", message)
             state.status = "failed"
             state.write_progress()
             state.write_parity_manifest()

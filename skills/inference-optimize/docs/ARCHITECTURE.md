@@ -51,7 +51,7 @@ These are enforced by `tests/test_invariants.py`, not just prose.
 |----|-----------|---------------|
 | INV-1 | `progress.json` has exactly one writer on the runner path: the runner. | Commit 0 (stub), Commit 4 (real) |
 | INV-2 | Every control-plane JSON artifact carries `schema_version` and is validated on write and on resume. | Commit 2 |
-| INV-3 | Critical phases fail closed on missing or malformed monitor JSON, RCA JSON, handoff data, or validator-critical artifacts. | Commit 3 |
+| INV-3 | Critical phases fail closed on missing or malformed monitor JSON, RCA JSON, handoff data, validator-critical artifacts, and (runner path) missing RCA callback wiring for RCA-required phases. | Commit 3 |
 | INV-4 | Attempt artifacts are immutable and attempt-scoped; retries append, never mutate. | Commit 4 |
 | INV-5 | The deterministic runner is the default orchestration path; legacy remains available via explicit rollback (`USE_RUNNER=false`) with parity/rollback proof. | Commit 7+ |
 | INV-6 | LLM judgment stays only where it adds value: intake UX, monitor explanation, RCA interpretation. Mechanical work moves to code. | Commit 4 |

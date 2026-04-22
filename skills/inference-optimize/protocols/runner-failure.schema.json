@@ -15,6 +15,7 @@
         "schema_invalid",
         "missing_artifact",
         "monitor_error",
+        "rca_error",
         "timeout",
         "budget_exhausted",
         "manual_intervention_required"

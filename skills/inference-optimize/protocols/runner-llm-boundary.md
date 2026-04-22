@@ -57,6 +57,7 @@ When the runner detects a failure, it classifies it:
 | `schema_invalid` | Artifact fails schema validation | Re-dispatch with validation feedback |
 | `missing_artifact` | Required artifact not produced | Re-dispatch with explicit artifact list |
 | `monitor_error` | Monitor agent failure (crash, malformed output) | Fail-closed on critical phases (Commit 3) |
+| `rca_error` | RCA callback wiring missing for RCA-required phases in non-shadow run | Fail-closed before first phase dispatch |
 | `timeout` | Phase exceeded wall-clock limit | Treat as FAIL, route through RCA |
 | `budget_exhausted` | Positive retry/total rerun limits exceeded | Fallback or stop |
 | `manual_intervention_required` | Unrecoverable state needs human | Stop with structured blocker |

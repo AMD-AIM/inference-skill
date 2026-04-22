@@ -77,6 +77,23 @@ def _load_capped_registry(max_per_phase=2, max_total=5):
     return registry
 
 
+def _make_retry_rca_fn():
+    """Return RCA stub with changing fingerprints to avoid systemic triggers."""
+    call_count = {"value": 0}
+
+    def _rca_fn(phase_key, manifest_dict):
+        call_count["value"] += 1
+        n = call_count["value"]
+        return {
+            "terminal_action": "retry",
+            "retry_recommendation": "retry",
+            "root_cause_class": f"test_rca_{phase_key}",
+            "key_signal_names": [f"signal_{n}"],
+        }
+
+    return _rca_fn
+
+
 class TestV2FallbackDispatch:
     """V2 path re-dispatches from fallback target (unlike V1 which skips it)."""
 
@@ -102,7 +119,11 @@ class TestV2FallbackDispatch:
             _create_artifacts(tmpdir)
             registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
+            state = runner.run(
+                dispatch_fn=dispatch_fn,
+                monitor_fn=monitor_fn,
+                rca_fn=_make_retry_rca_fn(),
+            )
 
             # kernel-optimize has fallback_target = problem-generate
             # After 3 FAILs, budget exhausted -> redirect to problem-generate
@@ -143,7 +164,11 @@ class TestV2FallbackDispatch:
             _create_artifacts(tmpdir)
             registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
+            state = runner.run(
+                dispatch_fn=dispatch_fn,
+                monitor_fn=monitor_fn,
+                rca_fn=_make_retry_rca_fn(),
+            )
 
             assert state.status == "completed", f"Expected completed, got {state.status}"
             assert len(state.fallbacks_used) == 1
@@ -170,7 +195,11 @@ class TestV2FallbackDispatch:
             _create_artifacts(tmpdir)
             registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
+            state = runner.run(
+                dispatch_fn=dispatch_fn,
+                monitor_fn=monitor_fn,
+                rca_fn=_make_retry_rca_fn(),
+            )
 
             # Should eventually fail (budget exhausted after fallback exhausted)
             assert state.status == "failed"
@@ -201,7 +230,11 @@ class TestV2FallbackDispatch:
             _create_artifacts(tmpdir)
             registry = _load_capped_registry()
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn)
+            state = runner.run(
+                dispatch_fn=dispatch_fn,
+                monitor_fn=monitor_fn,
+                rca_fn=_make_retry_rca_fn(),
+            )
 
             # In V1, problem-generate appears only once (initial dispatch).
             # The fallback break doesn't re-dispatch it.

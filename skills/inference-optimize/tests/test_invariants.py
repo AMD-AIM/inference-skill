@@ -314,7 +314,7 @@ class TestSchemaFiles:
         with open(schema_path) as f:
             schema = json.load(f)
         error_types = schema["properties"]["error_type"]["enum"]
-        expected = {"schema_invalid", "missing_artifact", "monitor_error",
+        expected = {"schema_invalid", "missing_artifact", "monitor_error", "rca_error",
                     "timeout", "budget_exhausted", "manual_intervention_required"}
         assert set(error_types) == expected
 

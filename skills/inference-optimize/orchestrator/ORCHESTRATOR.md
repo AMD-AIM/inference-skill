@@ -217,6 +217,10 @@ The RCA agent (`agents/rca-agent.md`) is spawned in two situations:
 Both paths build the manifest the same way. Skip RCA when `phase.rca_artifact` is null
 (non-critical phases have no analysis context registered).
 
+Runner wiring note: on the deterministic runner path, non-shadow runs fail closed
+before dispatch when a resolved critical phase requires RCA (`rca_artifact` is set)
+but `rca_fn` is not wired. This is surfaced as `runner_failure.error_type=rca_error`.
+
 Manifest construction:
 
 1. Read `phases[phase_key].rca_artifact` from the registry.
@@ -328,6 +332,13 @@ If the monitor agent itself fails (malformed output, timeout, crash):
 3. Set `monitor_failure: true` in the phase's `retry_counts` entry for observability.
 4. Do not count the monitor failure against the rerun budget.
 5. Continue to the next phase.
+
+## RCA Wiring Failure Handling (Runner Path)
+
+If the deterministic runner detects that non-shadow dispatch is active but `rca_fn`
+is missing while the resolved phase list contains RCA-required critical phases, the
+run fails closed before the first phase dispatch with `runner_failure.error_type=rca_error`.
+This is treated as control-plane infrastructure failure, not a phase-level verdict.
 
 ## Timeout Policy
 

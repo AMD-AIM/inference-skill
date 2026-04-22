@@ -41,6 +41,23 @@ def _minimal_config(mode="benchmark"):
     }
 
 
+def _make_retry_rca_fn():
+    """Return RCA stub with changing fingerprints to avoid systemic triggers."""
+    call_count = {"value": 0}
+
+    def _rca_fn(phase_key, manifest_dict):
+        call_count["value"] += 1
+        n = call_count["value"]
+        return {
+            "terminal_action": "retry",
+            "retry_recommendation": "retry",
+            "root_cause_class": f"test_rca_{phase_key}",
+            "key_signal_names": [f"signal_{n}"],
+        }
+
+    return _rca_fn
+
+
 class TestAtomicWrite:
     def test_atomic_write_creates_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -277,7 +294,11 @@ class TestDeterministicRunner:
         with tempfile.TemporaryDirectory() as tmpdir:
             config["OUTPUT_DIR"] = tmpdir
             runner = DeterministicRunner(config, registry, tmpdir)
-            state = runner.run(dispatch_fn=failing_dispatch, monitor_fn=monitor_from_dispatch)
+            state = runner.run(
+                dispatch_fn=failing_dispatch,
+                monitor_fn=monitor_from_dispatch,
+                rca_fn=_make_retry_rca_fn(),
+            )
 
             assert state.status == "completed"
             assert state.retry_counts.get("benchmark") == 1
@@ -309,6 +330,7 @@ class TestDeterministicRunner:
             state = runner.run(
                 dispatch_fn=failing_then_passing_dispatch,
                 monitor_fn=monitor_from_dispatch,
+                rca_fn=_make_retry_rca_fn(),
             )
 
             assert state.status == "completed"
@@ -334,6 +356,32 @@ class TestDeterministicRunner:
             with open(failure_path) as f:
                 failure = json.load(f)
             assert failure["error_type"] == "monitor_error"
+
+    def test_rca_fn_required_for_non_shadow_dispatch_when_mode_requires_rca(self):
+        registry = _load_registry()
+        config = _minimal_config("benchmark")
+
+        def always_pass_dispatch(phase_key, handoff_path):
+            return {"verdict": "PASS", "attempt": 1}
+
+        def always_pass_monitor(phase_key, result_path, summary_path, checks):
+            return {"verdict": "PASS", "attempt": 1}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config["OUTPUT_DIR"] = tmpdir
+            runner = DeterministicRunner(config, registry, tmpdir)
+            state = runner.run(
+                dispatch_fn=always_pass_dispatch,
+                monitor_fn=always_pass_monitor,
+                rca_fn=None,
+            )
+
+            assert state.status == "failed"
+            failure_path = os.path.join(tmpdir, "runner_failure.json")
+            assert os.path.isfile(failure_path)
+            with open(failure_path) as f:
+                failure = json.load(f)
+            assert failure["error_type"] == "rca_error"
 
     def test_skip_integration_removes_phase(self):
         registry = _load_registry()

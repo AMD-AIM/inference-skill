@@ -102,6 +102,7 @@ The file-based communication protocol (handoffs, results, reviews) is identical 
 - **OpenCode**: Same as Claude Code. Verify discovery with `opencode debug skill`. For non-interactive runs, set `"question": "allow"` in `.opencode/opencode.jsonc`. Context compaction remains handoff-based here as well.
 
 The deterministic runner (`scripts/orchestrate/runner.py`) is the canonical control plane for all platforms. It accepts platform-specific `dispatch_fn`, `monitor_fn`, and `rca_fn` callbacks.
+For non-shadow runs with dispatch enabled, callback wiring is fail-closed: missing `monitor_fn` or missing `rca_fn` for RCA-required critical phases aborts startup.
 
 ## Modes
 
