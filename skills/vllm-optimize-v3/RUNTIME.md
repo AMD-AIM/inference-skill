@@ -36,6 +36,7 @@ Resolve ALL of these before loading any phase doc. Replace `{{VAR}}` in phase do
 | `MAX_OPTIMIZATION_ATTEMPTS` | 8 | Intake Q7 |
 | `MAX_CONSECUTIVE_REJECTIONS` | 3 | Intake Q7 |
 | `MODE` | `optimize` | Intake Q1 |
+| `DEMO_MODE` | `1` | Intake Q8 |
 | `HF_ENDPOINT` | `""` | auto-detected |
 | `HF_HUB_DISABLE_XET` | `""` | auto-detected |
 
@@ -172,6 +173,28 @@ Update `{{PROGRESS_FILE}}` at the START and END of each phase:
 {"phases_completed": [...prev, "env"], "current_phase": null, "status": "idle",
  "details": {"phase": "env", "result": "ok", ...}}
 ```
+
+---
+
+## Demo Mode
+
+When `DEMO_MODE=1` (default), after the bash block for each numbered step
+within any phase completes, you **must**:
+
+1. Print a one-line summary of what the step produced (key metric or outcome).
+2. Use the **ask tool** to present:
+   - header: `Phase N — Step M done`
+   - question: `[one-line summary]. Continue to next step?`
+   - options: `Continue`, `Abort`
+3. If the user selects **Continue** → proceed.
+4. If the user selects **Abort** → stop execution, print a summary of all
+   completed steps so far, and exit cleanly. Do not continue any further steps.
+
+When `DEMO_MODE=0` → execute all steps without any interruption.
+
+The ask tool pause applies inside phases too, between numbered steps
+(e.g. between Phase 2 Step 1 and Step 2). It does NOT apply within a single
+bash block (the block itself runs to completion as a unit).
 
 ---
 

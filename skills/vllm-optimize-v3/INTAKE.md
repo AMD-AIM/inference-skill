@@ -108,6 +108,13 @@ Send all at once after discovery:
   - `Deep` — 15 attempts, stop after 5 rejections
   - `Quick` — 4 attempts, stop after 2 rejections
 
+### Q8: Demo mode
+- header: `Demo mode`
+- question: `Pause after each step for confirmation?`
+- options:
+  - `Yes — pause after each step (Recommended)` → `DEMO_MODE=1`
+  - `No — run all steps to completion` → `DEMO_MODE=0`
+
 ---
 
 ## Confirmation
@@ -125,6 +132,7 @@ Plan summary:
   Concurrency: {{CONCURRENCY_LEVELS}}
   Dtype:       {{DTYPE}}
   Opt budget:  {{MAX_OPTIMIZATION_ATTEMPTS}} attempts / {{MAX_CONSECUTIVE_REJECTIONS}} max rejections
+  Demo mode:   {{DEMO_MODE}}
 ```
 
 Then ask:
