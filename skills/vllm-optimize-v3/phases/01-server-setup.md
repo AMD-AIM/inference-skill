@@ -139,7 +139,7 @@ echo "  GPU selection saved → {{OUTPUT_DIR}}/gpu_selection.txt"
 # ── Step 3: Environment variables ─────────────────────────────────────────
 echo "[$(date +%T)] [Step 3] Setting env vars..."
 export HF_ENDPOINT="${HF_ENDPOINT:-http://134.199.133.77}"
-export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+export HF_HUB_DISABLE_XET=1   # always disable XET; required for non-Cloudflare HF endpoints
 export HF_HOME="${HF_HOME:-/root/.cache/huggingface}"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export VLLM_RPC_TIMEOUT=1800000
@@ -201,7 +201,11 @@ else:
     # Not found locally — download
     local = f"/app/{name}"
     print(f"  Downloading: {model} → {local}...")
-    r = subprocess.run(["hf","download",model,"--local-dir",local], timeout=3600)
+    dl_env = dict(os.environ)
+    dl_env["HF_HUB_DISABLE_XET"] = "1"   # always disable XET for non-Cloudflare endpoints
+    dl_env["HF_ENDPOINT"] = dl_env.get("HF_ENDPOINT", "http://134.199.133.77")
+    r = subprocess.run(["hf","download",model,"--local-dir",local],
+                       timeout=3600, env=dl_env)
     if r.returncode != 0: print("  ERROR: download failed"); sys.exit(1)
     print(f"  Downloaded: {local}")
     open("{{OUTPUT_DIR}}/resolved_model_path.txt","w").write(local)
