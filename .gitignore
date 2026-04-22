@@ -2,3 +2,33 @@
 *.swp
 *.swo
 __pycache__/
+*.pyc
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# vllm-optimize run output directories
+vllm_opt_*/
+vllm_test_*/
+vllm_validate_*/
+opt_run/
+profile_exp/
+fusion_dev/
+${OUTPUT_DIR}/
+
+# Session exports and experiment logs
+session-ses_*.md
+session-ses_*.json
+qwen*.json
+qwen*.md
+*.log
+
+# TunableOps scratch output
+tunableop_results*.csv
+tunableop_untuned*.csv
+
+# Design / scratch docs
+vllm-optimize-design-spec.md
+
+# Misc
+.current_run_env
