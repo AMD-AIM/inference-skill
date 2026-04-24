@@ -34,20 +34,19 @@ Use only the files bundled next to this skill:
 
 `scripts/optimize/`:
 - `classify_kernel.py` — Kernel type classification (Phase 6)
-- `analyze_fusion.py` — Fusion opportunity detection (Phase 6)
-- `extract_model_shapes.py` — Model shape extraction (Phase 6)
-- `generate_problems.py` — GEAK problem file generation (Phase 6)
-- `resolve_geak_mode.py` — GEAK mode resolution (Phase 7)
+- `resolve_upstream_source.py` — Resolve symbol → upstream repo / source file via `kernel_source_map.yaml` (Phase 6)
+- `fork_upstream.py` — Clone/update referenced upstream repos at pinned commits into `forks/<lib>/` (Phase 6)
+- `capture_kernel_reference.py` — Capture bf16 reference tensors for Bucket B kernels (Phase 6)
 - `load_optimization_manifest.py` — Manifest loading/filtering (Phase 7)
-- `kernel_test_runner.py` — Kernel correctness/benchmark testing (Phase 7)
-- `kernel_finalize.py` — Best kernel finalization (Phase 7)
+- `library_test_driver.py` — Run a library's own pytest suite against the fork (Phase 7)
+- `allocator_integration_test.py` — Multi-step decode + multi-batch prefill against bf16 reference (Phase 7)
+- `no_harness_fallback_test.py` — Bucket B inner-loop test command (Phase 7)
 - `collect_winning_kernels.py` — Kernel collection (Phase 7)
-- `verify_winning_kernels.py` — Pre-integration verification (Phase 8)
 
-`scripts/plugin/`:
-- `generate_vllm_plugin.py` — vLLM plugin generation (Phase 8)
-- `generate_sglang_plugin.py` — SGLang plugin generation (Phase 8)
-- `inject_plugin.py` — Plugin injection into benchmark (Phase 8)
+`scripts/integrate/`:
+- `rebuild_libraries.py` — Editable install of each fork (Phase 8)
+- `verify_dispatch.py` — rocprofv3 kernel-trace + symbol verification (Phase 6 baseline / Phase 7 pre-flight / Phase 8 post-rebuild)
+- `run_e2e.py` — Boots vLLM with rebuilt forks for the e2e benchmark (Phase 8)
 
 `scripts/orchestrate/`:
 - `predicate_engine.py` — Structured detection rule evaluation (monitor)
@@ -60,13 +59,16 @@ Use only the files bundled next to this skill:
 
 **Templates:**
 - `templates/benchmark_report.md` — Phase 3 report template
-- `templates/dispatch_plugin_example.py` — Reference shape-aware dispatch plugin template (Phase 8 Step 1.5)
 - `templates/profiling_report.md` — Phase 5 report template
 - `templates/profile_analysis_schema.json` — Phase 5 JSON schema
 - `templates/optimization_report.md` — Phase 9 report template
 
 **Resources:**
 - `resources/TraceLens-internal.tar.gz`
+- `resources/kernel_source_map.yaml` — Symbol → upstream repo / source file / library_test_path / strategy map (Phase 6)
+- `resources/library_pins.yaml` — Per-vLLM-version commit pins for each upstream library (Phase 6)
+- `resources/redirect_recipes.yaml` — Per `dispatch_redirect_*` strategy patch hints (Phase 7)
+- `resources/geak_override.yaml` — Skill-owned GEAK config override (Phase 7)
 
 If required files are missing, stop and report incomplete installation.
 

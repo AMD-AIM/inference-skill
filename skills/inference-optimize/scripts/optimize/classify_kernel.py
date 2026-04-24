@@ -6,8 +6,9 @@ Single source of truth for the kernel type taxonomy. Everything is driven by
 KERNEL_TYPES -- a declarative registry that defines patterns, GEAK mode,
 default compute spec, compute class, and skip behavior per type.
 
-Imported by analyze_fusion.py, generate_problems.py,
-and Phase 06 Step 1.5. Part of the inference-optimize skill.
+Imported by Phase 06 (`upstream-resolve` / `problem-generate`) for kernel
+classification feeding `kernel_source_map.yaml` lookup. Part of the
+inference-optimize skill.
 """
 import csv
 import os
