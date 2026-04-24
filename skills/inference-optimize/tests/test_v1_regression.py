@@ -7,10 +7,16 @@ import pytest
 import tempfile
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
+TESTS_DIR = pathlib.Path(__file__).resolve().parent
 RUNNER_DIR = SKILL_ROOT / "scripts" / "orchestrate"
 REGISTRY_PATH = SKILL_ROOT / "orchestrator" / "phase-registry.json"
 
 sys.path.insert(0, str(RUNNER_DIR))
+# Ensure sibling module `generate_golden_files` is importable regardless of
+# pytest collection order. The `tests/` package name collides with a
+# top-level `tests/` dir at the repo root that lacks this module, so a bare
+# `from generate_golden_files` fails in full-suite runs.
+sys.path.insert(0, str(TESTS_DIR))
 
 from runner import DeterministicRunner, RunnerState, compute_parity_hash
 
@@ -105,7 +111,7 @@ class TestV1Regression:
         """Parity snapshot must match golden file exactly."""
         golden = load_golden(scenario)
         # Re-run the scenario
-        from tests.generate_golden_files import SCENARIOS as SPECS, make_mock_fns
+        from generate_golden_files import SCENARIOS as SPECS, make_mock_fns
 
         spec = SPECS[scenario]
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -121,7 +127,7 @@ class TestV1Regression:
 
     def test_progress_schema_unchanged_v1(self):
         """progress.json schema_version is 1.0 in the runner state."""
-        from tests.generate_golden_files import SCENARIOS as SPECS, make_mock_fns
+        from generate_golden_files import SCENARIOS as SPECS, make_mock_fns
 
         spec = SPECS["optimize_all_pass"]
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -141,7 +147,7 @@ class TestV1Regression:
         golden = load_golden("optimize_all_pass")
         golden_hash = compute_parity_hash(golden)
 
-        from tests.generate_golden_files import SCENARIOS as SPECS, make_mock_fns
+        from generate_golden_files import SCENARIOS as SPECS, make_mock_fns
 
         spec = SPECS["optimize_all_pass"]
         with tempfile.TemporaryDirectory() as tmpdir:
