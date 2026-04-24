@@ -9,6 +9,7 @@ Usage: python3 generate_optimization_summary.py \
 import argparse
 import json
 import os
+import warnings
 
 from integration_outcome import SCHEMA_VERSION, pipeline_status
 
@@ -146,16 +147,28 @@ def main():
         #   {"forks": {<lib>: {repo_url, pinned_commit, fork_path, dirty,
         #                      rebuild_command, ...}, ...},
         #    "ck_branch_merged_status": bool, "vllm_version": ..., ...}
-        fork_entries = forks.get("forks", {}) if isinstance(forks, dict) else {}
+        fork_entries = forks.get("forks", {}) if isinstance(forks, dict) else None
         if isinstance(fork_entries, dict):
             entries_iter = fork_entries.values()
             summary["forks_required_count"] = len(fork_entries)
-        else:  # tolerate legacy/list shape so the report still renders
-            entries_iter = [e for e in fork_entries if isinstance(e, dict)]
-            summary["forks_required_count"] = len(fork_entries) if isinstance(fork_entries, list) else 0
-        summary["forks_pinned_count"] = sum(
-            1 for e in entries_iter if isinstance(e, dict) and not e.get("dirty", False)
-        )
+            summary["forks_pinned_count"] = sum(
+                1 for e in entries_iter if isinstance(e, dict) and not e.get("dirty", False)
+            )
+        else:
+            # Schema regression: producer (fork_upstream.py) is contracted to
+            # write a top-level dict with a dict-of-dicts at "forks". Anything
+            # else (None, list, scalar) is a bug -- fail loudly rather than
+            # silently zeroing out the report (the prior HIGH bug).
+            warnings.warn(
+                f"forks/manifest.json at {forks_manifest_path!r} has unexpected "
+                f"shape: top-level type={type(forks).__name__}, "
+                f"forks-field type={type(fork_entries).__name__}. "
+                "Expected dict-of-dicts under 'forks'. Counts set to 0.",
+                UserWarning,
+                stacklevel=2,
+            )
+            summary["forks_required_count"] = 0
+            summary["forks_pinned_count"] = 0
         summary["ck_branch_merged_status"] = forks.get("ck_branch_merged_status") if isinstance(forks, dict) else None
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)

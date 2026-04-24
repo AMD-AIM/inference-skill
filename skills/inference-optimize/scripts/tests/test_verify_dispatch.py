@@ -39,6 +39,53 @@ class TestParseKernelCounts:
     def test_missing_file_returns_empty(self, tmp_path):
         assert verify_dispatch.parse_kernel_counts(str(tmp_path / "nope.json")) == {}
 
+    def test_legacy_buffer_records_schema(self, tmp_path):
+        """rocprofv3 0.4.x nests dispatches under
+        rocprofiler-sdk-tool.buffer_records.kernel_dispatch."""
+        doc = {
+            "rocprofiler-sdk-tool": {
+                "buffer_records": {
+                    "kernel_dispatch": [
+                        {"kernel_name": "x_kernel"},
+                        {"kernel_name": "y_kernel"},
+                        {"kernel_name": "x_kernel"},
+                    ]
+                }
+            }
+        }
+        path = tmp_path / "trace.json"
+        path.write_text(json.dumps(doc))
+        counts = verify_dispatch.parse_kernel_counts(str(path))
+        assert counts == {"x_kernel": 2, "y_kernel": 1}
+
+    def test_unrecognized_schema_warns_and_returns_empty(self, tmp_path):
+        """A trace with no recognized dispatch path must warn (not silently
+        zero) so dispatch verification fails closed loudly."""
+        doc = {"some_unrelated_top_level": [{"kernel_name": "z_kernel"}]}
+        path = tmp_path / "trace.json"
+        path.write_text(json.dumps(doc))
+        with pytest.warns(UserWarning, match="did not match any known"):
+            counts = verify_dispatch.parse_kernel_counts(str(path))
+        assert counts == {}
+
+    def test_no_double_count_across_nesting(self, tmp_path):
+        """Same kernel name appearing under an unrelated nested key must
+        NOT be summed twice -- only the canonical dispatch list counts."""
+        doc = {
+            "kernel_dispatches": [
+                {"kernel_name": "same_kernel"},
+                {"kernel_name": "same_kernel"},
+            ],
+            # Unrelated nested data containing the same kernel name --
+            # the recursive walker would have summed these. The direct-
+            # lookup parser must ignore them.
+            "extra": {"nested": {"kernel_name": "same_kernel"}},
+        }
+        path = tmp_path / "trace.json"
+        path.write_text(json.dumps(doc))
+        counts = verify_dispatch.parse_kernel_counts(str(path))
+        assert counts == {"same_kernel": 2}
+
 
 class TestEvaluate:
     def test_dispatch_verified_when_expected_present_and_no_leak(self):

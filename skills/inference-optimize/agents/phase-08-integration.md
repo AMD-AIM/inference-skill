@@ -163,9 +163,12 @@ Populate from `{{RESULTS_DIR}}/dispatch_verification.json`,
 
 ### 6. Clean Up
 
-```bash
-docker stop "$CONTAINER_NAME" 2>/dev/null; docker rm "$CONTAINER_NAME" 2>/dev/null
-```
+If `run_e2e.py` left a container running for the rebuild/benchmark, stop and
+remove it. The integration phase does not start its own container and does
+not receive `CONTAINER_NAME` in `required_context`; the e2e launcher manages
+container lifecycle internally. If you need to clean a stale container by
+name, list with `docker ps --filter "label=inference-optimize"` and stop the
+matching ID rather than dereferencing an unset variable.
 
 ### Completion
 

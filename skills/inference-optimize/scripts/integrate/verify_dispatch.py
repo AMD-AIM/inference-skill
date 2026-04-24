@@ -27,6 +27,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import warnings
 
 
 def run_rocprofv3(launcher_cmd, output_json):
@@ -42,34 +43,69 @@ def run_rocprofv3(launcher_cmd, output_json):
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def _extract_dispatch_records(doc):
+    """Return the list of kernel-dispatch records from a rocprofv3 JSON
+    document at the canonical documented path for the schema version in
+    use, or None if no recognized schema applies.
+
+    Recognized schemas:
+      - rocprofv3 >= 0.5 (current AMD ROCm release):
+          {"kernel_dispatches": [ {kernel_name, ...}, ... ]}
+      - rocprofv3 0.4.x (older):
+          {"rocprofiler-sdk-tool":
+             {"buffer_records": {"kernel_dispatch": [ {kernel_name, ...} ]}}}
+
+    A direct lookup is used rather than a recursive walker so the same
+    kernel name appearing at multiple nesting levels (which has been
+    observed across rocprofv3 versions) cannot be double-counted.
+    """
+    if isinstance(doc, dict):
+        # rocprofv3 >= 0.5 -- top-level "kernel_dispatches" list
+        kd = doc.get("kernel_dispatches")
+        if isinstance(kd, list):
+            return kd
+        # rocprofv3 0.4.x -- nested under "rocprofiler-sdk-tool"
+        sdk = doc.get("rocprofiler-sdk-tool")
+        if isinstance(sdk, dict):
+            buf = sdk.get("buffer_records")
+            if isinstance(buf, dict):
+                kd = buf.get("kernel_dispatch")
+                if isinstance(kd, list):
+                    return kd
+    return None
+
+
 def parse_kernel_counts(trace_path):
     """Aggregate kernel-name -> count from a rocprofv3 JSON trace.
 
-    rocprofv3's schema is verbose; we look for entries that carry a
-    'kernel_name' (or 'name') field and a per-dispatch record. This is
-    deliberately tolerant -- the unit test exercises the canonical shape
-    and validates the parsing logic separately.
+    Reads the documented schema path (see _extract_dispatch_records) and
+    counts `kernel_name` occurrences at exactly one nesting level so a
+    kernel cannot be double-counted by the structure of the file. Emits
+    a UserWarning when no recognized schema path is found rather than
+    silently returning empty counts.
     """
     if not os.path.isfile(trace_path):
         return {}
     with open(trace_path) as f:
         doc = json.load(f)
+    records = _extract_dispatch_records(doc)
+    if records is None:
+        warnings.warn(
+            f"rocprofv3 trace at {trace_path!r} did not match any known "
+            "schema path (kernel_dispatches | rocprofiler-sdk-tool."
+            "buffer_records.kernel_dispatch). Kernel counts will be empty; "
+            "dispatch verification will fail closed.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {}
     counts = {}
-
-    def _walk(node):
-        if isinstance(node, dict):
-            name = node.get("kernel_name") or node.get("kernel") or node.get("name")
-            if isinstance(name, str) and (
-                "kind" not in node or "kernel" in str(node.get("kind", "")).lower()
-            ):
-                counts[name] = counts.get(name, 0) + 1
-            for v in node.values():
-                _walk(v)
-        elif isinstance(node, list):
-            for item in node:
-                _walk(item)
-
-    _walk(doc)
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        name = rec.get("kernel_name") or rec.get("kernel") or rec.get("name")
+        if isinstance(name, str):
+            counts[name] = counts.get(name, 0) + 1
     return counts
 
 

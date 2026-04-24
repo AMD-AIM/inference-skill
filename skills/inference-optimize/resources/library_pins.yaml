@@ -11,10 +11,10 @@
 pins:
   - vllm_version: "v0.19.1"
     pins:
-      vllm: "v0.19.1"                  # vllm-project/vllm tag
-      aiter: "main"                    # ROCm/aiter -- pin to a commit at engagement start
-      fla: "main"                      # sustcsonglin/flash-linear-attention
-      composable_kernel: "develop"     # ROCm/composable_kernel -- build-time dep
-      rocblas: "develop"               # ROCm/rocBLAS
-      hipblaslt: "develop"             # ROCm/hipBLASLt
-      pytorch: "v2.5.1"                # pytorch/pytorch -- match vLLM's pinned torch
+      vllm: "b1388b1fbf5aaef47937fabe98931211684666a6"               # was: v0.19.1 @ 2026-04-24 (vllm-project/vllm)
+      aiter: "f1f5e0674d7381c565b4ea33c25d7d584cae85c7"              # was: main @ 2026-04-24 (ROCm/aiter)
+      fla: "101240f396a6b53e452defb371e3d6e98211535a"                # was: main @ 2026-04-24 (sustcsonglin/flash-linear-attention)
+      composable_kernel: "fdf4bb7fcc984811cef48ce817d89aac064b984a"  # was: develop @ 2026-04-24 (ROCm/composable_kernel)
+      rocblas: "153fef5344e4331b3875d9158b5232fc32942030"            # was: develop @ 2026-04-24 (ROCm/rocBLAS)
+      hipblaslt: "2cebcc7439f827cf063a227cc6361dc623901f40"          # was: develop @ 2026-04-24 (ROCm/hipBLASLt)
+      pytorch: "a8d6afb511a69687bbb2b7e88a3cf67917e1697e"             # was: v2.5.1 @ 2026-04-24 (pytorch/pytorch)

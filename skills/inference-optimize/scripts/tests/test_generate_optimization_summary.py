@@ -148,3 +148,56 @@ class TestForksManifestConsumption:
         assert summary["forks_required_count"] == 0
         assert summary["forks_pinned_count"] == 0
         assert summary["ck_branch_merged_status"] is False
+
+
+class TestForksManifestSchemaRegression:
+    """The producer is contracted to write {"forks": {<lib>: {...}}}.
+    A list shape (or any non-dict) is a schema regression and must
+    fail loudly via warnings.warn rather than silently zeroing out
+    counts -- that was the prior HIGH bug class."""
+
+    def _import_summary_module(self):
+        # Import the script as a module so we can call main() in-process
+        # and use pytest.warns. The script is not on sys.path normally.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "generate_optimization_summary_under_test", SCRIPT
+        )
+        mod = importlib.util.module_from_spec(spec)
+        # The script imports `integration_outcome` from its own dir.
+        sys.path.insert(0, os.path.dirname(SCRIPT))
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+        return mod
+
+    def test_list_shape_emits_warning_and_zero_counts(self, monkeypatch, tmp_path):
+        # Manifest with list-shaped forks (the legacy shape that no
+        # current producer writes). Must warn and yield zero counts.
+        manifest = {
+            "ck_branch_merged_status": False,
+            "vllm_version": "v0.19.1",
+            "forks": [
+                {"library": "fla", "pinned_commit": "abc", "dirty": False},
+                {"library": "vllm", "pinned_commit": "def", "dirty": True},
+            ],
+        }
+        output_dir, results_dir, report_dir = _write_workspace(str(tmp_path), manifest)
+        out_path = os.path.join(report_dir, "optimization_summary.json")
+        mod = self._import_summary_module()
+
+        argv = [
+            "generate_optimization_summary.py",
+            "--output", out_path,
+            "--config-key", "test-key",
+            "--framework", "vllm",
+            "--results-dir", results_dir,
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.warns(UserWarning, match="forks/manifest.json"):
+            mod.main()
+        with open(out_path) as f:
+            summary = json.load(f)
+        assert summary["forks_required_count"] == 0
+        assert summary["forks_pinned_count"] == 0
