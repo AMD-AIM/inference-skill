@@ -139,26 +139,59 @@
         "results/profile_analysis.json"
       ],
       "critical": true,
-      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "TOP_KERNELS", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "FRAMEWORK", "PRECISION", "OPTIMIZE_PRIORITY_THRESHOLD"],
-      "sticky": ["optimization_targets", "problem_count"],
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "TOP_KERNELS", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "RESOURCES_DIR", "RESULTS_DIR", "FRAMEWORK", "PRECISION", "OPTIMIZE_PRIORITY_THRESHOLD", "VLLM_VERSION", "KERNEL_SOURCE_MAP_PATH", "LIBRARY_PINS_PATH"],
+      "sticky": ["optimization_targets", "forks_pinned"],
       "monitor_context_fields": {
-        "source_artifacts": ["problems/optimization_manifest.json"],
-        "scalars": ["problems_generated", "max_kernel_types_per_problem"]
+        "source_artifacts": [
+          "problems/optimization_manifest.json",
+          "problems/redirect_plan.json",
+          "problems/kernel_source_map_resolved.json",
+          "forks/manifest.json",
+          "results/baseline_dispatch_trace.json"
+        ],
+        "scalars": [
+          "upstream_resolved_count",
+          "unresolved_unknown_count",
+          "unresolved_unknown_pct_of_top_time",
+          "forks_pinned_count",
+          "forks_required_count",
+          "bucket_a_count",
+          "bucket_b_count",
+          "bucket_c_count",
+          "bucket_b_user_proceed_count",
+          "bucket_b_user_skip_count",
+          "bucket_b_user_redirect_count",
+          "dispatch_redirect_planned_count",
+          "baseline_dispatch_trace_captured",
+          "ck_branch_merged_status"
+        ]
       },
       "quality": {
         "checks": [
           { "name": "manifest_exists", "type": "file_exists", "path": "problems/optimization_manifest.json" },
-          { "name": "problems_generated", "type": "metric_threshold", "field": "problems_generated", "min": 1 }
+          { "name": "forks_manifest_exists", "type": "file_exists", "path": "forks/manifest.json" },
+          { "name": "baseline_dispatch_trace_exists", "type": "file_exists", "path": "results/baseline_dispatch_trace.json" },
+          { "name": "upstream_resolved", "type": "metric_threshold", "field": "upstream_resolved_count", "min": 1 }
         ],
-        "detection_rules": "Fail when optimization_manifest.json is missing, problems_generated < 1, or max_kernel_types_per_problem > 2 (a single problem file mixes unrelated kernel types, indicating bad grouping — e.g. MoE GEMM + RMSNorm + attention in one file).",
+        "detection_rules": "Fail when any of: optimization_manifest.json is missing; forks/manifest.json is missing; baseline_dispatch_trace.json is missing or empty; upstream_resolved_count < 1; unresolved_unknown_pct_of_top_time > 30 (the majority of top GPU time is unmapped); forks_pinned_count < forks_required_count (a required upstream library fork failed to clone or check out the pinned commit); a Bucket B kernel was passed through without a recorded user_decision (sum of bucket_b_user_*_count must equal bucket_b_count). Pass when at least one optimize=true entry exists with a resolved upstream source path. Bucket C / unresolved kernels must carry skip_reason populated.",
         "detection_rules_structured": [
-          {"field": "problems_generated", "op": "lt", "value": 1, "verdict": "FAIL"},
-          {"field": "max_kernel_types_per_problem", "op": "gt", "value": 2, "verdict": "FAIL"}
+          {"field": "upstream_resolved_count", "op": "lt", "value": 1, "verdict": "FAIL"},
+          {"field": "baseline_dispatch_trace_captured", "op": "eq", "value": false, "verdict": "FAIL"},
+          {"field": "unresolved_unknown_pct_of_top_time", "op": "gt", "value": 30.0, "verdict": "FAIL"}
         ]
       },
       "rca_artifact": {
         "output": "results/problem_gen_rca.json",
-        "analysis_context": ["problems/optimization_manifest.json", "results/profile_analysis.json", "agent-results/phase-06-result.md"]
+        "analysis_context": [
+          "problems/optimization_manifest.json",
+          "problems/redirect_plan.json",
+          "problems/kernel_source_map_resolved.json",
+          "problems/unresolved_kernels.json",
+          "forks/manifest.json",
+          "results/baseline_dispatch_trace.json",
+          "results/profile_analysis.json",
+          "agent-results/phase-06-result.md"
+        ]
       },
       "terminal_policy": "stop"
     },
@@ -166,27 +199,41 @@
       "index": 7,
       "agent": "phase-07-kernel-optimize.md",
       "deps": ["problem-generate"],
+      "requires_artifacts": [
+        "problems/optimization_manifest.json",
+        "forks/manifest.json"
+      ],
       "critical": true,
-      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "GEAK_MODE", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GEAK_OE_DIR", "GPUS", "CONFIG_KEY"],
+      "required_context": ["OUTPUT_DIR", "GPU_ARCH", "SCRIPTS_DIR", "PROBLEMS_DIR", "RESULTS_DIR", "RESOURCES_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "ENV_INFO_FILE", "OPTIMIZE_SCOPE", "GEAK_DIR", "GEAK_OE_DIR", "GPUS", "CONFIG_KEY", "KERNEL_SOURCE_MAP_PATH", "LIBRARY_PINS_PATH"],
       "monitor_context_fields": {
-        "source_artifacts": ["problems/geak_results.json", "results/profile_analysis.json"],
-        "scalars": ["compiled_count", "best_speedup", "winning_kernel_count", "optimization_coverage_status", "expected_improvement_status", "hipGraphLaunch_pct", "winning_kernel_measurement_env"]
+        "source_artifacts": [
+          "problems/geak_results.json",
+          "results/preflight_dispatch_trace.json",
+          "results/profile_analysis.json"
+        ],
+        "scalars": [
+          "library_tests_passed_count",
+          "library_tests_failed_count",
+          "allocator_test_pass",
+          "dispatch_pre_flight_pass",
+          "geak_speedup_lib_bench",
+          "redirect_commits_applied_count",
+          "in_place_winners_count",
+          "no_harness_winners_count",
+          "unverified_per_kernel_count"
+        ]
       },
       "quality": {
         "checks": [
-          { "name": "kernels_compiled", "type": "metric_threshold", "field": "compiled_count", "min": 1 }
+          { "name": "geak_results_exists", "type": "file_exists", "path": "problems/geak_results.json" },
+          { "name": "preflight_trace_exists", "type": "file_exists", "path": "results/preflight_dispatch_trace.json" },
+          { "name": "winners_present", "type": "metric_threshold", "field": "in_place_winners_count", "min": 0 }
         ],
-        "detection_rules": "Fail kernel-optimize when any of: compiled_count < 1; best_speedup <= 1.0 and expected_improvement_status != parity_or_blocked; expected_improvement_status = not_attempted (high-value targets were skipped without any optimization attempt); expected_improvement_status = parity_or_blocked (hard-fail monitor policy still requires RCA/fail-path handling for this condition); winning kernels are missing from optimized/; optimization logs show the phase stalled without producing a usable winner or blocker explanation.",
+        "detection_rules": "Fail kernel-optimize when any of: geak_results.json or preflight_dispatch_trace.json is missing; in_place_winners_count + redirect_commits_applied_count + no_harness_winners_count == 0 (the phase produced no usable patch on any bucket); library_tests_failed_count > 0 (Bucket A library suite regressed against the patched fork); allocator_test_pass == false (Bucket A allocator-equivalent test diverged or HSA-faulted); dispatch_pre_flight_pass == false (rocprofv3 confirmed the patched symbol does not actually fire after rebuild). Bucket B winners are expected to carry optimization_unverified_per_kernel = true; do not fail the phase merely on unverified_per_kernel_count > 0.",
         "detection_rules_structured": [
-          {"field": "compiled_count", "op": "lt", "value": 1, "verdict": "FAIL"},
-          {"field": "best_speedup", "op": "le", "value": 1.0, "verdict": "FAIL", "condition": "expected_improvement_status != parity_or_blocked"},
-          {"field": "expected_improvement_status", "op": "eq", "value": "not_attempted", "verdict": "FAIL"},
-          {"field": "expected_improvement_status", "op": "eq", "value": "parity_or_blocked", "verdict": "FAIL"}
-        ],
-        "detection_rules_structured_v2": [
-          {"field": "effort_waste_detected", "op": "eq", "value": true, "verdict": "FAIL", "category": "effort_waste"},
-          {"field": "geak_false_claim_count", "op": "gt", "value": 0, "verdict": "FAIL", "category": "geak_false_claim"},
-          {"name": "GEAKMeasurementBias", "field": "hipGraphLaunch_pct", "op": "gt", "value": 80.0, "verdict": "FAIL", "category": "geak_false_claim", "condition": "winning_kernel_measurement_env == cuda_graph_replay", "rationale": "Production decode path is dominated by cudagraph replay but the winner was measured outside it; integration must verify counter activation before claiming the win"}
+          {"field": "dispatch_pre_flight_pass", "op": "eq", "value": false, "verdict": "FAIL"},
+          {"field": "library_tests_failed_count", "op": "gt", "value": 0, "verdict": "FAIL"},
+          {"field": "allocator_test_pass", "op": "eq", "value": false, "verdict": "FAIL"}
         ]
       },
       "rca_artifact": {
@@ -195,8 +242,10 @@
           "agent-results/phase-07-result.md",
           "monitor/phase-07-review.md",
           "problems/optimization_manifest.json",
+          "problems/redirect_plan.json",
           "problems/geak_results.json",
-          "results/profile_analysis.json"
+          "results/preflight_dispatch_trace.json",
+          "forks/manifest.json"
         ]
       },
       "fallback_target": "problem-generate",
@@ -206,30 +255,51 @@
       "index": 8,
       "agent": "phase-08-integration.md",
       "deps": ["kernel-optimize"],
+      "requires_artifacts": [
+        "problems/geak_results.json",
+        "forks/manifest.json"
+      ],
       "critical": true,
-      "required_context": ["OUTPUT_DIR", "CONFIG_KEY", "FRAMEWORK", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "RESULTS_DIR", "TEMPLATES_DIR", "GPUS"],
+      "required_context": ["OUTPUT_DIR", "CONFIG_KEY", "FRAMEWORK", "SCRIPTS_DIR", "PROBLEMS_DIR", "OPTIMIZED_DIR", "REPO_DIR", "HF_CACHE", "RESULTS_DIR", "TEMPLATES_DIR", "GPUS", "SKIP_INTEGRATION"],
       "monitor_context_fields": {
-        "source_artifacts": ["results/optimization_comparison.json", "optimized/integration_plugin/_runtime_report.json"],
-        "scalars": ["artifacts_valid", "performance_gate", "e2e_speedup", "ttft_regression_pct", "ttft_upgraded", "std_ttft_baseline", "std_ttft_optimized", "sum_patch_call_counters", "std_ttft_ratio"]
+        "source_artifacts": [
+          "results/optimization_comparison.json",
+          "results/integration_manifest.json",
+          "results/dispatch_verification.json"
+        ],
+        "scalars": [
+          "dispatch_verified",
+          "expected_symbol_total_count",
+          "vendor_symbol_leaked_count",
+          "redirect_honored_count",
+          "redirect_required_count",
+          "libraries_rebuilt_ok_count",
+          "libraries_rebuild_failed_count",
+          "artifacts_valid",
+          "performance_gate",
+          "e2e_speedup",
+          "ttft_regression_pct"
+        ]
       },
       "quality": {
         "checks": [
-          { "name": "plugin_generated", "type": "file_exists", "path": "optimized/" },
           { "name": "comparison_exists", "type": "file_exists", "path": "results/optimization_comparison.json" },
-          { "name": "integration_manifest_exists", "type": "file_exists", "path": "results/integration_manifest.json" }
+          { "name": "integration_manifest_exists", "type": "file_exists", "path": "results/integration_manifest.json" },
+          { "name": "dispatch_verification_exists", "type": "file_exists", "path": "results/dispatch_verification.json" }
         ],
-        "detection_rules": "Fail integration when any of: optimization_comparison.json is missing; artifacts_valid is false; validation_status = fail; performance_gate = fail; performance_gate = warn (hard-fail monitor policy); e2e_speedup < 1.0; a top-priority winner is still unintegrated without a structured blocker. Performance policy input bands still come from optimization_comparison.json (`pass` / `warn` / `fail`), but monitor verdict handling is PASS/FAIL only. Severe TTFT regression must also fail the phase. Read artifacts_valid, performance_gate, e2e_speedup, and ttft_regression_pct from results/optimization_comparison.json. WarmupBiasFilter (deterministic): when std_ttft_optimized/std_ttft_baseline < 0.1 AND sum_patch_call_counters == 0, the headline e2e is a cache warm-up artifact, not a plugin win — annotate e2e_attributable=false and treat as FAIL.",
+        "detection_rules": "Fail integration when any of: results/dispatch_verification.json is missing; dispatch_verified == false (the patched kernel did not actually fire on the rebuilt env); vendor_symbol_leaked_count > 0 (vendor baseline symbol is still being dispatched, indicating a double-load or shadowing failure); redirect_honored_count < redirect_required_count (a planned dispatch redirect was not effective); libraries_rebuild_failed_count > 0; optimization_comparison.json is missing or artifacts_valid is false; performance_gate == fail; e2e_speedup < 1.0. A performance_gate == warn outcome with dispatch_verified == true is a usable measured result and should not be FAILed by itself, but a TTFT regression > 20% is still a FAIL.",
         "detection_rules_structured": [
+          {"field": "dispatch_verified", "op": "eq", "value": false, "verdict": "FAIL"},
+          {"field": "vendor_symbol_leaked_count", "op": "gt", "value": 0, "verdict": "FAIL"},
+          {"field": "libraries_rebuild_failed_count", "op": "gt", "value": 0, "verdict": "FAIL"},
           {"field": "performance_gate", "op": "eq", "value": "fail", "verdict": "FAIL"},
-          {"field": "e2e_speedup", "op": "lt", "value": 0.97, "verdict": "FAIL"},
           {"field": "e2e_speedup", "op": "lt", "value": 1.0, "verdict": "FAIL"},
           {"field": "ttft_regression_pct", "op": "gt", "value": 20.0, "verdict": "FAIL", "condition": "performance_gate == warn"}
         ],
         "detection_rules_structured_v2": [
           {"field": "baseline_integrity_match", "op": "eq", "value": false, "verdict": "FAIL", "category": "baseline_drift"},
           {"field": "cross_kernel_delta_pct", "op": "gt", "value": {"$ref": "$CROSS_KERNEL_THRESHOLD"}, "verdict": "FAIL", "category": "cross_kernel_interference"},
-          {"field": "stale_artifacts_detected", "op": "eq", "value": true, "verdict": "FAIL", "category": "stale_artifact"},
-          {"name": "WarmupBiasFilter", "field": "std_ttft_ratio", "op": "lt", "value": 0.1, "verdict": "FAIL", "category": "geak_false_claim", "condition": "sum_patch_call_counters == 0", "rationale": "std_ttft optimized/baseline < 0.1 with zero patch counters indicates cache warm-up artifact, not a real win"}
+          {"field": "stale_artifacts_detected", "op": "eq", "value": true, "verdict": "FAIL", "category": "stale_artifact"}
         ]
       },
       "rca_artifact": {
@@ -239,7 +309,9 @@
           "monitor/phase-08-review.md",
           "results/integration_manifest.json",
           "results/optimization_comparison.json",
-          "optimized/integration_plugin/_runtime_report.json"
+          "results/dispatch_verification.json",
+          "results/baseline_dispatch_trace.json",
+          "forks/manifest.json"
         ]
       },
       "fallback_target": "kernel-optimize",
@@ -290,9 +362,14 @@
       "progress.json",
       "results/optimization_comparison.json",
       "results/integration_manifest.json",
-      "optimized/integration_plugin/_runtime_report.json",
+      "results/dispatch_verification.json",
+      "results/baseline_dispatch_trace.json",
+      "results/preflight_dispatch_trace.json",
+      "results/rebuild_*.log",
+      "forks/manifest.json",
       "problems/geak_results.json",
       "problems/optimization_manifest.json",
+      "problems/redirect_plan.json",
       "results/profile_analysis.json"
     ]
   },
@@ -325,8 +402,11 @@
     "OPTIMIZED_DIR":             { "source": "config" },
     "GEAK_DIR":                  { "source": "config" },
     "GEAK_OE_DIR":               { "source": "config" },
-    "GEAK_MODE":                 { "source": "config" },
     "OPTIMIZE_SCOPE":            { "source": "config" },
+    "VLLM_VERSION":              { "source": ["config", "artifact"], "config_key": "VLLM_VERSION", "artifact_fallback": {"path": "env_info.json", "field": "vllm_version"} },
+    "KERNEL_SOURCE_MAP_PATH":    { "source": "config", "default": "{RESOURCES_DIR}/kernel_source_map.yaml" },
+    "LIBRARY_PINS_PATH":         { "source": "config", "default": "{RESOURCES_DIR}/library_pins.yaml" },
+    "SKIP_INTEGRATION":          { "source": "config", "default": "false" },
     "OPTIMIZE_PRIORITY_THRESHOLD": { "source": "config" },
     "ENV_INFO_FILE":             { "source": "config" },
     "RESOURCES_DIR":             { "source": "config" },

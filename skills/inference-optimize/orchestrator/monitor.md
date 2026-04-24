@@ -171,8 +171,9 @@ Read only the files the orchestrator includes in your prompt. Do not open files 
 
 These predicates run in the runner's `_evaluate_v2` path, before you are spawned, against the scalars in `phase-{NN}-context.json`. Their results are visible in `phase-{NN}-predicate.json`.
 
-- **`WarmupBiasFilter`** — applied to **integration** (Phase 8). Triggers FAIL when `std_ttft_optimized / std_ttft_baseline < 0.1` AND `sum_patch_call_counters == 0`. Rationale: the headline e2e speedup is then a cache warm-up artifact (the optimized run's TTFT distribution is suspiciously tight while the baseline's was wide), not a plugin win. The runner sets `sticky.e2e_attributable = false` when this predicate fires; your Layer 2 review should label the headline `cache_warmup_artifact` and treat it as a failure signal.
-- **`GEAKMeasurementBias`** — applied to **kernel-optimize** (Phase 7). Triggers FAIL when `hipGraphLaunch_pct > 80%` AND any winning kernel's `winning_kernel_measurement_env == "cuda_graph_replay"`. Rationale: production decode is dominated by cudagraph replay but the GEAK winner was measured outside it; integration must verify counter activation before claiming the win. Surface this as a failure in `handoff/to-phase-08.md`.
+- **`DispatchUnverifiedFilter`** — applied to **integration** (Phase 8). Triggers FAIL when `dispatch_verified == false`, regardless of headline e2e_speedup. Rationale: rocprofv3 confirmed that the GEAK-optimized symbol does not appear in the post-rebuild trace, so any e2e_speedup > 1.0 is a cache-warmup artifact, not a real win. The runner sets `sticky.e2e_attributable = false` when this predicate fires; your Layer 2 review should label the headline `cache_warmup_artifact` and treat it as a failure signal in the `geak_false_claim` category.
+- **`RedirectNotHonoredFilter`** — applied to **integration** (Phase 8). Triggers FAIL when `redirect_required_count > 0` AND `redirect_honored_count < redirect_required_count`. Rationale: a planned `dispatch_redirect_*` strategy did not actually swap the runtime symbol; vendor baseline is still being dispatched. Surface in the failure category `logic` (wrong patch site) and route the next attempt through `phase-06-problem-generate` to re-derive the dispatch-site patch hint.
+- **`VendorSymbolLeakFilter`** — applied to **integration** (Phase 8). Triggers FAIL when `vendor_symbol_leaked_count > 0`. Rationale: the patched fork was rebuilt but vLLM's import order resolved the wheel copy first (or both copies are loaded). Route the next attempt through Phase 8's rebuild step with explicit `pip uninstall <lib>` of the wheel install before the editable reinstall.
 
 ### 9-Category Failure Taxonomy (V2)
 
@@ -201,16 +202,15 @@ phase_index: {NN}
 verdict: PASS | FAIL
 failure_type: infrastructure | logic | data_quality | performance_regression | effort_waste | cross_kernel_interference | geak_false_claim | baseline_drift | stale_artifact
 l1_verdict: PASS | FAIL   # from predicate.json
-escalation_required: false | "human" | "systemic_rca" | "manual_edit"
+escalation_required: false | "human" | "systemic_rca"
                                   # false = no escalation
                                   # "human" = human-in-the-loop intervention (requires HUMAN_LOOP)
                                   # "systemic_rca" = orchestrator dispatches agents/systemic-rca.md
-                                  #   instead of another per-phase retry. Set when current attempt's
+                                  #   instead of another per-phase retry. Set when the current attempt's
                                   #   evidence will reproduce the prior attempt's RCA fingerprint
-                                  #   (e.g. counters=0 again, same root_cause_class signal pattern).
-                                  # "manual_edit" = phase-08 specific; the per-phase RCA names a
-                                  #   mechanical plugin edit the agent is guardrail-blocked from
-                                  #   making. Surfaces the manual-edits-required handoff to user.
+                                  #   (e.g. dispatch_verified=false again, same root_cause_class signal
+                                  #   pattern). The legacy "manual_edit" escalation is gone with the
+                                  #   plugin path; library rebuild is now the only integration mechanism.
 problem_categories: []            # list of triggered category strings
 ---
 ```

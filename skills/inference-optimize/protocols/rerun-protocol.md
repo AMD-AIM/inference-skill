@@ -89,15 +89,46 @@ Every `*_rca.json` written by the analysis agent includes:
 **Profile** (`results/profile_rca.json`):
 - `trace_integrity_failures`, `missing_phase_split_inputs`, `tracelens_readiness`
 
+**Problem-generate** (`results/problem_gen_rca.json`):
+- `unresolved_symbols`, `unresolved_pct_of_top_time`, `forks_failed_to_pin`,
+  `bucket_b_user_decision_gaps`, `baseline_dispatch_trace_status`,
+  `ck_branch_merged_status`
+
 **Kernel-optimize** (`results/kernel_opt_rca.json`):
-- `failed_kernels`, `missing_winners`, `expected_improvement_status`, `next_attempt_mode`
+- `failed_kernels`, `library_test_failures`, `allocator_test_status`,
+  `dispatch_pre_flight_status`, `redirect_application_status`,
+  `bucket_b_unverified_count`, `next_attempt_mode`
 
 **Integration** (`results/integration_rca.json`):
-- `failed_targets`, `integration_strategy_by_target`, `dispatch_failures`, `adapter_overhead_findings`
+- `dispatch_verification_status` (`verified | unverified | redirect_not_honored`),
+  `vendor_symbol_leaks`, `libraries_failed_to_rebuild`,
+  `expected_symbols_missing`, `e2e_attributable`, `headline_attribution_notes`
 
 ### Blocker Classification Enums
 
-Integration blockers: `needs_source_patch`, `needs_model_adapter`, `framework_limit`, `true_kernel_parity`, `adapter_overhead`
+The single canonical blocker enum used by every per-phase RCA, the
+systemic RCA, and the orchestrator's response policy:
+
+| Enum value                                   | Phase that emits it    | Meaning |
+|----------------------------------------------|------------------------|---------|
+| `needs_library_fork`                         | problem-generate       | A required upstream library was not in `library_pins.yaml` or could not be cloned at the pinned commit. |
+| `unresolved_unknown_symbol`                  | problem-generate       | A profile-dominant symbol did not match any pattern in `kernel_source_map.yaml`; needs human triage. |
+| `kernel_source_map_stale_for_pinned_commit`  | problem-generate / kernel-optimize | The resolved `source_file` or `library_test_path` does not exist at the pinned commit; the source map needs a vLLM-version refresh. |
+| `unfeasible_ck_template`                     | problem-generate       | A `ck_template` kernel hit `ck_branch_merged_status == false` and the user did not opt in via Bucket B. |
+| `unfeasible_vendor_binary`                   | problem-generate       | The dominant kernel is a `closed_vendor_binary` with no source. Recorded for Phase 9; not retried. |
+| `unfeasible_handwritten_asm`                 | problem-generate       | Hand-written GCN/SASS; recorded for Phase 9; not retried. |
+| `unfeasible_aten_rebuild_too_expensive`      | problem-generate       | `aten_native` candidate where the user declined the multi-hour PyTorch rebuild path. |
+| `library_test_failure`                       | kernel-optimize        | The library's own pytest regressed against the patched fork (Bucket A only). |
+| `allocator_test_failure`                     | kernel-optimize        | The allocator-equivalent integration test diverged or HSA-faulted (Bucket A only). |
+| `redirect_not_honored`                       | kernel-optimize / integration | The dispatch-site patch did not actually swap the runtime symbol; vendor symbol still fires. |
+| `dispatch_unverified`                        | kernel-optimize / integration | rocprofv3 confirmed the expected GEAK-optimized symbol does not appear in the trace; the patched kernel never ran. |
+| `needs_rebuild_fix`                          | integration            | One or more libraries in `forks/manifest.json` failed `pip install -e .` (or the editable install did not shadow the wheel copy). |
+| `framework_limit`                            | integration            | The optimization is correct but vLLM/torch.compile/HIPGraph behavior makes it unreachable on the production decode path. |
+| `baseline_drift`                             | integration            | Phase-2 baseline numbers drifted between the baseline run and the post-rebuild benchmark; comparison is unsafe. |
+
+Per-phase `blocker_classifications` entries take the form
+`{ "target": "<kernel-or-library-name>", "classification": "<enum>" }`.
+Systemic RCA `blocker_classifications` entries may be bare strings.
 
 ## Terminal Blocker Behavior
 

@@ -55,19 +55,36 @@ Phase agents MUST include these fields in `## Key Findings` so the monitor can e
 - `phase_split_inputs_ready`: boolean (true when decode-only trace + phase-split script both exist)
 - `roofline_coverage_pct`: float (0-100)
 
+### Phase 06 (problem-generate / upstream-resolve)
+- `upstream_resolved_count`: integer (kernels resolved to a known library)
+- `unresolved_unknown_count`: integer (kernels with `library == unknown`)
+- `unresolved_unknown_pct_of_top_time`: float (percent of top-N GPU time still unresolved)
+- `forks_pinned_count`: integer (libraries successfully checked out at the pinned commit)
+- `forks_required_count`: integer (libraries that needed forking)
+- `bucket_a_count`, `bucket_b_count`, `bucket_c_count`: integer (axis-2 partition counts)
+- `bucket_b_user_proceed_count`, `bucket_b_user_skip_count`,
+  `bucket_b_user_redirect_count`: integer (must sum to `bucket_b_count`)
+- `dispatch_redirect_planned_count`: integer (kernels routed via a `dispatch_redirect_*` strategy)
+- `baseline_dispatch_trace_captured`: boolean (rocprofv3 baseline written)
+- `ck_branch_merged_status`: boolean (probe of GEAK upstream `feature/ck-preprocess-main`)
+
 ### Phase 07 (kernel-optimize)
-- `compiled_count`: integer count of compiled kernels
-- `best_speedup`: float (best kernel-level speedup achieved)
-- `winning_kernel_count`: integer count of kernels with speedup > 1.0
-- `optimization_coverage_status`: complete | partial | none
-- `expected_improvement_status`: improvable | parity_or_blocked | not_attempted (per hot target, summarize)
+- `library_tests_passed_count`: integer (sum across Bucket A kernels; null-counted Bucket B kernels excluded)
+- `library_tests_failed_count`: integer (sum across Bucket A kernels)
+- `allocator_test_pass`: boolean (overall, Bucket A only)
+- `dispatch_pre_flight_pass`: boolean (rocprofv3 confirmed expected symbols fire on the rebuilt env)
+- `geak_speedup_lib_bench`: float (best per-kernel speedup reported by the library's inner-loop test)
+- `redirect_commits_applied_count`: integer (dispatch-site commits placed on `geak/main`)
+- `in_place_winners_count`: integer (Bucket A `in_place_optimize` GEAK winners committed)
+- `no_harness_winners_count`: integer (Bucket B `in_place_optimize_no_harness` GEAK winners committed)
+- `unverified_per_kernel_count`: integer (== `no_harness_winners_count`; counts kernels carrying `optimization_unverified_per_kernel = true` into Phase 9)
 
 ### Phase 08 (integration)
 
-From `validate_optimization.py` → `optimization_comparison.json`:
+From `validate_optimization.py` → `optimization_comparison.json` (schema preserved for adjacent compatibility):
 - `artifacts_valid`: bool — both baseline and optimized JSONs loaded without error
 - `performance_valid`: bool — `speedup >= 1.0`
-- `validated`: bool — `artifacts_valid and performance_valid` (backward-compatible)
+- `validated`: bool — `artifacts_valid and performance_valid`
 - `performance_gate`: pass | warn | fail
 - `speedup`: float
 - `e2e_speedup`: float (alias for speedup)
@@ -75,19 +92,30 @@ From `validate_optimization.py` → `optimization_comparison.json`:
 
 These Phase 08 fields are read from `results/optimization_comparison.json` by detection rules (pre-extracted into `monitor/phase-08-context.json` by the orchestrator). Do not wire a `metric_threshold` check to them unless the Phase 08 result doc also mirrors the scalar into `## Key Findings`.
 
-From `Phase 08` → `results/integration_manifest.json`:
-- `schema_version`: string
-- `plugin_type`: string (e.g. `sglang_plugin`, `vllm_plugin`)
-- `comparison_file`: string (filename of the comparison JSON)
-- `targets`: array of per-target integration outcomes
-- `summary.coverage_pct`: float — fraction of targets integrated
+From `results/dispatch_verification.json` (new, library-rebuild contract):
+- `dispatch_verified`: boolean — expected GEAK-optimized symbols present and vendor symbols absent
+- `expected_symbol_total_count`: integer — sum of dispatch counts for expected symbols
+- `vendor_symbol_leaked_count`: integer — count of vendor baseline symbols that still fired
+- `redirect_required_count`: integer — number of kernels with a `dispatch_redirect_*` strategy
+- `redirect_honored_count`: integer — subset of the above where the redirect actually swapped the runtime symbol
 
-Phase 09 reads this manifest directly for per-target coverage instead of inferring it from prose.
+From `results/integration_manifest.json` (schema_version 2.0, library-rebuild contract):
+- `schema_version`: `"2.0"`
+- `libraries_rebuilt`: array of `{lib, commit, install_log_path}` records
+- `dispatch_verified`: boolean (mirrors dispatch_verification.json)
+- `e2e_ran`: boolean
+- `artifacts_valid`: boolean
 
-From the Phase 08 agent's result doc:
-- `baseline_file`: filename of the baseline JSON used
-- `optimized_file`: filename of the optimized JSON used
-- `validation_status`: pass | warn | fail
-- `coverage_pct`: float — fraction of Phase 07 winners integrated
-- `blocked_target_count`: integer — targets with a structured blocker
-- `critical_blocker_count`: integer — blocked targets where classification is not `true_kernel_parity`
+Phase 09 reads `integration_manifest.json` directly. The legacy
+`plugin_type` / `targets` / `summary.coverage_pct` fields are gone with
+the plugin path.
+
+From the Phase 08 agent's result doc (mirrored into `## Key Findings`):
+- `dispatch_verified`: boolean
+- `expected_symbol_total_count`: integer
+- `vendor_symbol_leaked_count`: integer
+- `redirect_honored_count`, `redirect_required_count`: integer
+- `libraries_rebuilt_ok_count`: integer
+- `libraries_rebuild_failed_count`: integer
+- `e2e_speedup`: float (from `optimization_comparison.json`)
+- `validation_status`: pass | warn | fail (mirrors `performance_gate`)
