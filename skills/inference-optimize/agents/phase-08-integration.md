@@ -1,289 +1,203 @@
-# Phase 8: Integration & End-to-End Benchmarking
+# Phase 8: Integration (rebuild + rocprofv3 dispatch verify + e2e)
 
 ## Instructions
 
-You are a phase agent responsible for integrating optimized kernels and measuring actual E2E serving throughput. You read exactly 2 files: this document and your handoff at `handoff/to-phase-08.md`.
+You are a phase agent responsible for installing the patched forks into
+the live environment, verifying with rocprofv3 that the expected kernel
+symbols actually fire (and the vendor symbols do not), running the
+standard vLLM e2e benchmark, and validating the throughput delta. You
+read exactly 2 files: this document and your handoff at
+`handoff/to-phase-08.md`.
 
-**Tools**: Shell commands, Docker, Python, file I/O.
-**Outputs**: Write `agent-results/phase-08-result.md`. Write plugin to `{{OPTIMIZED_DIR}}`, comparison to `{{RESULTS_DIR}}`.
-**Sub-agents**: May spawn coder subagents for plugin generation per `agents/coding-agent.md`.
-**MANDATORY**: This phase MUST produce real measured data. FORBIDDEN: estimating speedup, copying baseline numbers, or skipping the patched server benchmark.
-**SKIP_INTEGRATION**: If the handoff sets `SKIP_INTEGRATION=true`, this phase should NOT have been dispatched — the orchestrator removes it from the phase list. If you find yourself running with this flag set, generate the plugin only (Steps 0-1) and skip the E2E benchmark (Steps 2-7). Report in the result doc that the benchmark was skipped per user request.
+This phase **replaces** the legacy plugin-injection path. There is no
+`generate_vllm_plugin.py`, no `inject_plugin.py`, no
+`integration_plugin/` directory, no atexit telemetry, no patch counters,
+no `dispatch_plugin_example.py`. The library-rebuild approach reinstalls
+the patched fork in-place; vLLM's normal import order picks it up.
+
+**Tools**: Shell commands, Docker, Python, file I/O, rocprofv3.
+**Outputs**: Write `agent-results/phase-08-result.md`. Write
+`{{RESULTS_DIR}}/dispatch_verification.json`,
+`{{RESULTS_DIR}}/integration_manifest.json`,
+`{{RESULTS_DIR}}/optimization_comparison.json`.
+
+**MANDATORY**: This phase MUST produce real measured data. FORBIDDEN:
+estimating speedup, copying baseline numbers, or skipping the benchmark.
+
+**SKIP_INTEGRATION**: If the handoff sets `SKIP_INTEGRATION=true`, this
+phase should NOT have been dispatched -- the orchestrator removes it from
+the phase list. If you find yourself running with this flag set, run
+Steps 1-2 only (rebuild + dispatch verify) and skip the e2e benchmark.
+Document the skip in the result doc.
 
 ## Runbook
 
 ### Config Resolution
-Before any Docker or benchmark commands, read `{{OUTPUT_DIR}}/results/sweep_configs.json` (or `{{OUTPUT_DIR}}/config.json` when sweep metadata is folded there) and export: `RUNNER`, `IMAGE`, `FRAMEWORK`, `MODEL`, `PRECISION`, `TP`, `EP`, `CONC`, `ISL`, `OSL`, `MAX_MODEL_LEN`, `EXP_NAME`, `BENCHMARK_SCRIPT`, plus GPU selectors (`GPUS`, etc.) required by `run_profile_exec.sh`.
+
+Before any Docker or benchmark commands, read
+`{{OUTPUT_DIR}}/results/sweep_configs.json` (or `{{OUTPUT_DIR}}/config.json`
+when sweep metadata is folded there) and export: `RUNNER`, `IMAGE`,
+`FRAMEWORK`, `MODEL`, `PRECISION`, `TP`, `EP`, `CONC`, `ISL`, `OSL`,
+`MAX_MODEL_LEN`, `EXP_NAME`, `BENCHMARK_SCRIPT`, plus GPU selectors.
 
 ### Measured-data gate
-Phase 8 is **not** complete until three artifacts exist: (1) a fresh baseline JSON from the same harness revision, (2) a patched-server benchmark log + JSON captured after plugin injection **or** the standalone `run_e2e_benchmark.sh` output, and (3) a passing `validate_optimization.py` run. Estimating speedups, copying historical throughput numbers without rerunning the server, or skipping the patched benchmark path is explicitly out of scope—abort and document blockers instead.
 
-End-to-end success means **Docker containers** exercised the real serving stack (vLLM or SGLang) with optimized kernels or dispatch patches loaded exactly as production would—not microbench-only speedups.
+Phase 8 is **not** complete until four artifacts exist:
+1. Per-library rebuild logs at `{{RESULTS_DIR}}/rebuild_<lib>.log` with
+   non-zero `libraries_rebuilt_ok_count`.
+2. `{{RESULTS_DIR}}/dispatch_verification.json` showing
+   `dispatch_verified == true`, `vendor_symbol_leaked_count == 0`, and
+   `redirect_honored_count == redirect_required_count`.
+3. A patched-server benchmark JSON captured after rebuild (no plugin
+   wiring required -- the editable install shadows the wheel copy).
+4. A passing `validate_optimization.py` run.
 
-### 0. Verify Winning Kernels
-```bash
-python3 "{{SCRIPTS_DIR}}/optimize/verify_winning_kernels.py" \
-    --problems-dir "{{PROBLEMS_DIR}}" --optimized-dir "{{OPTIMIZED_DIR}}"
-```
-Exit code **1** means one or more manifest entries lack corresponding optimized artifacts — return to Phase 7 Step 3.5 (patch recovery + `collect_winning_kernels.py`) before continuing. Only **skip** integrating a specific kernel when its measured `speedup <= 1.0x`; missing files are never silently ignored.
-
-### 0b. GPU State Cleanup
+### 0. GPU State Cleanup
 ```bash
 pkill -f "vllm.entrypoints" 2>/dev/null || true
 pkill -f sglang 2>/dev/null || true
 sleep 5
 ```
 
-### 1. Generate Plugin
-**For vLLM:**
-```bash
-python3 "{{SCRIPTS_DIR}}/plugin/generate_vllm_plugin.py" --kernel-dir "{{OPTIMIZED_DIR}}"
-```
+### 1. Rebuild Forked Libraries
 
-**For SGLang:**
-```bash
-python3 "{{SCRIPTS_DIR}}/plugin/generate_sglang_plugin.py" --kernel-dir "{{OPTIMIZED_DIR}}"
-```
-
-Each generator writes `{{OPTIMIZED_DIR}}/<framework>_plugin/` containing at minimum `__init__.py`, a launcher helper script, and `manifest.json` describing injected entry points.
-
-After generation, open `manifest.json` and confirm every optimized kernel you expect appears with the correct module path, symbol name, and dispatch metadata. If a kernel is missing, rerun Phase 7 for that entry before editing the manifest by hand—manual edits should be a last resort documented in the handoff.
-
-### 1.5. Dispatch-Level Optimization
-**Trigger:** `geak_results.json` lists a vendor / CK / HIP / MoE / attention kernel with `speedup > 1.0` **and** the winning change is dispatch-level (description mentions dispatch, backend, BLAS, config, selection, NT layout, etc.), **or** no directly mappable kernels exist yet dispatch tuning would still help.
-
-Dispatch work changes **how** the framework picks a kernel, not only the kernel source file.
-
-| Kernel type | Dispatch mechanism | Patch target (SGLang examples) |
-|-------------|--------------------|--------------------------------|
-| Dense GEMM (vendor) | BLAS backend selection per shape | `UnquantizedLinearMethod.apply` |
-| MoE GEMM (CK/aiter) | Expert routing / backend config | `FusedMoE.forward` or aiter dispatch helpers |
-| Attention (CK/aiter/ASM) | Backend selection vs sequence length | `AttentionBackend` / MLA dispatch |
-| Normalization (CK/aiter) | Fused vs unfused path selection | `RMSNorm.forward` or aiter dispatch |
-
-- **1.5a. Micro-benchmark:** Author `{{OPTIMIZED_DIR}}/bench_dispatch.py` that exercises each candidate dispatch path across representative shapes from `optimization_manifest.json`. Run inside the same container image to rank per-shape winners.
-- **1.5b. Dispatch plugin:** When benchmarks prove a non-default path wins for some shapes, emit a monkey-patch module that intercepts the framework hook (pattern: detect shape → temporarily override config → call original → restore defaults). Reference implementation: `{{TEMPLATES_DIR}}/dispatch_plugin_example.py` (SGLang GEMM).
-- **1.5c. Standalone launcher:** Add `{{OPTIMIZED_DIR}}/launch_patched.py` that imports the plugin **before** importing the serving stack so patches register prior to module singletons initializing.
-- **1.5d. Standalone E2E benchmark:** Add `{{OPTIMIZED_DIR}}/run_e2e_benchmark.sh` when script injection (Steps 4–5) is impractical. If this script exists, **skip** Steps 4–5, run the standalone benchmark, collect artifacts into `{{RESULTS_DIR}}/`, then jump to Step 6.
-
-### 2. Retrieve Baseline Data
-Reuse Phase 2/3 artifacts stored under `{{RESULTS_DIR}}/`. Locate raw benchmark JSON files while **excluding** summary-only or config-only JSONs. Prefer the **lowest concurrency** run whose ISL/OSL/TP/EP/precision matches the profiling configuration so apples-to-apples comparisons remain valid.
-
-Record the exact baseline filename in `agent-results/phase-08-result.md` so validators can trace which run was used. When multiple baselines qualify, prefer the file referenced by Phase 3’s `benchmark_summary.json` if that index exists.
-
-### 3. Start Optimized Container
-**For SGLang:**
-```bash
-bash "{{SCRIPTS_DIR}}/container/start_profile_container.sh" \
-    --name "inference-optimized-{{CONFIG_KEY}}" \
-    --image "$IMAGE" --runner "$RUNNER" \
-    --repo-dir "{{REPO_DIR}}" --hf-cache "{{HF_CACHE}}" \
-    --profile-dir "{{RESULTS_DIR}}" --mode optimize \
-    --mount "{{OPTIMIZED_DIR}}:/workspace/optimized" \
-    --env "PYTHONPATH=/sgl-workspace/aiter:/workspace/optimized" \
-    --env "SGLANG_USE_AITER=1" --env "ROCM_QUICK_REDUCE_QUANTIZATION=INT4"
-```
-
-**For vLLM:**
-```bash
-bash "{{SCRIPTS_DIR}}/container/start_profile_container.sh" \
-    --name "inference-optimized-{{CONFIG_KEY}}" \
-    --image "$IMAGE" --runner "$RUNNER" \
-    --repo-dir "{{REPO_DIR}}" --hf-cache "{{HF_CACHE}}" \
-    --profile-dir "{{RESULTS_DIR}}" --mode optimize \
-    --mount "{{OPTIMIZED_DIR}}:/workspace/optimized" \
-    --env "PYTHONPATH=/workspace/optimized" --env "ROCM_QUICK_REDUCE_QUANTIZATION=INT4"
-```
-
-Use the block that matches `$FRAMEWORK`. `ROCM_QUICK_REDUCE_QUANTIZATION=INT4` applies to **both** stacks: it tunes RCCL all-reduce quantization for communication bandwidth and is independent of model weight precision.
-
-SGLang’s `PYTHONPATH` prepends `/sgl-workspace/aiter` so packaged CK kernels resolve before falling back to upstream sources; vLLM only needs `/workspace/optimized` unless the handoff adds extra vendor paths—mirror whatever Phase 4 used for profiling parity.
-
-Export `CONTAINER_NAME` immediately after `start_profile_container.sh` returns (match the `--name` argument, typically `inference-optimized-{{CONFIG_KEY}}`). All subsequent `docker exec`, `docker cp`, and `run_profile_exec.sh` calls assume this variable is set.
-
-### 4. Inject Plugin
-Restore a clean benchmark script before mutating it so repeated integrations do not stack edits:
+For each fork that has passing winners + allocator test green:
 
 ```bash
-cd {{REPO_DIR}} && git checkout -- "$BENCHMARK_SCRIPT" 2>/dev/null || true
-docker cp "{{SCRIPTS_DIR}}/plugin/inject_plugin.py" "$CONTAINER_NAME:/tmp/"
-docker exec "$CONTAINER_NAME" python3 /tmp/inject_plugin.py \
-    --framework "$FRAMEWORK" --target "/workspace/$BENCHMARK_SCRIPT"
+python3 "{{SCRIPTS_DIR}}/integrate/rebuild_libraries.py" \
+    --output-dir "{{OUTPUT_DIR}}"
 ```
 
-`inject_plugin.py` edits the repo-relative benchmark entrypoint as seen **inside** the container (`/workspace/...` mirrors `{{REPO_DIR}}`). Confirm the script path matches the checked-out tree before launching the server.
+Reads `rebuild_command` from `{{OUTPUT_DIR}}/forks/manifest.json`
+(per-library; pure-Python libs use `pip install -e .`, C++ ext libs use
+`pip install -e . --no-build-isolation` and may need `AITER_REBUILD=1` or
+`MAX_JOBS=...`). Logs to `{{RESULTS_DIR}}/rebuild_<lib>.log`. The
+wheel-installed copy is shadowed by the editable install (Python's import
+order resolves the dev path first).
 
-### 5. Run Optimized Benchmark
-Double-check the following immediately before `run_profile_exec.sh` fires:
-
-- Container still running (`docker ps --filter name=$CONTAINER_NAME`).
-- Plugin files visible at `/workspace/optimized` inside the container (`docker exec ... ls /workspace/optimized`).
-- Benchmark script inside the container contains the injection sentinel (quick `grep -n plugin` on `/workspace/$BENCHMARK_SCRIPT` via `docker exec`).
-- Host-side `{{RESULTS_DIR}}/` has enough disk for full JSON + log captures.
+### 2. Verify Dispatch with rocprofv3
 
 ```bash
-bash "{{SCRIPTS_DIR}}/container/run_profile_exec.sh" \
-    --container "$CONTAINER_NAME" \
-    --benchmark-script "$BENCHMARK_SCRIPT" \
-    --model "$MODEL" --tp "$TP" --ep "$EP" --conc "$CONC" \
-    --isl "$ISL" --osl "$OSL" --max-model-len "$MAX_MODEL_LEN" \
-    --precision "$PRECISION" --framework "$FRAMEWORK" --exp-name "$EXP_NAME" \
-    --result-filename "optimized_${EXP_NAME}_${PRECISION}_${FRAMEWORK}_tp${TP}-ep${EP}_conc${CONC}" \
-    --repo-dir "{{REPO_DIR}}" --gpus "{{GPUS}}"
+python3 "{{SCRIPTS_DIR}}/integrate/verify_dispatch.py" \
+    --output-dir "{{OUTPUT_DIR}}" --mode post-rebuild \
+    --manifest "{{PROBLEMS_DIR}}/optimization_manifest.json"
 ```
 
-Mirror Phase 2’s benchmark mode (e.g., compiled-graph path) unless the handoff documents an intentional deviation — mismatched modes invalidate throughput comparisons. Stream container logs live and keep heartbeats so long runs remain attributable.
+Runs `rocprofv3 --kernel-trace --output-format json` on a minimal vLLM
+decode, parses kernel symbol counts, and confirms per
+`expected_dispatch_symbols` and `vendor_baseline_symbols`:
+- Expected GEAK-optimized symbol(s) are present with `count > 0`.
+- Vendor baseline symbol(s) are absent or `count == 0` (dispatch actually
+  swapped, no double-load).
+- For `dispatch_redirect_*` strategies, the redirect was honored: vendor
+  symbol gone, redirect-target symbol present.
+- Diffed against `baseline_dispatch_trace.json` (from Phase 6) for a
+  structured before/after.
 
-Collect JSON/text outputs from the repo root and any `results/` subfolder into `{{RESULTS_DIR}}/`.
+Writes `{{RESULTS_DIR}}/dispatch_verification.json`:
+```
+{
+  "mode": "post-rebuild",
+  "rocprofv3_trace_path": "...",
+  "expected_symbols": [{name, count, status: present|missing}, ...],
+  "vendor_symbols":   [{name, count, status: absent|leaked}, ...],
+  "expected_symbol_total_count":   int,
+  "vendor_symbol_leaked_count":    int,
+  "redirect_required_count":       int,
+  "redirect_honored_count":        int,
+  "dispatch_verified":             bool
+}
+```
 
-The `--result-filename` value intentionally prefixes `optimized_` plus the TP/EP/concurrency dimensions—keep that convention so `validate_optimization.py` can glob deterministic pairs (`baseline_*.json` vs `optimized_*.json`) without extra flags.
+If `dispatch_verified == false`, abort -- there is no value in burning
+e2e wall-clock when the patched kernel is not actually firing. Surface
+the blocker classification per `protocols/rerun-protocol.md`
+(`dispatch_unverified` or `redirect_not_honored`).
 
-### 6. Validate Results
+### 3. Run the Standard vLLM e2e Benchmark
+
+Boot vLLM with the rebuilt forks via the same launcher Phase 2 used. No
+plugin injection, no PYTHONPATH override, no `inject_plugin.py`.
+
+```bash
+python3 "{{SCRIPTS_DIR}}/integrate/run_e2e.py" \
+    --output-dir "{{OUTPUT_DIR}}" \
+    --launcher "$BASELINE_LAUNCHER" \
+    --label "after_rebuild"
+```
+
+Writes `{{RESULTS_DIR}}/e2e_after_rebuild.log` and a `{e2e_ran,
+returncode, duration_sec}` summary on stdout.
+
+### 4. Validate Results
 ```bash
 python3 "{{SCRIPTS_DIR}}/report/validate_optimization.py" --results-dir "{{RESULTS_DIR}}"
 ```
 
-`validate_optimization.py` writes `{{RESULTS_DIR}}/optimization_comparison.json` containing baseline vs optimized throughput, computed speedup, and validation flags — attach this file to the Phase 9 bundle.
+Writes `{{RESULTS_DIR}}/optimization_comparison.json` (kept name, kept
+schema for adjacent compatibility -- only the build chain feeding it
+changed). Treat `artifacts_valid = false` or `performance_gate = fail` as
+validation failure. A `performance_gate = warn` result is still a usable
+measured outcome.
 
-Keep the baseline + optimized JSON filenames referenced in the validator logs. Treat `artifacts_valid = false` or `performance_gate = fail` as validation failure. A `performance_gate = warn` result is still a usable measured outcome: record it honestly, preserve the comparison JSON, and let the monitor/reporting flow decide whether it should be treated as FAIL under hard-fail monitor policy or retried due to other blockers.
+### 5. Write Integration Manifest
 
-When reporting externally, quote **total token throughput** fields exactly as emitted by the benchmark JSON (do not normalize to per-GPU rates unless the baseline file already does). If multiple JSON files match the optimized filename pattern, prefer the newest mtime and archive the others under `{{RESULTS_DIR}}/archive/` to avoid validator ambiguity.
-
-Spot-check `optimization_comparison.json` manually: `speedup` should be `optimized / baseline` within floating-point tolerance, and `performance_gate` should match the measured band. `validated = true` is required only for a clean pass; a `warn` gate is acceptable, but it must never be reported as a passing E2E win.
-
-### 6b. Independent Speedup Verification (V2 only)
-
-When `V2_MONITOR=true` (indicated in the handoff), perform independent verification of GEAK-reported speedups against the measured E2E result:
-
-1. Read per-kernel speedups from `{{PROBLEMS_DIR}}/geak_results.json`.
-2. Compute the predicted system-level speedup by weighting each kernel's speedup by its profile contribution (from `{{PROBLEMS_DIR}}/optimization_manifest.json`, field `profile_pct`).
-3. Compare `predicted_speedup` against the measured `e2e_speedup` from `{{RESULTS_DIR}}/optimization_comparison.json`.
-4. Compute `geak_discrepancy_pct = abs(predicted_speedup - e2e_speedup) / e2e_speedup * 100`.
-5. Write verification results to `## Key Findings`:
-   - `predicted_speedup`: weighted sum from GEAK per-kernel results
-   - `geak_discrepancy_pct`: percentage difference between predicted and measured
-   - `geak_verification_status`: `pass` if discrepancy < `GEAK_DISCREPANCY_THRESHOLD_PCT` (default 10%), `warn` otherwise
-
-If `geak_discrepancy_pct` exceeds the threshold, flag the kernels with the largest contribution to the discrepancy. This helps the monitor detect `geak_false_claim` category failures.
-
-### 7. Clean Up
-```bash
-cd {{REPO_DIR}} && git checkout -- "$BENCHMARK_SCRIPT" benchmarks/benchmark_lib.sh 2>/dev/null || true
-docker stop "$CONTAINER_NAME" 2>/dev/null; docker rm "$CONTAINER_NAME" 2>/dev/null
-```
-
-### 7b. Write Integration Manifest
-
-After validation, write `{{RESULTS_DIR}}/integration_manifest.json` summarizing every integration target and its outcome:
+After validation, write `{{RESULTS_DIR}}/integration_manifest.json` (kept
+name, new schema):
 
 ```json
 {
-  "schema_version": "1.0",
-  "plugin_type": "sglang_plugin",
-  "comparison_file": "optimization_comparison.json",
-  "targets": [
-    {
-      "name": "fused_moe",
-      "kernel_file": "problem_fused_moe_opt.py",
-      "strategy": "plugin",
-      "status": "integrated",
-      "kernel_speedup": 1.35,
-      "blocker_classification": null
-    },
-    {
-      "name": "rope_forward",
-      "kernel_file": "problem_rope_forward_opt.py",
-      "strategy": "skipped",
-      "status": "blocked",
-      "kernel_speedup": 1.0,
-      "blocker_classification": "true_kernel_parity"
-    }
+  "schema_version": "2.0",
+  "libraries_rebuilt": [
+    {"lib": "fla", "commit": "<sha>", "install_log_path": "results/rebuild_fla.log"},
+    {"lib": "vllm", "commit": "<sha>", "install_log_path": "results/rebuild_vllm.log"}
   ],
-  "summary": {
-    "total_targets": 2,
-    "integrated": 1,
-    "blocked": 1,
-    "skipped": 0,
-    "coverage_pct": 0.5
-  }
+  "dispatch_verified": true,
+  "e2e_ran":           true,
+  "artifacts_valid":   true
 }
 ```
 
-Populate from `geak_results.json` (kernel speedups) and the plugin `manifest.json` (which kernels were actually registered). For targets not integrated, record the `blocker_classification` from RCA context or Phase 07 metadata.
+Populate from `{{RESULTS_DIR}}/dispatch_verification.json`,
+`{{OUTPUT_DIR}}/forks/manifest.json`, and the `e2e_after_rebuild` summary.
+
+### 6. Clean Up
+
+```bash
+docker stop "$CONTAINER_NAME" 2>/dev/null; docker rm "$CONTAINER_NAME" 2>/dev/null
+```
 
 ### Completion
-Write `agent-results/phase-08-result.md` with baseline_throughput, optimized_throughput, speedup, plugin_type.
 
-Include these scalar fields in `## Key Findings` for monitor consumption:
-- `baseline_file`: filename of the baseline JSON used
-- `optimized_file`: filename of the optimized JSON used
-- `validation_status`: pass | warn | fail (mirrors `performance_gate` from `optimization_comparison.json`)
-- `coverage_pct`: float — fraction of Phase 07 winners that were integrated
-- `blocked_target_count`: integer — targets with a structured blocker classification
-- `critical_blocker_count`: integer — subset of blocked targets where classification is not `true_kernel_parity`
+Write `agent-results/phase-08-result.md`. Include in `## Key Findings` for
+monitor consumption:
 
-Reference `results/optimization_comparison.json` and `results/integration_manifest.json` in `## Artifacts`. The monitor reads `artifacts_valid`, `performance_gate`, `e2e_speedup`, `ttft_regression_pct`, and `ttft_upgraded` from the comparison file via detection rules (pre-extracted into the monitor context JSON by the orchestrator).
+- `dispatch_verified`: bool
+- `expected_symbol_total_count`: integer
+- `vendor_symbol_leaked_count`: integer
+- `redirect_honored_count`: integer
+- `redirect_required_count`: integer
+- `libraries_rebuilt_ok_count`: integer
+- `libraries_rebuild_failed_count`: integer
+- `e2e_speedup`: float (from `optimization_comparison.json`)
+- `validation_status`: pass | warn | fail (mirrors `performance_gate`)
 
-If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact and adjust your approach based on the retry recommendation and blocker classifications:
-- Targets classified as `true_kernel_parity`: skip integration for these targets.
-- Targets classified as `adapter_overhead`: rewrite the adapter to reduce overhead.
-- Targets classified as `needs_source_patch` or `needs_model_adapter`: spawn the coding agent for those specific targets.
-- Targets classified as `framework_limit`: document as a structured blocker rather than retrying.
+Reference `results/dispatch_verification.json`,
+`results/integration_manifest.json`,
+`results/optimization_comparison.json`, and the per-library
+`results/rebuild_<lib>.log` files in `## Artifacts`.
 
-Do NOT write to `progress.json` — the orchestrator manages progress tracking.
+If the handoff contains a `## Root Cause Analysis` section from a prior
+failed attempt, adjust per the new blocker enum in
+`protocols/rerun-protocol.md`.
 
----
+Do NOT write to `progress.json` -- the orchestrator manages progress
+tracking.
 
-## Required Telemetry (mandatory per attempt)
+### Removed Outputs (do NOT emit)
 
-Without these artifacts the orchestrator's L1 `WarmupBiasFilter` cannot run, and the loop will burn retry budget on un-attributable headlines (the failure mode that drove the gptoss-fp4 attempts 4 and 6 manual investigation).
-
-Every integration attempt MUST emit:
-
-1. **Per-rank patch counters** — `optimized/integration_plugin/_runtime_counters_attempt{N}_rank{R}.json` for each tensor-parallel rank, written via an `atexit` handler in the plugin. Each file must contain:
-   ```json
-   {
-     "attempt": <N>,
-     "rank": <R>,
-     "patch_log_len": <int>,
-     "active_counts": {"<patched_symbol>": <int>, ...},
-     "first_active_iter": {"<patched_symbol>": <int|null>, ...}
-   }
-   ```
-   Use `scripts/integration/dump_patch_counters.py` (promote any one-off scripts into this canonical helper). Counters that stay at zero across all ranks for a given symbol prove that patch site never executed in the live decode path — this is the central evidence the systemic RCA needs.
-
-2. **TTFT distribution scalars in the result frontmatter** — under `## Key Findings`, emit the following flat fields parsed by the monitor:
-   - `std_ttft_baseline` (float, ms)
-   - `std_ttft_optimized` (float, ms)
-   - `std_ttft_ratio` = `std_ttft_optimized / std_ttft_baseline` (float)
-   - `sum_patch_call_counters` (integer, sum across all ranks of `active_counts` values)
-   - `e2e_attributable` (`true` | `false` | `null`) — set `false` when ratio < 0.1 and counters == 0; `null` when telemetry is incomplete.
-
-3. **Sticky scalars** — for each patched symbol `S`, emit `patch_calls_<S>_attempt{N}` so the running-summary frontmatter preserves per-attempt counter activation across the loop.
-
-4. **`_runtime_report.json`** — `optimized/integration_plugin/_runtime_report.json` aggregates the per-rank counters at the end of the run for the monitor's pre-extraction step. Schema: `{"attempt": <N>, "ranks_present": [...], "active_counts_total": {...}, "ranks_with_zero_counters": [...]}`.
-
-If any of (1)-(4) are missing, the result is incomplete and the monitor will fail the artifact integrity check. Do NOT mark the attempt complete.
-
----
-
-## Plugin edit escape hatch (strict guardrail preserved)
-
-Direct modification of the plugin file from within the agent is **prohibited**. The guardrail exists to keep agent-authored code reviewable and to prevent an agent from quietly inserting `@torch._dynamo.disable` decorators that change correctness semantics.
-
-When a per-phase RCA names a specific mechanical edit (e.g. `@torch._dynamo.disable`, `@torch.compiler.disable`, a `torch.compiler.is_compiling()` guard, a `print()` → `_PATCH_LOG.append(...)` swap, or a Dynamo-incompatible call-site rewrite), the agent MUST surface the edit through a structured handoff:
-
-1. Write `handoff/manual-edits-required-attempt{N}.md` with one row per edit, using the fixed template:
-   ```
-   <file>:<line> | OLD | NEW | rationale
-   ```
-   Example:
-   ```
-   optimized/integration_plugin/__init__.py:142 | def patched_apply(self, x): | @torch._dynamo.disable\ndef patched_apply(self, x): | Dynamo cannot trace through HIP kernel launch; without disable the patch is silently skipped during torch.compile graph capture
-   ```
-
-2. Set `manual_edits_required: true` in the result frontmatter and reference the handoff path under `## Artifacts`.
-
-3. Set the result `status` to `blocked_pending_user_edit`. The orchestrator will surface a single AskUserQuestion to the user with the diff inline as preview, offering: "Apply these N lines (manual), or convert to a control experiment?"
-
-Do NOT silently retry the same attempt hoping the user will see the warning. Do NOT inline the edit yourself.
+`optimized/integration_plugin/_runtime_report.json`, all
+`_runtime_counters_attempt*_rank*.json`, `vllm_plugin/`,
+`sglang_plugin/`, `bench_dispatch.py`, `launch_patched.py`,
+`run_e2e_benchmark.sh`, `manual-edits-required-attempt*.md` (the plugin
+escape hatch is gone with the plugin path).

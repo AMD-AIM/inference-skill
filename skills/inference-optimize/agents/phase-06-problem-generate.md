@@ -1,126 +1,245 @@
-# Phase 6: Problem Generation
+# Phase 6: Upstream Resolve (filename kept as `problem-generate` for registry compatibility)
 
 ## Instructions
 
-You are a phase agent responsible for generating optimization problem files from profiling data. You read exactly 2 files: this document and your handoff at `handoff/to-phase-06.md`.
+You are a phase agent responsible for resolving each profile-dominant kernel
+to its upstream source location, forking the relevant libraries at pinned
+commits, and emitting the optimization manifest that drives Phase 7. You
+read exactly 2 files: this document and your handoff at
+`handoff/to-phase-06.md`.
 
-**Tools**: Shell commands, Python, file I/O.
-**Outputs**: Write `agent-results/phase-06-result.md`. Write problem files and manifest to `{{PROBLEMS_DIR}}`.
-**Errors**: If `gap_analysis.json` is missing, report failure immediately -- this is a hard prerequisite.
+This phase **replaces** the legacy "extract-shapes / analyze-fusion /
+generate-problems" path. Synthetic harness construction (`problem_*.py`
+files, `fusion_opportunities.json`, `bottleneck_kernels.json`,
+`roofline_bottlenecks.json`, `model_shapes.json`) is removed. The pipeline
+now optimizes the upstream source file in place; Phases 7-8 rebuild the
+forked library and verify dispatch via rocprofv3.
+
+**Tools**: Shell commands, Python, file I/O, `AskUserQuestion`.
+**Outputs**: Write `agent-results/phase-06-result.md`. Write the manifest,
+forks, and resolution audits as documented in *Outputs* below.
+**Errors**: If `gap_analysis.json` is missing, report failure immediately
+- this is a hard prerequisite.
 
 ## Runbook
 
 ### 1. Verify Prerequisites
 ```bash
 [ -f "{{OUTPUT_DIR}}/results/gap_analysis/gap_analysis.json" ] || { echo "ERROR: gap_analysis.json missing"; exit 1; }
-```
-Find GEMM CSV in tracelens output dirs:
-```bash
-GEMM_CSV=$(find "{{OUTPUT_DIR}}/results" -path "*/tracelens_*_csvs/GEMM.csv" -print -quit 2>/dev/null || true)
-if [ -z "$GEMM_CSV" ]; then echo "WARNING: No GEMM.csv found in tracelens output dirs"; fi
+[ -f "{{OUTPUT_DIR}}/results/profile_analysis.json" ] || { echo "ERROR: profile_analysis.json missing"; exit 1; }
+mkdir -p "{{PROBLEMS_DIR}}" "{{OUTPUT_DIR}}/forks" "{{OUTPUT_DIR}}/refs" "{{RESULTS_DIR}}"
 ```
 
-### 1.5. Classify Kernel Types
-Treat `{{OUTPUT_DIR}}/results/profile_analysis.json` as the **primary** input. When estimating optimization impact, **exclude communication time** from the denominator so comm-heavy runs do not drown out compute targets. Use `classify_kernel()` from `classify_kernel.py` on each relevant op name; **skip** any op whose classified type is `communication` (those are not kernel-optimization problems in this pipeline).
+### 2. Capture Baseline Dispatch Trace (rocprofv3)
 
-```python
-import json, os, sys
-sys.path.insert(0, "{{SCRIPTS_DIR}}/optimize")
-from classify_kernel import classify_kernel
-# Read profile_analysis.json, classify each kernel, exclude communication,
-# write kernel_type_classification.json to PROBLEMS_DIR
-```
-
-Runnable reference (writes `{{PROBLEMS_DIR}}/kernel_type_classification.json` with `comm_pct_excluded` and `classifications` sorted by `pct_optimizable` descending):
+Run rocprofv3 once on the already-completed Phase-2 baseline launcher to
+capture the ground-truth dispatched symbol set. The display name in
+TraceLens often differs from the true library symbol; the classifier in
+step 4 matches the runtime symbol.
 
 ```bash
-python3 << 'CLASSIFY'
-import json, os, sys
-sys.path.insert(0, "{{SCRIPTS_DIR}}/optimize")
-from classify_kernel import classify_kernel
-
-profile_path = "{{OUTPUT_DIR}}/results/profile_analysis.json"
-if not os.path.isfile(profile_path):
-    print("WARNING: profile_analysis.json not found"); exit(0)
-
-profile = json.load(open(profile_path))
-comm_pct = profile.get("category_breakdown", {}).get("communication", 0)
-non_comm_total = 100.0 - comm_pct
-classifications = []
-for op in profile.get("top_ops", []):
-    kernel_type, _ = classify_kernel(op.get("name", ""))
-    if kernel_type == "communication":
-        continue
-    pct_opt = (op.get("pct", 0) / non_comm_total * 100.0) if non_comm_total > 0 else 0
-    classifications.append({"name": op["name"], "kernel_type": kernel_type, "pct_optimizable": round(pct_opt, 2)})
-
-os.makedirs("{{PROBLEMS_DIR}}", exist_ok=True)
-with open("{{PROBLEMS_DIR}}/kernel_type_classification.json", "w") as f:
-    json.dump({"comm_pct_excluded": round(comm_pct, 2), "classifications": sorted(classifications, key=lambda x: -x["pct_optimizable"])}, f, indent=2)
-CLASSIFY
+python3 "{{SCRIPTS_DIR}}/integrate/verify_dispatch.py" \
+    --output-dir "{{OUTPUT_DIR}}" \
+    --mode baseline-only \
+    --launcher "$BASELINE_LAUNCHER"
 ```
 
-### 2. Create Directories
+Writes `{{RESULTS_DIR}}/baseline_dispatch_trace.json`. Reused by Phase 8 as
+the "before" image for dispatch-swap verification.
+
+### 3. Build Top-Kernel Candidate List
+
+Read `profile_analysis.json` and select the kernels above
+`OPTIMIZE_PRIORITY_THRESHOLD`. Exclude communication-class entries (use
+`classify_kernel.py`'s `SKIP_KERNEL_TYPES` for that filter).
+
+### 4. Resolve Each Candidate to Upstream Source
+
+For each candidate symbol (using the actual runtime symbol from
+`baseline_dispatch_trace.json`), call:
+
 ```bash
-mkdir -p "{{PROBLEMS_DIR}}" "{{OPTIMIZED_DIR}}"
+python3 "{{SCRIPTS_DIR}}/optimize/resolve_upstream_source.py" \
+    --symbol "$SYMBOL" \
+    --vllm-version "{{VLLM_VERSION}}"
 ```
 
-### 3. Extract Model Shapes
+Returns the matching `kernel_source_map.yaml` entry as JSON. The entry
+carries `library`, `source_form`, `bucket` (A | B | C), tentative
+`geak_strategy`, `gating_reason` (Bucket B only), `upstream_repo`,
+`source_file`, `library_test_path`, `library_test_command`,
+`rebuild_command`, `expected_dispatch_symbols`, `vendor_baseline_symbols`,
+`cost_profile`, and `geak_task_hint`. Exit code 1 means the symbol did not
+match any pattern - record under `unresolved_kernels.json`.
+
+### 5. Fork Required Upstream Repos
+
+Once the per-kernel resolutions are in hand, clone (or update) every
+referenced upstream library at its pinned commit:
+
 ```bash
-python3 "{{SCRIPTS_DIR}}/optimize/extract_model_shapes.py" \
-    --output "{{PROBLEMS_DIR}}/model_shapes.json" \
-    --gemm-csv "$GEMM_CSV" --config-json "{{OUTPUT_DIR}}/config.json"
+python3 "{{SCRIPTS_DIR}}/optimize/fork_upstream.py" \
+    --output-dir "{{OUTPUT_DIR}}" \
+    --vllm-version "{{VLLM_VERSION}}"
 ```
 
-### 4. Run Fusion Analysis
+Idempotent: re-uses existing checkouts. Writes `{{OUTPUT_DIR}}/forks/<lib>/`
+on a `geak/main` branch and records
+`{{OUTPUT_DIR}}/forks/manifest.json` with `repo_url`, `pinned_commit`,
+`fork_path`, `dirty`, `rebuild_command`, plus the global
+`ck_branch_merged_status` (probed against GEAK upstream's
+`feature/ck-preprocess-main`). When `ck_branch_merged_status == true`,
+`ck_template` rows in the source map may be promoted from Bucket B to
+Bucket A (treated per the `hip_cpp` row's inner-loop rules).
+
+### 6. Resolve Redirect Targets
+
+For every kernel whose tentative `geak_strategy` is
+`dispatch_redirect_to_triton` or `dispatch_redirect_to_open_lib`, look up
+the recipe in `resources/redirect_recipes.yaml` and emit
+`{{PROBLEMS_DIR}}/redirect_plan.json` with one record per redirect:
+
+```json
+{
+  "source_symbol": "...",
+  "source_lib":   "...",
+  "target_symbol": "...",
+  "target_lib":   "...",
+  "target_file":  "...",
+  "dispatch_site_file": "...",
+  "dispatch_site_patch_hint": "..."
+}
+```
+
+Prefer `dispatch_redirect_*` over `in_place_optimize_no_harness` whenever
+a redirect target exists -- the redirected target inherits Bucket A's
+per-kernel pytest gating.
+
+### 7. Bucket B Confirmation Gate (`AskUserQuestion`)
+
+For every kernel whose tentative strategy is
+`in_place_optimize_no_harness`, raise an `AskUserQuestion` (batched into
+a single multi-question call when several apply):
+
+> "Kernel `<name>` (source form `<form>`, library `<lib>`, gating reason
+> `<gating_reason>`) has no built-in per-kernel test harness / requires a
+> multi-hour rebuild cycle. GEAK will still optimize it, but per-kernel
+> validation falls back to the Phase-8 E2E benchmark only (no per-kernel
+> pytest gate). Estimated cost: `<per_attempt_minutes>` per attempt x up
+> to 5 attempts; rebuild `<rebuild_minutes>` per cycle. Proceed?"
+>
+> Options: `proceed_with_warning` | `skip_this_kernel` |
+> `redirect_if_possible` (only offered when a redirect target exists).
+
+Persist user choices into the manifest's `user_decision` field so reruns
+are deterministic. Resolve the final `geak_strategy` from the user's
+choice:
+- `proceed_with_warning` -> keep `in_place_optimize_no_harness`
+- `skip_this_kernel` -> `unfeasible_record_only` with
+  `skip_reason: user_declined_no_harness_path` (or
+  `user_declined_rebuild_too_expensive` for `aten_native`)
+- `redirect_if_possible` -> swap to the matching `dispatch_redirect_*`
+  strategy
+
+### 8. Bucket B Reference Capture
+
+For every kernel whose final `geak_strategy ==
+in_place_optimize_no_harness`, invoke once:
+
 ```bash
-python3 "{{SCRIPTS_DIR}}/optimize/analyze_fusion.py" \
-    --gap-analysis "{{OUTPUT_DIR}}/results/gap_analysis/gap_analysis.json" \
-    --tracelens-dir "{{OUTPUT_DIR}}/results/tracelens_rank0_csvs" \
-    --decode-tracelens-dir "{{OUTPUT_DIR}}/results/tracelens_decode_only_csvs" \
-    --framework "{{FRAMEWORK}}" --threshold 1.0 \
-    --gpu-arch "{{OUTPUT_DIR}}/results/gpu_arch.json" \
-    --model-precision "{{PRECISION}}" --output-dir "{{PROBLEMS_DIR}}"
+python3 "{{SCRIPTS_DIR}}/optimize/capture_kernel_reference.py" \
+    --kernel "$NAME" \
+    --output "{{OUTPUT_DIR}}/refs/${NAME}_bf16.npz"
 ```
 
-### 5. Generate Problem Files
-```bash
-python3 "{{SCRIPTS_DIR}}/optimize/generate_problems.py" \
-    --fusion-opportunities "{{PROBLEMS_DIR}}/fusion_opportunities.json" \
-    --gap-analysis "{{OUTPUT_DIR}}/results/gap_analysis/gap_analysis.json" \
-    $([ -f "{{PROBLEMS_DIR}}/bottleneck_kernels.json" ] && echo "--bottleneck-kernels {{PROBLEMS_DIR}}/bottleneck_kernels.json") \
-    --gemm-csv "$GEMM_CSV" \
-    --gpu-arch "{{OUTPUT_DIR}}/results/gpu_arch.json" \
-    --model-shapes "{{PROBLEMS_DIR}}/model_shapes.json" \
-    --framework "{{FRAMEWORK}}" \
-    --priority-threshold {{OPTIMIZE_PRIORITY_THRESHOLD}} \
-    --output-dir "{{PROBLEMS_DIR}}" \
-    $([ -f "{{PROBLEMS_DIR}}/kernel_type_classification.json" ] && echo "--kernel-types {{PROBLEMS_DIR}}/kernel_type_classification.json") \
-    $([ -f "{{PROBLEMS_DIR}}/roofline_bottlenecks.json" ] && echo "--roofline-bottlenecks {{PROBLEMS_DIR}}/roofline_bottlenecks.json --roofline-threshold 80.0")
+The script runs the baseline vLLM, captures the kernel's input/output
+bf16 tensors over a representative decode + prefill batch, and writes the
+npz that `no_harness_fallback_test.py` (Phase 7) and
+`allocator_integration_test.py` will diff against. Failures here demote
+the kernel to `unfeasible_record_only` with
+`skip_reason: reference_capture_failed`.
+
+### 9. Emit Optimization Manifest
+
+Write `{{PROBLEMS_DIR}}/optimization_manifest.json` (kept filename, new
+schema) - an array of:
+
+```
+{
+  "name", "baseline_dispatch_symbol",
+  "library", "source_form", "bucket", "geak_strategy",
+  "gating_reason": null|no_test_harness|rebuild_too_expensive,
+  "user_decision": null|proceed_with_warning|skip_this_kernel|redirect_if_possible,
+  "upstream_repo", "pinned_commit", "source_file", "fork_path",
+  "library_test_path", "library_test_command",
+  "expected_dispatch_symbols", "vendor_baseline_symbols",
+  "rebuild_command", "profiling_pct", "priority_score",
+  "cost_profile", "optimize": bool, "enabled": bool,
+  "skip_reason": str|null
+}
 ```
 
-**Conditional flags:** The trailing `$([ -f ... ] && echo ...)` clauses are intentional. When `kernel_type_classification.json` exists (step 1.5), pass `--kernel-types` so generation respects per-kernel typing and prioritization. When `roofline_bottlenecks.json` exists, pass `--roofline-bottlenecks` and `--roofline-threshold 80.0` so only sub-roofline targets (below 80% efficiency) are emphasized. Omit flags automatically when files are missing.
+`optimize=true` only when `geak_strategy != unfeasible_record_only` AND
+priority gate passes. Populate `skip_reason` when `optimize=false`
+(values include: `no_open_alternative`, `user_declined_no_harness_path`,
+`user_declined_rebuild_too_expensive`, `unresolved_unknown_symbol`,
+`priority_below_threshold`, `reference_capture_failed`).
 
-### 5b-5e. Agent-Generated Problem Files
-For kernel types that need human/agent-authored scaffolding beyond the bulk generator, add problem files that satisfy the GEAK `Model` / `ModelNew` contract:
+Also write:
 
-- **HIP / CK (`hip`, `ck`):** `Model` should invoke the real HIP kernel via Python bindings where possible so the baseline reflects production code, not a synthetic stub.
-- **Triton composite (`triton_composite`):** `Model` calls the composite entry point directly and records paths to each sub-kernel source file GEAK must reason about.
-- **Vendor kernels:** If vendor source is accessible in the workspace, point problem metadata at the true implementation. If source is inaccessible, fall back to a `torch.mm` (or equivalent) baseline using profiled shapes so optimization still has a defined target.
-- **Roofline-gated targets:** Apply per-type strategy (MoE GEMM, FP4 GEMM, attention, normalization, activation, etc.). Always skip pure communication and `moe_sort`-class ops. Skip generation when roofline efficiency is already ≥ 80% (headroom too small).
-
-### 6. Review
-List generated `problem_*.py` files and `optimization_manifest.json`.
+- `{{PROBLEMS_DIR}}/redirect_plan.json` (only when at least one kernel
+  uses a `dispatch_redirect_*` strategy)
+- `{{PROBLEMS_DIR}}/kernel_source_map_resolved.json` -- per-kernel lookup
+  result, axis-1/axis-2 classification, strategy decision, reason if
+  unresolved or unfeasible
+- `{{PROBLEMS_DIR}}/unresolved_kernels.json` -- kernels with
+  `library: unknown` that need human triage
 
 ### Completion
-Write `agent-results/phase-06-result.md` with problems_generated count, fusion_opportunities count, manifest_entries count.
 
-Include these sticky fields in `## Data for Next Phase`:
-- `optimization_targets`: integer (count of manifest entries targeted for optimization)
-- `problem_count`: integer (same as problems_generated)
+Write `agent-results/phase-06-result.md` with the new scalar fields.
+Include in `## Key Findings` for monitor consumption:
 
-Include these scalar fields in `## Key Findings` for monitor consumption:
-- `problems_generated`: integer count of problem files written
-- `max_kernel_types_per_problem`: integer. For each problem file, count distinct `kernel_type` values among its kernels (using classify_kernel on each kernel name). Report the maximum across all files. Values > 2 indicate bad grouping.
+- `upstream_resolved_count`: integer (kernels resolved to a known library)
+- `unresolved_unknown_count`: integer (kernels with library == unknown)
+- `unresolved_unknown_pct_of_top_time`: float (percent of top-N GPU time
+  that remains unresolved)
+- `forks_pinned_count`: integer (libraries successfully checked out)
+- `forks_required_count`: integer (libraries that needed forking)
+- `bucket_a_count`, `bucket_b_count`, `bucket_c_count`: integer
+- `bucket_b_user_proceed_count`, `bucket_b_user_skip_count`,
+  `bucket_b_user_redirect_count`: integer (must sum to `bucket_b_count`
+  before this phase passes)
+- `dispatch_redirect_planned_count`: integer
+- `baseline_dispatch_trace_captured`: bool
+- `ck_branch_merged_status`: bool
 
-Do NOT write to `progress.json` — the orchestrator manages progress tracking.
+Reference `problems/optimization_manifest.json`,
+`problems/redirect_plan.json`, `problems/kernel_source_map_resolved.json`,
+`forks/manifest.json`, and `results/baseline_dispatch_trace.json` in
+`## Artifacts`.
+
+Do NOT write to `progress.json` -- the orchestrator manages progress
+tracking.
+
+### Outputs
+
+- `{{OUTPUT_DIR}}/forks/<lib>/` - checkout at pinned commit on a `geak/main`
+  branch.
+- `{{OUTPUT_DIR}}/forks/manifest.json` -- per-library
+  `{repo_url, pinned_commit, fork_path, dirty, rebuild_command}`, plus
+  global `ck_branch_merged_status: bool` and `vllm_version`.
+- `{{PROBLEMS_DIR}}/optimization_manifest.json` -- canonical optimization
+  manifest (new schema above).
+- `{{PROBLEMS_DIR}}/redirect_plan.json` -- when redirects planned.
+- `{{PROBLEMS_DIR}}/kernel_source_map_resolved.json` -- resolution audit.
+- `{{PROBLEMS_DIR}}/unresolved_kernels.json` -- triage list.
+- `{{RESULTS_DIR}}/baseline_dispatch_trace.json` -- rocprofv3 baseline.
+- `{{OUTPUT_DIR}}/refs/<kernel>_bf16.npz` -- one per Bucket B opt-in.
+
+### Removed Outputs (do NOT emit)
+
+`problem_*.py`, `fusion_opportunities.json`, `bottleneck_kernels.json`,
+`roofline_bottlenecks.json`, `model_shapes.json`,
+`kernel_type_classification.json` (the old per-file classifier output;
+classification is now embedded inline in the manifest).

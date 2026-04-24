@@ -1,201 +1,299 @@
-# Phase 7: Kernel Optimization
+# Phase 7: Kernel Optimize (in-place GEAK on forked source)
 
 ## Instructions
 
-You are a phase agent responsible for optimizing bottleneck GPU kernels using GEAK or manual methods. You read exactly 2 files: this document and your handoff at `handoff/to-phase-07.md`.
+You are a phase agent responsible for running GEAK against the upstream
+source files in the forks produced by Phase 6, applying winning patches,
+running the library's own test suite + the allocator-equivalent
+integration test, and pre-flighting dispatch with rocprofv3 before Phase 8
+burns wall-clock on the e2e benchmark. You read exactly 2 files: this
+document and your handoff at `handoff/to-phase-07.md`.
 
-**Tools**: Shell commands, Docker, Python, file I/O.
-**Outputs**: Write `agent-results/phase-07-result.md`. Write optimized kernels to `{{OPTIMIZED_DIR}}`, results to `{{PROBLEMS_DIR}}/geak_results.json`.
-**Sub-agents**: Spawn coder subagents for kernel writing tasks per `agents/coding-agent.md`.
-**Errors**: Track per-kernel attempts (max 5). Report partial results if some kernels fail.
+This phase **replaces** the legacy synthetic-harness path
+(`kernel_test_runner.py`, `kernel_finalize.py`,
+`verify_winning_kernels.py`, `*_opt.py` files, `traj_*.json`,
+`Model`/`ModelNew`/`get_inputs()` convention, `RESULT_JSON:` /
+`GEAK_RESULT_LATENCY_MS=` parsers, the `simple` vs `kernel-url` mode
+distinction, and the `mini` CLI alias).
+
+**Tools**: Shell commands, Docker, Python, file I/O, `geak` CLI.
+**Outputs**: Write `agent-results/phase-07-result.md`. Mutate forks under
+`{{OUTPUT_DIR}}/forks/<lib>/` (new commits on `geak/main`). Write
+`{{PROBLEMS_DIR}}/geak_results.json` and
+`{{RESULTS_DIR}}/preflight_dispatch_trace.json`.
 
 ## Runbook
 
 ### Progress Reporting
-This phase can run up to 90 minutes. Print a one-line status update before each major step:
-- Before GEAK mode resolution: `[phase-07] Resolving GEAK mode...`
-- Before each kernel target: `[phase-07] Optimizing kernel N/M: <name> (<pct>% GPU time)...`
-- After each kernel: `[phase-07] Kernel <name>: speedup=<X>x (attempt <i>/<max>)`
-- Before collecting results: `[phase-07] Collecting winning kernels...`
+This phase can run up to 90 minutes. Print one-line status updates:
+- Before each kernel target: `[phase-07] Optimizing kernel N/M: <name> (<pct>% GPU time, strategy=<S>)...`
+- After each GEAK invocation: `[phase-07] GEAK <name>: best_speedup=<X>x via <patch_file>`
+- After commit-winners: `[phase-07] Applied N winners to fork <lib>`
+- Before library-suite step: `[phase-07] Running library test suites...`
+- Before allocator test: `[phase-07] Running allocator-integration test...`
+- Before pre-flight: `[phase-07] Pre-flighting dispatch with rocprofv3...`
 
 ### Prerequisites
-- Problem files and metadata from Phase 6 under `{{PROBLEMS_DIR}}/`
-- `{{PROBLEMS_DIR}}/optimization_manifest.json` (with kernel types and profiling metadata)
-- `{{ENV_INFO_FILE}}` from Phase 0 (GEAK / GPU / environment facts)
-- Docker image with PyTorch + Triton — use the **same** `IMAGE` as Phases 2 and 4 unless the handoff explicitly changes it
 
-### Config Resolution
-Read `{{OUTPUT_DIR}}/results/sweep_configs.json` (fallback: `{{OUTPUT_DIR}}/config.json` if that is how this run stores globals) and export shell variables used later: `RUNNER`, `IMAGE`, `FRAMEWORK`, `MODEL`, `PRECISION`, `TP`, `EP` (and any other keys the container scripts expect from the handoff).
-
-### 0. Resolve GEAK Mode
-```bash
-python3 "{{SCRIPTS_DIR}}/optimize/resolve_geak_mode.py" \
-    --user-mode "{{GEAK_MODE}}" --env-info "{{ENV_INFO_FILE}}"
-```
-Capture `EFFECTIVE_GEAK_MODE`: `full`, `triton_only`, or `manual`.
-
-Mode semantics:
-- `full` — process both `simple` and `kernel-url` manifest entries.
-- `triton_only` — process **only** `simple` entries (skip `kernel-url` vendor/C++ paths).
-- `manual` — skip GEAK automation entirely and follow the **Manual Fallback** section.
+- `{{PROBLEMS_DIR}}/optimization_manifest.json` from Phase 6
+- `{{PROBLEMS_DIR}}/redirect_plan.json` (when redirects planned)
+- `{{OUTPUT_DIR}}/forks/<lib>/` checkouts on `geak/main`
+- `{{OUTPUT_DIR}}/forks/manifest.json`
+- `{{ENV_INFO_FILE}}` from Phase 0
+- `{{OUTPUT_DIR}}/refs/<name>_bf16.npz` for every Bucket B kernel
+- `{{KERNEL_SOURCE_MAP_PATH}}` and `{{LIBRARY_PINS_PATH}}` (skill-owned)
 
 ### 1. Load Manifest
 ```bash
 python3 "{{SCRIPTS_DIR}}/optimize/load_optimization_manifest.py" \
     --manifest "{{PROBLEMS_DIR}}/optimization_manifest.json" \
-    --geak-mode "$EFFECTIVE_GEAK_MODE" --optimize-scope "{{OPTIMIZE_SCOPE}}"
+    --optimize-scope "{{OPTIMIZE_SCOPE}}"
 ```
 
-The loader prints the prioritized kernel queue (highest `priority_score` first) grouped by GEAK mode—follow that ordering unless the handoff explicitly reprioritizes hot spots.
+The loader prints the prioritized kernel queue (highest `priority_score`
+first) grouped by `geak_strategy`. Follow that ordering. Skip every
+kernel whose `optimize == false`.
 
-### 2. Start Optimization Container
-```bash
-bash "{{SCRIPTS_DIR}}/container/start_profile_container.sh" \
-    --name "inference-kernel-opt-{{CONFIG_KEY}}" \
-    --image "$IMAGE" --runner "$RUNNER" \
-    --repo-dir "{{REPO_DIR}}" --hf-cache "{{HF_CACHE}}" \
-    --profile-dir "{{PROBLEMS_DIR}}" --mode optimize \
-    --mount "{{PROBLEMS_DIR}}:/workspace/problems" \
-    --mount "{{OPTIMIZED_DIR}}:/workspace/optimized" \
-    --mount "{{SCRIPTS_DIR}}:/workspace/scripts" \
-    --mount "{{GEAK_DIR}}:/workspace/geak" \
-    --env "AMD_LLM_API_KEY=${AMD_LLM_API_KEY:-}" \
-    --env "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
-    --env "LLM_GATEWAY_KEY=${LLM_GATEWAY_KEY:-}"
-```
+### 2. Per-Kernel GEAK Invocation
 
-**Container bind mounts (reference):**
-
-| Host path | Container path | Purpose |
-|-----------|------------------|---------|
-| `{{PROBLEMS_DIR}}` | `/workspace/problems` | Inputs, GEAK workspaces, `optimization_logs/` |
-| `{{OPTIMIZED_DIR}}` | `/workspace/optimized` | Winning kernels promoted for Phase 8 |
-| `{{SCRIPTS_DIR}}` | `/workspace/scripts` | `kernel_finalize.py`, runners, utilities |
-| `{{GEAK_DIR}}` | `/workspace/geak` | GEAK configs and tooling |
-
-### 3. Detect Container Environment
-Inside the running container, verify the toolchain before launching GEAK:
-
-- PyTorch imports and can allocate on the expected GPU (`torch.cuda.is_available()`, device name matches profiling notes).
-- Triton imports when any manifest entry still relies on Triton baselines.
-- GEAK’s `mini` driver responds to `--help` (or the configured launcher exists on `PATH`) and API keys from the `docker run` env are visible to the process.
-- Run `python3 "{{SCRIPTS_DIR}}/env/select_gpus.py"` (from the host **or** a one-off `docker exec` with the same GPU flags) so `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` maps to the intended devices—GEAK inherits those constraints.
-
-Document any mismatch between detected arch and `{{OUTPUT_DIR}}/results/gpu_arch.json` before burning attempts.
-
-### 3a. C++/Vendor Kernel Optimization (kernel-url mode)
-For entries with `geak_mode: kernel-url`, process in `profiling_pct` descending order.
-
-Source tracing required before GEAK — confirm the on-disk source matches the profiled kernel name (substring / symbol match):
-- Vendor GEMM (`Cijk_*`): Tensile-generated, dispatched by hipBLASLt
-- CK/aiter kernels: `aiter/csrc/` package
-
-**Operator-specific guidance:**
-
-| Type | Source location | Compute spec |
-|------|-----------------|---------------|
-| MoE GEMM | `aiter/csrc/ck_gemm_moe_2stages_codegen/` | Varies by precision |
-| FP4 GEMM | `aiter/aiter/ops/triton/gemm_afp4wfp4.py` | `matrix_fp4` |
-| Attention | `aiter/csrc/mla/` | `matrix_bf16` |
-| Normalization | `aiter/csrc/` | Typically memory-bound |
-
-For each kernel:
-1. Prepare isolated workspace: copy source, `git init && git add -A && git commit -m init`
-2. Build task description with roofline data: include `compute_spec`, `tflops_s`, `roofline_efficiency`, and `peak_tflops` when available from profiling artifacts
-3. Launch GEAK: `mini -m claude-opus-4.6 --config mini_kernel.yaml --repo /workspace/${NAME}_opt --gpu-ids $GPU_IDS --yolo -t '${TASK_DESC}' -o traj_${NAME}.json` (where `GPU_IDS` is read from `HIP_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES` env var)
-4. **Vendor GEMM (no external source tree):** copy **only** the problem `.py` into the isolated workspace — avoid copying multi-megabyte generated trees that produce unusable mega-patches
-5. If the winning build measurably speeds up the kernel (`speedup > 1.0x`), install it back into the environment the benchmark uses via `AITER_REBUILD=1` (rebuild aiter) or `pip install -e .` from the component root, matching how the stack is consumed in this image
-
-### 3b. Triton Optimization (simple mode)
-**Scope:** Simple mode applies **only** to kernels that were **originally authored in Triton** (`kernel_type: triton`). All other kernel types must flow through `kernel-url` / vendor workflows — do not route CK/HIP/vendor GEMMs through the Triton simple template.
-
-For each kernel:
-1. Build task description with shapes and roofline data
-2. `git init && git add -A && git commit -m init` in problems dir
-3. Launch GEAK: `mini -m claude-opus-4.6 --config geak.yaml --gpu-ids 0 --yolo -t '${TASK_DESC}' -o traj_${NAME}.json`
-
-### 3c. Mandatory Attempt Rule
-
-**A target MUST NOT be classified as `parity_or_blocked` unless at least one GEAK or manual optimization attempt has been made and a measured speedup recorded.** Specifically:
-
-1. A target without a trajectory file (`traj_*.json`) or a manual attempt entry in `manual_attempts.md` has **zero attempts** and cannot be classified as `parity_or_blocked`.
-2. Targets with zero attempts MUST be classified as `not_attempted`. A `not_attempted` classification triggers a monitor FAIL verdict — the phase will be retried with explicit instructions to attempt these targets.
-3. Valid `parity_or_blocked` requires: at least 1 attempt + measured speedup <= 1.0 + a documented reason (`true_kernel_parity`, `framework_limit`, `vendor_binary_only`, etc.).
-4. High-priority targets (top 3 by `profiling_pct`) require at least **two** attempts before `parity_or_blocked` is allowed — one GEAK and one manual/alternative approach.
-
-This rule exists because skipping high-value targets (e.g., MoE GEMM at 83% of GPU time) without even attempting optimization is the single biggest source of value loss in the pipeline.
-
-### 3.5. Patch Recovery (CRITICAL)
-Run after EVERY GEAK attempt. GEAK's `[SelectPatch]` agent frequently fails.
-
-GEAK typically writes trajectories plus `optimization_logs/<kernel_stem>_*/patch_<n>_test.txt` siblings. Treat every `patch_*_test.txt` as a candidate scoreboard even when the UI claims failure—many winning diffs never receive automatic promotion.
-
-1. Check GEAK log for `[SelectPatch]` success
-2. If selection failed: recursively scan `optimization_logs/${NAME}_*/patch_*_test.txt`. Each file usually records one candidate patch attempt.
-3. Parse lines containing `RESULT_JSON:` (JSON payload with timing / speedup fields) **or** `GEAK_RESULT_LATENCY_MS=` (scalar latency). Prefer the candidate with the best measured speedup vs baseline; if only latency is present, rank by lowest latency consistent with the harness.
-4. Map the winning text file back to its sibling `.diff` in the same patch directory; apply that diff to the workspace, then re-run `kernel_test_runner.py` to confirm accuracy + timing.
-5. Copy the verified winning `*_opt.py` into `{{OPTIMIZED_DIR}}/` immediately so Phase 8 sees stable artifacts even if GEAK later overwrites the workspace.
-
-### 4. Iterate and Finalize
-Allow up to **five** GEAK/manual attempts per kernel. After **every** attempt—successful or not—run Step 3.5 so no winning patch is stranded in `optimization_logs/`. Once a candidate passes accuracy + performance gates, run the finalize script to normalize formatting, metadata, and file naming expected by downstream collectors:
+All GEAK invocations share the canonical CLI shape:
 
 ```bash
-docker exec $CONTAINER_NAME python3 /workspace/scripts/optimize/kernel_finalize.py \
-    --target /workspace/problems/${NAME}_opt.py
+geak \
+    --repo "${FORK_PATH}" \
+    --kernel-url "${FORK_PATH}/${SOURCE_FILE}" \
+    --test-command "${TEST_COMMAND}" \
+    --task "${GEAK_TASK_HINT}" \
+    --gpu-ids "${GPU_IDS}" \
+    --num-parallel 4 \
+    --yolo --exit-immediately \
+    --config "{{RESOURCES_DIR}}/geak_override.yaml" \
+    -o "${OUTPUT_DIR}/${KERNEL_NAME}_opt/"
 ```
 
-Repeat finalize only on the file that actually ships to `{{OPTIMIZED_DIR}}/` to avoid clobbering exploratory drafts.
+`--repo` accepts the fork directory directly (it has a valid `.git` HEAD
+on `geak/main`). GEAK uses `git worktree add` to isolate per-agent edits
+under `optimization_logs/<run>/results/round_1/worktrees/slot_N/`. **Do
+NOT pre-step `git init`.**
 
-### 5. Collect Winning Kernels
+`--test-command` and `--task` vary by `geak_strategy`:
+
+#### 2a. `in_place_optimize` (Bucket A: `(*, triton)`, `(*, hip_cpp)`, and `(*, ck_template)` only when `ck_branch_merged_status == true`)
+
+- **Triton** -- `--test-command "cd ${FORK_PATH} && pytest ${LIBRARY_TEST_PATH} -x -q"`.
+  The library's pytest IS the inner loop; no synthetic harness, no
+  incremental rebuild needed (Triton reloads via Python import).
+- **HIP/C++** -- `--test-command "cd ${FORK_PATH} && python setup.py build_ext --inplace -q && pytest ${LIBRARY_TEST_PATH} -x -q"`.
+  The incremental C++ ext build runs inside `--test-command` after each
+  candidate patch (minutes per attempt). For AITER, the same pattern
+  applies but `--test-command` may set `AITER_REBUILD=1` before the
+  pytest invocation. Full `pip install -e .` is deferred to Phase 8.
+- `--task` text comes from the kernel's `geak_task_hint` in
+  `kernel_source_map.yaml` (per-kernel scoping guidance: "modify only
+  function `<fn>`; do not touch dispatch / bindings"), with the kernel's
+  roofline data + measurement-metric description appended.
+
+#### 2b. `dispatch_redirect_to_triton` (Bucket B -> Bucket A)
+
+For `(aiter_ck_template, ck_template)` with a Triton sibling:
+
+1. Apply the dispatch-site patch from `redirect_plan.json`
+   (`dispatch_site_patch_hint`) inside the host fork (typically
+   `forks/aiter/aiter/__init__.py` or
+   `forks/vllm/vllm/attention/...`). The patch forces selection of the
+   Triton variant. Commit on `geak/main` as
+   `redirect: <source_symbol> -> <target_symbol>`.
+2. Then `in_place_optimize` the redirect target's Triton source file
+   (`target_file` in `redirect_plan.json`).
+
+#### 2c. `dispatch_redirect_to_open_lib` (Bucket B/C with open equivalent)
+
+For `(hipblaslt_tensile, tensile_asm)`, `(inductor, inductor_codegen)`,
+`(aten, aten_native)`, and any `(*, closed_vendor_binary)`:
+
+1. Apply the dispatch-site patch in the host fork (typically vLLM's
+   `model_executor/layers/{linear,fused_moe}/` or an FX-graph
+   `escape_inductor` patch for inductor) to route the call through the
+   open-lib alternative (`target_lib`/`target_symbol`). Commit on
+   `geak/main`.
+2. Then `in_place_optimize` the open-lib target's source file.
+
+#### 2d. `in_place_optimize_no_harness` (Bucket B with user `proceed_with_warning`)
+
+Covers `(*, ck_template)` on main with no sibling, `(*, tensile_asm)`,
+`(*, handwritten_asm)`, `(*, aten_native)`:
+
+- `--test-command` falls back to:
+  ```
+  python {{SCRIPTS_DIR}}/optimize/no_harness_fallback_test.py \
+      --kernel <name> --fork ${FORK_PATH} \
+      --reference {{OUTPUT_DIR}}/refs/<name>_bf16.npz
+  ```
+  The fallback boots a minimal vLLM with the rebuilt fork, runs ONE
+  decode iter, prints `latency_ms=<N>` on stdout, exits non-zero on any
+  numerical-divergence breach (`max_abs > 1e-2` for bf16).
+- For `rebuild_too_expensive` kernels (`aten_native`),
+  `--test-command` includes the long rebuild step
+  (`pip install -e <pytorch-fork>`); cost-warning was already surfaced to
+  the user during Phase 6.
+- `--task` text appends an explicit warning: "No per-kernel library test
+  exists for this source form; the test command runs a single live decode
+  against a bf16 reference. Optimize for `latency_ms` (lower is better)
+  without breaching the divergence threshold."
+- Commit GEAK winner as in 2a, but commit message includes the
+  `[no-harness]` tag.
+
+#### 2e. `unfeasible_record_only`
+
+Not attempted in Phase 7; passes straight through to Phase 9 reporting
+with its `skip_reason` from the manifest.
+
+### 3. Commit GEAK Winners
+
+After all per-kernel GEAK runs complete, apply winners to the **main fork
+tree** (not GEAK's per-agent worktrees), in order:
+
 ```bash
-docker exec $CONTAINER_NAME python3 /workspace/scripts/optimize/collect_winning_kernels.py \
-    --problems-dir /workspace/problems --optimized-dir /workspace/optimized
+python3 - <<'PY'
+import json, os, subprocess, sys
+out = "{{OUTPUT_DIR}}/${KERNEL_NAME}_opt/best_results.json"
+if not os.path.isfile(out):
+    sys.exit(0)
+br = json.load(open(out))
+patch = br.get("best_patch_file")
+patch_id = br.get("best_patch_id")
+if not patch or patch_id is None:
+    sys.exit(0)  # fall back to scanning patch_*_test.txt below
+subprocess.check_call(["git", "-C", "${FORK_PATH}", "apply", patch])
+msg = "geak: ${KERNEL_NAME} attempt%s speedup=%s" % (patch_id, br.get("best_patch_speedup"))
+if "${STRATEGY}" == "in_place_optimize_no_harness":
+    msg += " [no-harness]"
+subprocess.check_call(["git", "-C", "${FORK_PATH}", "add", "-A"])
+subprocess.check_call(["git", "-C", "${FORK_PATH}", "commit", "-m", msg])
+PY
 ```
 
-This aggregates per-kernel outcomes into `{{PROBLEMS_DIR}}/geak_results.json` and ensures winning `*_opt.py` files land under `{{OPTIMIZED_DIR}}/` for integration.
+For redirects, the dispatch-site commit (`redirect: <src> -> <tgt>`) is
+placed first, before the target-symbol GEAK commit.
 
-### 6. Clean Up
+If `best_results.json` is missing or `best_patch_id` is `null`, fall back
+to scanning `optimization_logs/<run>/results/round_1/<kernel>-*/patch_*_test.txt`
+files. Each candidate's emitted text is freeform (GEAK's SelectPatch
+agent is LLM-driven); rank by lowest reported latency consistent with the
+test harness, then map the winning text file back to its sibling
+`patch_N.patch` and apply via `git -C ${FORK_PATH} apply`.
+
+### 4. Library-Suite Validation (Bucket A only)
+
+For every Bucket A `optimize=true` kernel, run the library's own test
+suite against the now-patched fork:
+
 ```bash
-docker stop "$CONTAINER_NAME" 2>/dev/null; docker rm "$CONTAINER_NAME" 2>/dev/null
+python3 "{{SCRIPTS_DIR}}/optimize/library_test_driver.py" \
+    --kernel "$NAME" --fork "$FORK_PATH"
 ```
 
-### 7. Print Summary
+This is broader than GEAK's per-kernel inner loop -- it catches
+cross-kernel regressions and integration-test failures. The path and
+command come from `kernel_source_map.yaml` (`library_test_path`,
+`library_test_command`).
+
+**Bucket B `in_place_optimize_no_harness` kernels skip this step entirely** -
+there is no library test to run; the no-harness fallback `--test-command`
+already exercised the candidate. Their `library_tests_*_count` fields are
+written as `null` (not 0, to distinguish "skipped by design" from "all
+failed").
+
+### 5. Allocator-Equivalent Integration Test (Bucket A only)
+
+Once per-kernel library tests pass, boot a minimal vLLM with the rebuilt
+forks and exercise multi-step decode + multi-batch prefill against a
+stored bf16 reference:
+
 ```bash
-python3 -c "
-import json, os
-results_path = '{{PROBLEMS_DIR}}/geak_results.json'
-if os.path.isfile(results_path):
-    results = json.load(open(results_path))
-    for r in sorted(results, key=lambda x: -x.get('profiling_pct', 0)):
-        status = 'OK' if r['speedup'] > 1.0 else 'SKIP'
-        print(f\"  {r['name']:40s} pct={r.get('profiling_pct',0):5.1f}% speedup={r['speedup']:.2f}x mode={r.get('geak_mode','?')} {status}\")
-"
+python3 "{{SCRIPTS_DIR}}/optimize/allocator_integration_test.py" \
+    --kernel "$NAME" \
+    --reference "{{OUTPUT_DIR}}/refs/${NAME}_bf16.npz" \
+    --fork-root "{{OUTPUT_DIR}}/forks"
 ```
 
-### Manual Fallback (GEAK_MODE=manual)
-When GEAK is disabled or unusable, optimize manually while preserving the same verification loop:
+This is the structural fix for the RCA #5/#6 failure modes
+(`true_kernel_parity` divergence and `load_fault` HSA fault under
+fragmented allocator).
 
-Always drive manual attempts through the same `kernel_test_runner.py` entrypoint GEAK uses so latency numbers remain comparable across kernels. Keep per-kernel notes under `{{PROBLEMS_DIR}}/manual_attempts.md` (create if missing) so Phase 9 can cite what changed when no `traj_*.json` exists.
+**Bucket B kernels skip this step too** -- the no-harness fallback
+`--test-command` is itself an allocator-equivalent test (it boots the
+same live vLLM stack); running it twice adds no signal.
 
-- **HIP/CK kernels:** Log a clear warning that in-place vendor kernel optimization normally expects GEAK; if policy allows, attempt a **Triton replacement** that matches tensor shapes and numerics, then benchmark.
-- **Vendor kernels:** Prefer small **compatibility / dispatch fixes** when source is available; otherwise fall back to a **Triton replacement** baseline competitive with `torch` ops.
-- **Triton kernels:** Target AMD `wave_size=64`, explore `BLOCK_SIZE` 16–256, `num_warps` 4–8, and wrap launches in `@triton.autotune` with 10–20 configs covering memory vs compute trade-offs.
-- For every attempt: test with `kernel_test_runner.py`, iterate up to **5** rounds, then run `kernel_finalize.py` on the surviving candidate just like the automated path.
+### 6. Pre-Flight Dispatch Sanity Check (all buckets)
+
+```bash
+python3 "{{SCRIPTS_DIR}}/integrate/verify_dispatch.py" \
+    --output-dir "{{OUTPUT_DIR}}" --mode pre-flight \
+    --manifest "{{PROBLEMS_DIR}}/optimization_manifest.json"
+```
+
+Confirms the `expected_dispatch_symbols` actually fire on the rebuilt
+env -- catches silent "fork installed but kernel never imported" before
+Phase 8 burns wall-clock. Writes
+`{{RESULTS_DIR}}/preflight_dispatch_trace.json`.
+
+### 7. Emit `geak_results.json`
+
+Write `{{PROBLEMS_DIR}}/geak_results.json` with one record per kernel:
+
+```
+{
+  "name", "library", "geak_strategy", "gating_reason",
+  "optimization_unverified_per_kernel": bool,
+  "redirect_target", "upstream_repo", "fork_commit_after_winner",
+  "library_test_pass_count": int|null,
+  "library_test_fail_count": int|null,
+  "library_test_log_path":   str|null,
+  "allocator_test_pass":     bool|null,
+  "allocator_test_log_path": str|null,
+  "dispatch_pre_flight_pass": bool,
+  "geak_speedup_lib_bench":   float,
+  "geak_attempts_used":       int,
+  "skip_reason":              str|null,
+  "no_harness_warning":       str|null
+}
+```
+
+`optimization_unverified_per_kernel` is true for every Bucket B winner;
+`library_test_*` and `allocator_test_*` fields are `null` (not 0) for
+Bucket B to distinguish "skipped by design" from "ran and all failed".
 
 ### Completion
-Write `agent-results/phase-07-result.md` with kernels_attempted, kernels_improved, geak_mode used, per-kernel speedups.
 
-Include these scalar fields in `## Key Findings` for monitor consumption:
-- `compiled_count`: integer count of compiled kernels
-- `best_speedup`: float (best kernel-level speedup achieved)
-- `winning_kernel_count`: integer count of kernels with speedup > 1.0
-- `optimization_coverage_status`: complete | partial | none
-- `expected_improvement_status`: improvable | parity_or_blocked | not_attempted (summarize across hot targets; `not_attempted` triggers monitor FAIL)
+Write `agent-results/phase-07-result.md`. Include in `## Key Findings`:
 
-For targets that are inherently unimprovable (at parity with baseline, or blocked by framework/vendor limits), classify them as `parity_or_blocked` **ONLY after at least one GEAK or manual attempt has been made and the measured speedup is <= 1.0**. Targets with zero attempts MUST be classified as `not_attempted` — this triggers a monitor FAIL so the phase retries with those targets attempted. Document the reason per target in `geak_results.json` (e.g., `true_kernel_parity`, `framework_limit`). This distinction prevents the monitor from triggering endless retries on targets that genuinely cannot be improved, while ensuring high-value targets are never skipped without trying.
+- `library_tests_passed_count` (sum across Bucket A kernels)
+- `library_tests_failed_count` (sum across Bucket A kernels)
+- `allocator_test_pass`: bool (overall, Bucket A only)
+- `dispatch_pre_flight_pass`: bool (all buckets)
+- `geak_speedup_lib_bench`: float (best per-kernel speedup reported by
+  the library inner-loop)
+- `redirect_commits_applied_count`: integer
+- `in_place_winners_count`: integer
+- `no_harness_winners_count`: integer
+- `unverified_per_kernel_count`: integer (== `no_harness_winners_count`)
 
-Report the measured `best_speedup` honestly even when it is `<= 1.0`. The monitor uses `expected_improvement_status` plus the structured blocker reasons to decide PASS versus FAIL under hard-fail policy; do not inflate or coerce the scalar just to satisfy a gate.
+Reference `problems/geak_results.json` and
+`results/preflight_dispatch_trace.json` in `## Artifacts`. Mutated forks
+live under `{{OUTPUT_DIR}}/forks/<lib>/` on `geak/main`.
 
-If the handoff contains a `## Root Cause Analysis` section (from a prior failed attempt), read the RCA artifact path and adjust your approach based on the retry recommendation. Use `next_attempt_mode` from the RCA to decide between GEAK retry, manual fallback, or coding-agent help. Targets classified as `true_kernel_parity` in the RCA's `blocker_classifications` should be skipped on retry.
+If the handoff contains a `## Root Cause Analysis` section from a prior
+failed attempt, read the RCA artifact path and adjust per the new
+blocker enum in `protocols/rerun-protocol.md` (e.g.,
+`needs_library_fork`, `needs_rebuild_fix`, `dispatch_unverified`,
+`redirect_not_honored`, `library_test_failure`, `allocator_test_failure`).
 
-Do NOT write to `progress.json` — the orchestrator manages progress tracking.
+Do NOT write to `progress.json` -- the orchestrator manages progress
+tracking.
+
+### Removed Outputs (do NOT emit)
+
+`{{OPTIMIZED_DIR}}/*_opt.py`, `kernel_test_runner.py` traces,
+`kernel_finalize.py` outputs, `verify_winning_kernels.py` exit codes,
+`traj_*.json`, `*_opt_best.json` files, `_runtime_counters_*.json`.

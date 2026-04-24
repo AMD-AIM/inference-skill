@@ -21,14 +21,18 @@ The orchestrator passes you a manifest naming:
 - Phase-08-specific inputs when the loop is stuck on integration:
   - `results/optimization_comparison.json`
   - `results/integration_manifest.json`
-  - `optimized/integration_plugin/_runtime_counters_attemptN_rank{R}.json` (any attempt)
-  - `optimized/integration_plugin/_runtime_report.json`
+  - `results/dispatch_verification.json`
+  - `results/baseline_dispatch_trace.json` (Phase 6 capture, used as the "before" image)
+  - `forks/manifest.json` (which library forks were rebuilt and at what commit)
+  - `results/rebuild_<lib>.log` (per-library editable-install logs)
 - Phase-07-specific inputs when the loop is stuck earlier:
   - `problems/geak_results.json`
   - `problems/optimization_manifest.json`
+  - `problems/redirect_plan.json` (when redirects were planned)
+  - `results/preflight_dispatch_trace.json`
   - `results/profile_analysis.json`
 
-You are self-contained. Do **not** read raw runbooks (`agents/phase-NN-*.md`). Do **not** read the plugin source (you read its runtime counters and reports, never its code).
+You are self-contained. Do **not** read raw runbooks (`agents/phase-NN-*.md`). Do **not** read upstream-fork source code; reason from the manifests, dispatch traces, and rebuild logs.
 
 ## Outputs
 
@@ -40,7 +44,7 @@ Write `results/systemic_rca.json` matching `protocols/rca.schema.json` with `sco
   "scope": "systemic",
   "phase": "<phase-where-loop-is-stuck>",
   "summary": "<2-4 sentences naming the cross-phase cause>",
-  "root_cause_class": "<one of: wrong_patch_target | geak_measurement_bias | cache_warmup_artifact | dynamo_blocked | baseline_drift | framework_limit | wiring_complexity | other>",
+  "root_cause_class": "<one of: wrong_patch_target | geak_measurement_bias | cache_warmup_artifact | dynamo_blocked | baseline_drift | framework_limit | dispatch_unverified_persistent | redirect_not_honored_persistent | rebuild_chain_failure | unfeasible_source_form | kernel_source_map_stale | other>",
   "key_signal_names": ["<sorted symbolic signal names>"],
   "fingerprint": "<sha256(root_cause_class + '|' + ','.join(sorted(key_signal_names)))>",
   "evidence": [{"file": "...", "finding": "..."}],
@@ -68,18 +72,20 @@ Be conservative — `accept_finding` ends the loop. Use it only when more e2e at
 
 Before you write the artifact, verify each of the following or note explicitly that the evidence is absent:
 
-1. **Counter telemetry agreement** — Do the per-rank `_runtime_counters_attemptN_rank{R}.json` files agree across ranks within an attempt, and across attempts that should have produced the same behavior? Disagreement is itself a finding.
-2. **Headline attribution** — If e2e_speedup > 1.0 but counters are 0, the headline is **not** attributable to the plugin. Name this explicitly and pick `cache_warmup_artifact` or similar root_cause_class.
-3. **TTFT distribution** — When optimized `std_ttft / baseline std_ttft < 0.1` and counters are 0, treat the headline as a cold-vs-warm artifact, never a plugin win.
-4. **GEAK like-for-like** — When the kernel-level winner was measured against `F.linear` rather than the production kernel (e.g. aiter), surface that even integrating it correctly would yield small e2e gain. Root_cause_class: `geak_measurement_bias`.
-5. **Patch site reality** — When attempt N proved the patched symbol is not on the live decode path, do not recommend "try the same patch with a different decorator." Recommend the proven correct sites or `accept_finding`.
-6. **Dynamo-fix completeness** — If a Dynamo blocker was named but the loop continued to fail after the user applied a fix, check whether more Dynamo-incompatible call sites exist. Distinguish `dynamo_blocked` from `wrong_patch_target` precisely.
+1. **Dispatch trace agreement** — Compare `results/baseline_dispatch_trace.json` (Phase 6 capture) against `results/dispatch_verification.json` (Phase 8 post-rebuild). If `expected_symbol_total_count == 0` after rebuild, the patched kernel is not firing — root_cause_class: `dispatch_unverified_persistent`. If `vendor_symbol_leaked_count > 0` for a redirect-bucket kernel, root_cause_class: `redirect_not_honored_persistent`. Disagreement of these scalars across attempts is itself a finding.
+2. **Headline attribution** — If `e2e_speedup > 1.0` but `dispatch_verified == false`, the headline is **not** attributable to the patch. Name this explicitly and pick `cache_warmup_artifact` or similar root_cause_class.
+3. **TTFT distribution** — When optimized `std_ttft / baseline std_ttft < 0.1` and dispatch is unverified, treat the headline as a cold-vs-warm artifact, never a real win.
+4. **GEAK like-for-like** — When the kernel-level winner was measured against the wrong reference (e.g. `F.linear` rather than the production aiter symbol), surface that even integrating it correctly would yield small e2e gain. Root_cause_class: `geak_measurement_bias`.
+5. **Rebuild chain reality** — Check `results/rebuild_<lib>.log` for each library in `forks/manifest.json`. A non-zero exit, an editable-install vs wheel shadowing mismatch, or `AITER_REBUILD=1` not propagating means the patched source never made it into the running interpreter. Root_cause_class: `rebuild_chain_failure`. Do not recommend "try the same patch" until the rebuild is provably effective.
+6. **Source-form feasibility** — When the candidate kernel is `tensile_asm`, `closed_vendor_binary`, `handwritten_asm`, or `aten_native` (rebuild-too-expensive) and no redirect target exists, more attempts cannot help. Root_cause_class: `unfeasible_source_form`; the right answer is `accept_finding` (or `fallback` to a redirect plan if one became available).
+7. **Source-map staleness** — If the resolved upstream `source_file` does not exist at the pinned commit, or the `library_test_path` was renamed, the manifest is stale for the pinned version. Root_cause_class: `kernel_source_map_stale`; recommend updating `resources/kernel_source_map.yaml` for the affected `vllm_version`.
 
 ## Honesty rules
 
-- Do **not** propose a `retry_recommendation` of `retry_with_changes` if the change required is one the per-phase agent has been guardrail-blocked from making. In that case, name the blocker explicitly and either set `terminal_action_systemic = accept_finding` or hand off via the manual-edit escape hatch (see `agents/phase-08-integration.md` -> "Plugin edit escape hatch").
-- Do **not** label headline numbers as wins when counters say the patches did not run. Annotate `e2e_attributable: false` in the evidence.
-- Distinguish "the kernel wins in isolation" from "the kernel wins in production cudagraph replay" — they are different measurements.
+- Do **not** propose a `retry_recommendation` of `retry_with_changes` if the change required is one the per-phase agent has been guardrail-blocked from making. In that case, name the blocker explicitly using the canonical enum from `protocols/rerun-protocol.md` and set `terminal_action_systemic = accept_finding`. (The legacy plugin-edit escape hatch is gone with the plugin path; library rebuild is the single integration mechanism now.)
+- Do **not** label headline numbers as wins when `dispatch_verified == false`. Annotate `e2e_attributable: false` in the evidence.
+- Distinguish "the kernel wins in the library's own pytest" (and especially "the kernel wins in the Bucket B no-harness `latency_ms` fallback") from "the kernel wins in production HIPGraph replay" — they are different measurements.
+- Bucket B winners enter Phase 9 with `optimization_unverified_per_kernel = true` by design; do not recommend retrying them merely to "verify per-kernel". The phase-08 e2e benchmark is their only verification.
 
 ## Budget
 

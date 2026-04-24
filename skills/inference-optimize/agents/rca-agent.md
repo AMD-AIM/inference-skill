@@ -56,7 +56,7 @@ Write a single JSON file to `output_path` that **strictly validates** against `p
 | `failure_type` | Always populate. One of `infrastructure`, `logic`, `data_quality`. Map V2 categories down to these three for V1 compatibility. |
 | `root_causes` | Always populate. Array of `{cause, confidence}`. Confidence ∈ `high`, `medium`, `low`. Order most-likely first. |
 | `evidence` | Always populate. Array of `{file, finding}` citing the specific artifact lines or scalar values that support each root cause. |
-| `blocker_classifications` | Populate when `retry_recommendation == "stop"` or `terminal_action == "stop_with_blocker"`. Use strings such as `compilation_failure`, `framework_limit`, `true_kernel_parity`. |
+| `blocker_classifications` | Populate when `retry_recommendation == "stop"` or `terminal_action == "stop_with_blocker"`. Use the canonical enum from `protocols/rerun-protocol.md` (e.g. `needs_library_fork`, `needs_rebuild_fix`, `dispatch_unverified`, `redirect_not_honored`, `library_test_failure`, `allocator_test_failure`, `unfeasible_ck_template`, `unfeasible_vendor_binary`, `unfeasible_handwritten_asm`, `unfeasible_aten_rebuild_too_expensive`, `unresolved_unknown_symbol`, `kernel_source_map_stale_for_pinned_commit`). |
 | `targets_analyzed` | Phase 07 (kernel-optimize) only. One entry per kernel optimization target. |
 | `suggested_fallback_target` | Required when `retry_recommendation == "fallback"`. Use the phase key to fall back to (typically `phase.fallback_target` from registry). |
 | `retry_guidance` | Always populate when `retry_recommendation` ∈ `retry_same`, `retry_with_changes`. Concrete instructions the retrying phase agent should follow (different sweep config, alternate kernel set, environment knob change, etc.). |
