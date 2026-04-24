@@ -142,10 +142,21 @@ def main():
     if forks_manifest_path and os.path.isfile(forks_manifest_path):
         with open(forks_manifest_path) as f:
             forks = json.load(f)
-        libs = forks.get("libraries", []) if isinstance(forks, dict) else []
-        summary["forks_pinned_count"] = sum(1 for l in libs if not l.get("dirty", False))
-        summary["forks_required_count"] = len(libs)
-        summary["ck_branch_merged_status"] = forks.get("ck_branch_merged_status")
+        # Producer (scripts/optimize/fork_upstream.py) writes:
+        #   {"forks": {<lib>: {repo_url, pinned_commit, fork_path, dirty,
+        #                      rebuild_command, ...}, ...},
+        #    "ck_branch_merged_status": bool, "vllm_version": ..., ...}
+        fork_entries = forks.get("forks", {}) if isinstance(forks, dict) else {}
+        if isinstance(fork_entries, dict):
+            entries_iter = fork_entries.values()
+            summary["forks_required_count"] = len(fork_entries)
+        else:  # tolerate legacy/list shape so the report still renders
+            entries_iter = [e for e in fork_entries if isinstance(e, dict)]
+            summary["forks_required_count"] = len(fork_entries) if isinstance(fork_entries, list) else 0
+        summary["forks_pinned_count"] = sum(
+            1 for e in entries_iter if isinstance(e, dict) and not e.get("dirty", False)
+        )
+        summary["ck_branch_merged_status"] = forks.get("ck_branch_merged_status") if isinstance(forks, dict) else None
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w") as f:

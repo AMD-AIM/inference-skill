@@ -32,12 +32,25 @@
     "baseline_benchmark": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0, "mean_itl_ms": 5.0, "mean_tpot_ms": 10.0, "duration": 60},
     "optimized_benchmark": {"total_token_throughput": 1180, "mean_ttft_ms": 92.0, "mean_itl_ms": 4.5, "mean_tpot_ms": 8.5, "duration": 60},
     "forks_manifest": {
-      "schema_version": "1.0",
       "ck_branch_merged_status": false,
-      "forks": [
-        {"lib": "fla", "repo_url": "https://github.com/sustcsonglin/flash-linear-attention", "pinned_commit": "abc1234567890", "fork_path": "forks/fla", "dirty": false, "rebuild_command": "pip install -e ."},
-        {"lib": "vllm", "repo_url": "https://github.com/vllm-project/vllm", "pinned_commit": "def4567890123", "fork_path": "forks/vllm", "dirty": false, "rebuild_command": "pip install -e . --no-build-isolation"}
-      ]
+      "ck_branch_merged_detail": "ahead=12 behind=0",
+      "vllm_version": "v0.19.1",
+      "forks": {
+        "fla": {
+          "repo_url": "https://github.com/sustcsonglin/flash-linear-attention.git",
+          "pinned_commit": "abc1234567890",
+          "fork_path": "forks/fla",
+          "dirty": false,
+          "rebuild_command": "pip install -e ."
+        },
+        "vllm": {
+          "repo_url": "https://github.com/vllm-project/vllm.git",
+          "pinned_commit": "def4567890123",
+          "fork_path": "forks/vllm",
+          "dirty": false,
+          "rebuild_command": "pip install -e . --no-build-isolation"
+        }
+      }
     },
     "optimization_manifest": {
       "schema_version": "2.0",
