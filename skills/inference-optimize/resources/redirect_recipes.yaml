@@ -1,0 +1,120 @@
+# Per-(source_lib, source_symbol) -> (target_lib, target_symbol) redirect
+# recipes. Phase 6 emits `redirect_plan.json` by joining a kernel's
+# `redirect_target` (from kernel_source_map.yaml) against this file to
+# produce the dispatch-site patch. Phase 7 applies the patch in the host
+# fork before invoking GEAK against the target.
+#
+# `patch_kind` values:
+#   env_var          - the launcher exports an env var; no source edit
+#   py_monkeypatch   - patch the host-fork Python at a forward call site
+#   source_edit      - patch host-fork C++/HIP source (rebuild required)
+#
+# `geak_task_hint` augments the target's own task hint with the redirect
+# context so GEAK knows it is chasing a specific replacement target.
+
+recipes:
+
+  - source_lib: aiter_ck_template
+    source_symbol: paged_attention
+    target_lib: aiter_triton
+    target_symbol: aiter_pa_fwd_triton
+    target_file: "aiter/ops/triton/pa_fwd.py"
+    dispatch_site_file: "aiter/__init__.py"
+    patch_kind: env_var
+    patch_payload: "AITER_PA_BACKEND=triton"
+    geak_task_hint: |
+      This kernel `aiter_pa_fwd_triton` is being optimized as a replacement
+      for the AITER CK paged-attention kernel. The dispatch will route
+      `paged_attention` calls through this Triton file via the
+      `AITER_PA_BACKEND=triton` env var. Optimization objective: beat the
+      performance of the replaced CK kernel under live serving.
+
+  - source_lib: rocblas
+    source_symbol: rocblas_gemm
+    target_lib: aiter_triton
+    target_symbol: aiter_gemm_triton
+    target_file: "aiter/ops/triton/gemm.py"
+    dispatch_site_file: "vllm/model_executor/layers/linear.py"
+    patch_kind: py_monkeypatch
+    patch_payload: |
+      # Patch ColumnParallelLinear.forward / RowParallelLinear.forward to
+      # call aiter.ops.triton.gemm.aiter_gemm_triton instead of
+      # torch.matmul (which dispatches to rocBLAS).
+      import aiter.ops.triton.gemm as _aiter_gemm
+      from vllm.model_executor.layers.linear import ColumnParallelLinear, RowParallelLinear
+      _orig_col = ColumnParallelLinear.forward
+      _orig_row = RowParallelLinear.forward
+      def _col_forward(self, input_):
+          return _aiter_gemm.aiter_gemm_triton(input_, self.weight, self.bias)
+      def _row_forward(self, input_):
+          return _aiter_gemm.aiter_gemm_triton(input_, self.weight, self.bias)
+      ColumnParallelLinear.forward = _col_forward
+      RowParallelLinear.forward = _row_forward
+    geak_task_hint: |
+      This kernel `aiter_gemm_triton` is being optimized as a replacement
+      for rocBLAS GEMM. The dispatch site (vLLM linear layer forward) is
+      monkey-patched to route matmul calls through this Triton file.
+      Optimization objective: beat rocBLAS GEMM under live serving.
+
+  - source_lib: hipblaslt_tensile
+    source_symbol: tensile_gemm
+    target_lib: aiter_triton
+    target_symbol: aiter_gemm_triton
+    target_file: "aiter/ops/triton/gemm.py"
+    dispatch_site_file: "vllm/model_executor/layers/linear.py"
+    patch_kind: py_monkeypatch
+    patch_payload: |
+      # Same monkeypatch as the rocBLAS recipe -- the redirect occurs at
+      # the vLLM linear layer, escaping any hipBLASLt/Tensile dispatch.
+      import aiter.ops.triton.gemm as _aiter_gemm
+      from vllm.model_executor.layers.linear import ColumnParallelLinear, RowParallelLinear
+      def _col_forward(self, input_):
+          return _aiter_gemm.aiter_gemm_triton(input_, self.weight, self.bias)
+      def _row_forward(self, input_):
+          return _aiter_gemm.aiter_gemm_triton(input_, self.weight, self.bias)
+      ColumnParallelLinear.forward = _col_forward
+      RowParallelLinear.forward = _row_forward
+    geak_task_hint: |
+      This kernel `aiter_gemm_triton` is being optimized as a replacement
+      for hipBLASLt Tensile-emitted GEMM kernels. Optimization objective:
+      beat the Tensile-tuned GEMM under live serving.
+
+  - source_lib: inductor
+    source_symbol: triton_poi_fused
+    target_lib: aiter_triton
+    target_symbol: aiter_pointwise_triton
+    target_file: "aiter/ops/triton/pointwise.py"
+    dispatch_site_file: "vllm/compilation/decorators.py"
+    patch_kind: py_monkeypatch
+    patch_payload: |
+      # escape_inductor: bypass torch.compile/inductor for the targeted
+      # pointwise op and route directly to the AITER Triton equivalent.
+      import os
+      os.environ["VLLM_USE_TRITON_FLASH_ATTN"] = "1"
+      os.environ["VLLM_DISABLE_INDUCTOR"] = "1"
+    geak_task_hint: |
+      This kernel `aiter_pointwise_triton` is being optimized as a
+      replacement for inductor-emitted pointwise fused kernels. The host
+      site escapes inductor by env var and routes pointwise ops through
+      this Triton file. Optimization objective: beat the inductor-emitted
+      kernel under live serving.
+
+  - source_lib: aten
+    source_symbol: at_native
+    target_lib: aiter_triton
+    target_symbol: aiter_native_triton
+    target_file: "aiter/ops/triton/native_ops.py"
+    dispatch_site_file: "vllm/model_executor/layers/__init__.py"
+    patch_kind: py_monkeypatch
+    patch_payload: |
+      # Higher-level interception: replace the offending PyTorch op with
+      # an AITER Triton equivalent at the vLLM call site (avoids PyTorch
+      # source rebuild).
+      import aiter.ops.triton.native_ops as _aiter_native
+      # Site-specific patch payload -- materialized at Phase 7 from
+      # `dispatch_site_patch_hint` in the kernel's manifest entry.
+    geak_task_hint: |
+      This kernel `aiter_native_triton` is being optimized as a replacement
+      for an ATen native op. The dispatch site at the vLLM call site
+      monkeypatches the call to route through AITER. Optimization
+      objective: beat the ATen native kernel under live serving.

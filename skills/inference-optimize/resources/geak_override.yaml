@@ -1,0 +1,22 @@
+# Single skill-owned GEAK config override. Replaces the legacy
+# `${GEAK_DIR}/geak.yaml` and `${GEAK_DIR}/mini_kernel.yaml` pair.
+#
+# Upstream GEAK merges configs in this order:
+#   (1) installed `src/minisweagent/config/geak.yaml`
+#   (2) `src/minisweagent/config/mini_kernel_strategy_list.yaml`
+#   (3) optional user `--config` override (THIS FILE)
+#   (4) CLI flags
+#
+# The skill passes this file via `--config` and overrides only the fields
+# it actually needs to control: model identity, max tokens, per-attempt
+# step limit, and per-attempt USD cost cap.
+
+model:
+  model_name: claude-opus-4.6
+  model_class: amd_llm
+  model_kwargs:
+    max_tokens: 16000
+
+agent:
+  step_limit: 80
+  cost_limit: 5.00

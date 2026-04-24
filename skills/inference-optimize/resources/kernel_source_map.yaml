@@ -1,0 +1,723 @@
+# Kernel source map keyed by runtime symbol pattern.
+#
+# Each entry maps a rocprofv3-observed kernel symbol (or glob pattern) to the
+# upstream source file that the optimization pipeline must fork and rebuild.
+# Phase 6 (`upstream-resolve`) consumes this file; the resolver matches the
+# baseline-dispatch-trace symbol against `symbol_pattern` and returns the
+# library, source form, GEAK strategy, and per-kernel test/rebuild commands.
+#
+# Templated tokens substituted by Phase 7 before being passed to GEAK:
+#   {library_test_path}  -> the entry's `library_test_path` field
+#
+# `geak_strategy` values (see redesign plan, Axis 1 x Axis 2 -> strategy):
+#   in_place_optimize
+#   in_place_optimize_no_harness   (Bucket B, requires user opt-in)
+#   dispatch_redirect_to_triton
+#   dispatch_redirect_to_open_lib
+#   unfeasible_record_only
+#
+# `bucket` values: A | B | C
+# `gating_reason` values (Bucket B only): no_test_harness | rebuild_too_expensive
+#
+# `cost_profile` lets Phase 6 quote the per-attempt and per-rebuild minutes when
+# raising the Bucket B AskUserQuestion.
+
+entries:
+
+  # -----------------------------------------------------------------------
+  # FLA -- pure Python Triton kernels
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "fused_recurrent_gated_delta_rule_fwd_kernel*"
+    library: fla
+    source_form: triton
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "sustcsonglin/flash-linear-attention"
+    source_file: "fla/ops/gated_delta_rule/fused_recurrent.py"
+    library_test_path: "tests/ops/test_fused_recurrent.py"
+    library_test_command: "pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e ."
+    expected_dispatch_symbols: ["fused_recurrent_gated_delta_rule_fwd_kernel*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: easy
+    cost_profile:
+      per_attempt_minutes: 1
+      rebuild_minutes: 1
+    geak_task_hint: |
+      Optimize the Triton kernel `fused_recurrent_gated_delta_rule_fwd_kernel`
+      in this file. Do not modify the Python wrapper, the autograd Function,
+      or the test file. Metric: median latency in microseconds reported by
+      the test harness (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "chunk_gated_delta_rule*"
+    library: fla
+    source_form: triton
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "sustcsonglin/flash-linear-attention"
+    source_file: "fla/ops/gated_delta_rule/chunk.py"
+    library_test_path: "tests/ops/test_chunk.py"
+    library_test_command: "pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e ."
+    expected_dispatch_symbols: ["chunk_gated_delta_rule*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: easy
+    cost_profile:
+      per_attempt_minutes: 1
+      rebuild_minutes: 1
+    geak_task_hint: |
+      Optimize the Triton chunked kernel for gated delta rule. Touch only
+      kernel bodies; do not modify Python wrappers, autograd plumbing, or
+      tests. Metric: median latency in microseconds (lower is better).
+      Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # vLLM csrc -- HIP/C++ kernels
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "paged_attention_v1_kernel"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/attention/paged_attention_v1.cu"
+    library_test_path: "tests/kernels/test_attention.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["paged_attention_v1_kernel"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the body of `paged_attention_v1_kernel` in this file. Do
+      not touch dispatch macros (`CALL_V1_LAUNCHER_*`), PyTorch bindings, or
+      the v2 file. Keep the function signature and template parameters
+      intact. Metric: latency in milliseconds reported by the test harness
+      (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "paged_attention_v2_kernel"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/attention/paged_attention_v2.cu"
+    library_test_path: "tests/kernels/test_attention.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["paged_attention_v2_kernel", "paged_attention_v2_reduce_kernel"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the body of `paged_attention_v2_kernel` (and optionally
+      `paged_attention_v2_reduce_kernel`) in this file. Do not touch dispatch
+      macros, PyTorch bindings, or the v1 file. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "_paged_attention_*"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/attention/attention_kernels.cuh"
+    library_test_path: "tests/kernels/test_attention.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["_paged_attention_*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Optimize only the inner-helper kernel device functions in
+      `attention_kernels.cuh`. Do not modify the public `paged_attention_v*`
+      entry points. Metric: latency in milliseconds (lower is better).
+      Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "rms_norm_kernel"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/layernorm_kernels.cu"
+    library_test_path: "tests/kernels/test_layernorm.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["rms_norm_kernel"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 4
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the body of `rms_norm_kernel` in this file. Do not touch
+      `fused_add_rms_norm_kernel` or PyTorch bindings. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "fused_add_rms_norm_kernel"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/layernorm_kernels.cu"
+    library_test_path: "tests/kernels/test_layernorm.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["fused_add_rms_norm_kernel"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 4
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the body of `fused_add_rms_norm_kernel` in this file. Do
+      not touch `rms_norm_kernel` or PyTorch bindings. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "silu_and_mul_kernel"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/activation_kernels.cu"
+    library_test_path: "tests/kernels/test_activation.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["silu_and_mul_kernel"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 3
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the body of `silu_and_mul_kernel`. Do not touch other
+      activation kernels in this file or PyTorch bindings. Metric: latency
+      in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "rotary_embedding_kernel"
+    library: vllm_csrc
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "csrc/pos_encoding_kernels.cu"
+    library_test_path: "tests/kernels/test_pos_encoding.py"
+    library_test_command: "python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["rotary_embedding_kernel"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 4
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the body of `rotary_embedding_kernel`. Do not touch other
+      pos-encoding kernels or PyTorch bindings. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # vLLM Triton fusion ops -- pure Python
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "fused_moe_kernel*"
+    library: vllm_fusion
+    source_form: triton
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "vllm/model_executor/layers/fused_moe/fused_moe.py"
+    library_test_path: "tests/kernels/test_moe.py"
+    library_test_command: "pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["fused_moe_kernel*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: medium
+    cost_profile:
+      per_attempt_minutes: 2
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Optimize the `fused_moe_kernel` Triton kernel in this file. Do not
+      modify the Python wrapper, autotune configs, or tests. Metric: latency
+      in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "fused_topk_softmax_kernel*"
+    library: vllm_fusion
+    source_form: triton
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "vllm-project/vllm"
+    source_file: "vllm/model_executor/layers/fused_moe/fused_moe.py"
+    library_test_path: "tests/kernels/test_moe.py"
+    library_test_command: "pytest -x -q {library_test_path}"
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["fused_topk_softmax_kernel*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: medium
+    cost_profile:
+      per_attempt_minutes: 2
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Optimize the `fused_topk_softmax_kernel` Triton kernel. Do not modify
+      the wrapper, autotune configs, or tests. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # AITER Triton ops
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "aiter_pa_fwd_triton*"
+    library: aiter_triton
+    source_form: triton
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "ROCm/aiter"
+    source_file: "aiter/ops/triton/pa_fwd.py"
+    library_test_path: "op_tests/triton/test_pa_fwd.py"
+    library_test_command: "pytest -x -q {library_test_path}"
+    rebuild_command: "AITER_REBUILD=1 pip install -e ."
+    expected_dispatch_symbols: ["aiter_pa_fwd_triton*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: medium
+    cost_profile:
+      per_attempt_minutes: 2
+      rebuild_minutes: 10
+    geak_task_hint: |
+      Optimize the AITER paged-attention forward Triton kernel in this file.
+      Do not modify the Python wrapper, autotune configs, or tests. Metric:
+      latency in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "aiter_attn_fwd_kernel*"
+    library: aiter_triton
+    source_form: triton
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "ROCm/aiter"
+    source_file: "aiter/ops/triton/attn_fwd.py"
+    library_test_path: "op_tests/triton/test_attn_fwd.py"
+    library_test_command: "pytest -x -q {library_test_path}"
+    rebuild_command: "AITER_REBUILD=1 pip install -e ."
+    expected_dispatch_symbols: ["aiter_attn_fwd_kernel*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: medium
+    cost_profile:
+      per_attempt_minutes: 2
+      rebuild_minutes: 10
+    geak_task_hint: |
+      Optimize the AITER attention-forward Triton kernel. Do not modify the
+      Python wrapper or tests. Metric: latency in milliseconds (lower is
+      better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # AITER thin HIP/C++ kernels (non-CK)
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "aiter_*_hip*"
+    library: aiter_hip_cpp
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "ROCm/aiter"
+    source_file: "csrc/kernels/<resolved-by-symbol>.hip"
+    library_test_path: "op_tests/cpp_extensions/"
+    library_test_command: "AITER_REBUILD=1 python setup.py build_ext --inplace -q && pytest -x -q {library_test_path}"
+    rebuild_command: "AITER_REBUILD=1 pip install -e ."
+    expected_dispatch_symbols: ["aiter_*_hip*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 15
+    geak_task_hint: |
+      Modify only the targeted AITER HIP kernel body. Do not touch
+      PyTorch/PyBind bindings or other kernels. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # AITER CK templates -- Bucket B by default; bumps to A only if
+  # GEAK feature/ck-preprocess-main is merged into main (resolved at
+  # engagement start; recorded in forks/manifest.json as
+  # ck_branch_merged_status).
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "block_attn_ck_*"
+    library: aiter_ck_template
+    source_form: ck_template
+    bucket: B
+    geak_strategy: dispatch_redirect_to_triton
+    gating_reason: no_test_harness
+    upstream_repo: "ROCm/aiter"
+    source_file: "csrc/ck_kernels/block_attn_ck.hpp"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "AITER_REBUILD=1 pip install -e ."
+    expected_dispatch_symbols: ["block_attn_ck_*"]
+    vendor_baseline_symbols: ["block_attn_ck_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 8
+      rebuild_minutes: 30
+    geak_task_hint: |
+      CK template metaprogramming. On main branch GEAK has no `ck` SETUP
+      branch, so this kernel is a Bucket B no-harness candidate. Prefer the
+      redirect-to-triton path (target: `aiter_pa_fwd_triton`) when present.
+      Metric: latency in milliseconds (lower is better). Roofline:
+      <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_pa_fwd_triton
+
+  - symbol_pattern: "device_grouped_*ck*"
+    library: aiter_ck_template
+    source_form: ck_template
+    bucket: B
+    geak_strategy: dispatch_redirect_to_triton
+    gating_reason: no_test_harness
+    upstream_repo: "ROCm/aiter"
+    source_file: "csrc/ck_kernels/device_grouped.hpp"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "AITER_REBUILD=1 pip install -e ."
+    expected_dispatch_symbols: ["device_grouped_*ck*"]
+    vendor_baseline_symbols: ["device_grouped_*ck*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 8
+      rebuild_minutes: 30
+    geak_task_hint: |
+      CK device-grouped template. On main branch this is Bucket B. Prefer
+      redirect-to-triton when an AITER Triton sibling exists. Metric:
+      latency in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_pa_fwd_triton
+
+  # -----------------------------------------------------------------------
+  # rocBLAS GEMMs -- HIP/C++ source, ctest harness
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "rocblas_*gemm*"
+    library: rocblas
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "ROCm/rocBLAS"
+    source_file: "library/src/blas3/rocblas_gemm.hpp"
+    library_test_path: "clients/gtest/blas3_gtest.yaml"
+    library_test_command: "cmake --build build -j && ctest --test-dir build -R rocblas-test -L gemm"
+    rebuild_command: "cmake -S . -B build -DBUILD_CLIENTS_TESTS=ON && cmake --build build -j && cmake --install build"
+    expected_dispatch_symbols: ["rocblas_*gemm*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 10
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only the targeted rocBLAS GEMM kernel body. Do not touch
+      Tensile-generated assembly under `library/src/blas3/Tensile/`. Metric:
+      latency in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_gemm_triton
+
+  # -----------------------------------------------------------------------
+  # hipBLASLt host-side wrappers -- HIP/C++
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "hipBlasLt*Wrapper*"
+    library: hipblaslt_wrapper
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "ROCm/hipBLASLt"
+    source_file: "library/src/amd_detail/hipblaslt_dispatch.cpp"
+    library_test_path: "clients/gtest"
+    library_test_command: "cmake --build build -j && ctest --test-dir build -R hipblaslt"
+    rebuild_command: "cmake -S . -B build -DBUILD_CLIENTS_TESTS=ON && cmake --build build -j && cmake --install build"
+    expected_dispatch_symbols: ["hipBlasLt*Wrapper*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 10
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only host-side dispatch / problem-selection code in this file.
+      Do not touch Tensile-generated kernels. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "hipblaslt_dispatch*"
+    library: hipblaslt_wrapper
+    source_form: hip_cpp
+    bucket: A
+    geak_strategy: in_place_optimize
+    upstream_repo: "ROCm/hipBLASLt"
+    source_file: "library/src/amd_detail/hipblaslt_dispatch.cpp"
+    library_test_path: "clients/gtest"
+    library_test_command: "cmake --build build -j && ctest --test-dir build -R hipblaslt"
+    rebuild_command: "cmake -S . -B build -DBUILD_CLIENTS_TESTS=ON && cmake --build build -j && cmake --install build"
+    expected_dispatch_symbols: ["hipblaslt_dispatch*"]
+    vendor_baseline_symbols: []
+    geak_feasibility: hard
+    cost_profile:
+      per_attempt_minutes: 10
+      rebuild_minutes: 60
+    geak_task_hint: |
+      Modify only host-side dispatch in this file. Do not touch
+      Tensile-generated kernels. Metric: latency in milliseconds (lower is
+      better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # hipBLASLt Tensile-emitted GEMM ASM -- Bucket B (no harness)
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "Cijk_*"
+    library: hipblaslt_tensile
+    source_form: tensile_asm
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: no_test_harness
+    upstream_repo: "ROCm/hipBLASLt"
+    source_file: "library/src/amd_detail/Tensile/<resolved-by-symbol>.s"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "cmake --build build -j && cmake --install build"
+    expected_dispatch_symbols: ["Cijk_*"]
+    vendor_baseline_symbols: ["Cijk_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Tensile-generated GEMM assembly. Editing raw ISA is high-risk; prefer
+      dispatch_redirect_to_open_lib (target: aiter_triton GEMM). Metric:
+      latency in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_gemm_triton
+    recovery_hint: tensile_yaml_retune
+
+  - symbol_pattern: "*_TT_*"
+    library: hipblaslt_tensile
+    source_form: tensile_asm
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: no_test_harness
+    upstream_repo: "ROCm/hipBLASLt"
+    source_file: "library/src/amd_detail/Tensile/<resolved-by-symbol>.s"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "cmake --build build -j && cmake --install build"
+    expected_dispatch_symbols: ["*_TT_*"]
+    vendor_baseline_symbols: ["*_TT_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Tensile-generated TT-layout GEMM assembly. Prefer
+      dispatch_redirect_to_open_lib. Metric: latency in milliseconds (lower
+      is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_gemm_triton
+    recovery_hint: tensile_yaml_retune
+
+  - symbol_pattern: "*_NN_*"
+    library: hipblaslt_tensile
+    source_form: tensile_asm
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: no_test_harness
+    upstream_repo: "ROCm/hipBLASLt"
+    source_file: "library/src/amd_detail/Tensile/<resolved-by-symbol>.s"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "cmake --build build -j && cmake --install build"
+    expected_dispatch_symbols: ["*_NN_*"]
+    vendor_baseline_symbols: ["*_NN_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 5
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Tensile-generated NN-layout GEMM assembly. Prefer
+      dispatch_redirect_to_open_lib. Metric: latency in milliseconds (lower
+      is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_gemm_triton
+    recovery_hint: tensile_yaml_retune
+
+  # -----------------------------------------------------------------------
+  # PyTorch ATen native -- Bucket B (rebuild too expensive)
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "at::native::*"
+    library: aten
+    source_form: aten_native
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: rebuild_too_expensive
+    upstream_repo: "pytorch/pytorch"
+    source_file: "aten/src/ATen/native/<resolved-by-symbol>"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: ["at::native::*"]
+    vendor_baseline_symbols: ["at::native::*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 120
+      rebuild_minutes: 180
+    geak_task_hint: |
+      ATen native kernels require full PyTorch rebuild (hours per cycle).
+      Prefer dispatch_redirect_to_open_lib at a higher call site. Metric:
+      latency in milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  # -----------------------------------------------------------------------
+  # torch._inductor runtime-emitted Triton -- Bucket B (rebuild +
+  # surface_ambiguous); preferred path is escape_inductor + redirect
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "triton_poi_fused_*"
+    library: inductor
+    source_form: inductor_codegen
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: rebuild_too_expensive
+    upstream_repo: "pytorch/pytorch"
+    source_file: "torch/_inductor/codegen/triton.py"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: []
+    vendor_baseline_symbols: ["triton_poi_fused_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 120
+      rebuild_minutes: 180
+    geak_task_hint: |
+      Runtime-emitted inductor kernel. The persisted source IS the codegen
+      template, but edits there have high blast radius. Strongly prefer
+      escape_inductor + redirect to AITER Triton. Metric: latency in
+      milliseconds (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_pointwise_triton
+
+  - symbol_pattern: "triton_red_fused_*"
+    library: inductor
+    source_form: inductor_codegen
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: rebuild_too_expensive
+    upstream_repo: "pytorch/pytorch"
+    source_file: "torch/_inductor/codegen/triton.py"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: []
+    vendor_baseline_symbols: ["triton_red_fused_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 120
+      rebuild_minutes: 180
+    geak_task_hint: |
+      Runtime-emitted inductor reduction kernel. Prefer escape_inductor +
+      redirect. Metric: latency in milliseconds (lower is better). Roofline:
+      <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_reduction_triton
+
+  - symbol_pattern: "triton_unk_fused_*"
+    library: inductor
+    source_form: inductor_codegen
+    bucket: B
+    geak_strategy: dispatch_redirect_to_open_lib
+    gating_reason: rebuild_too_expensive
+    upstream_repo: "pytorch/pytorch"
+    source_file: "torch/_inductor/codegen/triton.py"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "pip install -e . --no-build-isolation"
+    expected_dispatch_symbols: []
+    vendor_baseline_symbols: ["triton_unk_fused_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 120
+      rebuild_minutes: 180
+    geak_task_hint: |
+      Runtime-emitted inductor unknown-pattern kernel. Prefer
+      escape_inductor + redirect. Metric: latency in milliseconds (lower is
+      better). Roofline: <ROOFLINE_DATA>.
+    redirect_target:
+      library: aiter_triton
+      symbol: aiter_pointwise_triton
+
+  # -----------------------------------------------------------------------
+  # Hand-written ASM -- Bucket B
+  # -----------------------------------------------------------------------
+  - symbol_pattern: "*_asm_*"
+    library: handwritten_asm
+    source_form: handwritten_asm
+    bucket: B
+    geak_strategy: in_place_optimize_no_harness
+    gating_reason: no_test_harness
+    upstream_repo: "<resolved-by-symbol>"
+    source_file: "<resolved-by-symbol>"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "<resolved-by-symbol>"
+    expected_dispatch_symbols: ["*_asm_*"]
+    vendor_baseline_symbols: ["*_asm_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 8
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Hand-written GCN/SASS assembly. LLM editing of raw ISA is very
+      high-risk. Prefer dispatch_redirect_to_open_lib if a higher-level open
+      op can be intercepted. Metric: latency in milliseconds (lower is
+      better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null
+
+  - symbol_pattern: "gcnasm_*"
+    library: handwritten_asm
+    source_form: handwritten_asm
+    bucket: B
+    geak_strategy: in_place_optimize_no_harness
+    gating_reason: no_test_harness
+    upstream_repo: "<resolved-by-symbol>"
+    source_file: "<resolved-by-symbol>"
+    library_test_path: null
+    library_test_command: null
+    rebuild_command: "<resolved-by-symbol>"
+    expected_dispatch_symbols: ["gcnasm_*"]
+    vendor_baseline_symbols: ["gcnasm_*"]
+    geak_feasibility: hard_experimental
+    cost_profile:
+      per_attempt_minutes: 8
+      rebuild_minutes: 5
+    geak_task_hint: |
+      Hand-written GCN assembly. LLM editing of raw ISA is very high-risk.
+      Prefer dispatch_redirect_to_open_lib. Metric: latency in milliseconds
+      (lower is better). Roofline: <ROOFLINE_DATA>.
+    redirect_target: null

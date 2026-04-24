@@ -1,0 +1,20 @@
+# Per-vLLM-version commit pins for every library that the optimization
+# pipeline may fork. `fork_upstream.py` reads this file and clones each
+# referenced repo at the pinned commit into `OUTPUT_DIR/forks/<lib>/`.
+#
+# `pins` is a map of library tag -> upstream commit SHA. Library tags
+# match the `library` field of `kernel_source_map.yaml`. Build-time
+# dependencies (e.g. composable_kernel) may also be pinned even when no
+# kernel from them is targeted directly, so that builds remain
+# reproducible.
+
+pins:
+  - vllm_version: "v0.19.1"
+    pins:
+      vllm: "v0.19.1"                  # vllm-project/vllm tag
+      aiter: "main"                    # ROCm/aiter -- pin to a commit at engagement start
+      fla: "main"                      # sustcsonglin/flash-linear-attention
+      composable_kernel: "develop"     # ROCm/composable_kernel -- build-time dep
+      rocblas: "develop"               # ROCm/rocBLAS
+      hipblaslt: "develop"             # ROCm/hipBLASLt
+      pytorch: "v2.5.1"                # pytorch/pytorch -- match vLLM's pinned torch
