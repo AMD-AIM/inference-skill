@@ -37,7 +37,7 @@ def main():
         with open(args.env_info) as f:
             env = json.load(f)
         summary["gpu_arch"] = env.get("gpu_arch", "unknown")
-        summary["geak_mode"] = env.get("effective_geak_mode", "manual")
+        summary["vllm_version"] = env.get("vllm_version", "unknown")
 
     integration_gate = None
     comp_path = os.path.join(args.results_dir, "optimization_comparison.json") if args.results_dir else ""
@@ -76,12 +76,21 @@ def main():
     if int_manifest_path and os.path.isfile(int_manifest_path):
         with open(int_manifest_path) as f:
             int_manifest = json.load(f)
-        summary["integration_plugin_type"] = int_manifest.get("plugin_type")
-        int_summary = int_manifest.get("summary", {})
-        summary["integration_total_targets"] = int_summary.get("total_targets")
-        summary["integration_integrated"] = int_summary.get("integrated")
-        summary["integration_blocked"] = int_summary.get("blocked")
-        summary["integration_coverage_pct"] = int_summary.get("coverage_pct")
+        summary["integration_schema_version"] = int_manifest.get("schema_version")
+        libs_rebuilt = int_manifest.get("libraries_rebuilt", []) or []
+        summary["libraries_rebuilt_count"] = len(libs_rebuilt)
+        summary["libraries_rebuilt"] = libs_rebuilt
+        summary["dispatch_verified"] = int_manifest.get("dispatch_verified")
+        summary["e2e_ran"] = int_manifest.get("e2e_ran")
+
+    dispatch_path = os.path.join(args.results_dir, "dispatch_verification.json") if args.results_dir else ""
+    if dispatch_path and os.path.isfile(dispatch_path):
+        with open(dispatch_path) as f:
+            dispatch = json.load(f)
+        summary["expected_symbol_total_count"] = dispatch.get("expected_symbol_total_count", 0)
+        summary["vendor_symbol_leaked_count"] = dispatch.get("vendor_symbol_leaked_count", 0)
+        summary["redirect_required_count"] = dispatch.get("redirect_required_count", 0)
+        summary["redirect_honored_count"] = dispatch.get("redirect_honored_count", 0)
 
     results_path = os.path.join(args.problems_dir, "geak_results.json") if args.problems_dir else ""
     if results_path and os.path.isfile(results_path):
@@ -94,15 +103,49 @@ def main():
         else:
             results = []
         summary["kernels_attempted"] = len(results)
-        summary["kernels_improved"] = sum(1 for r in results if r.get("speedup", 0) > 1.0)
-        summary["patches_recovered"] = sum(1 for r in results if r.get("patch_recovered", False))
+        # New scalar names use lib-bench speedup; preserve legacy "speedup" key for fallback.
+        def _speedup(r):
+            return r.get("geak_speedup_lib_bench", r.get("speedup", 0)) or 0
+        summary["kernels_improved"] = sum(1 for r in results if _speedup(r) > 1.0)
+        summary["unverified_per_kernel_count"] = sum(
+            1 for r in results if r.get("optimization_unverified_per_kernel") is True
+        )
+        summary["bucket_b_winners"] = [
+            {
+                "name": r.get("name"),
+                "library": r.get("library"),
+                "source_form": r.get("source_form"),
+                "gating_reason": r.get("gating_reason"),
+                "geak_speedup_lib_bench": r.get("geak_speedup_lib_bench"),
+                "no_harness_warning": r.get("no_harness_warning"),
+            }
+            for r in results
+            if r.get("optimization_unverified_per_kernel") is True
+        ]
         summary["kernel_results"] = results
 
     manifest_path = os.path.join(args.problems_dir, "optimization_manifest.json") if args.problems_dir else ""
     if manifest_path and os.path.isfile(manifest_path):
         with open(manifest_path) as f:
             manifest = json.load(f)
-        summary["total_problem_files"] = len(manifest.get("optimizations", []))
+        opts = manifest.get("optimizations", []) if isinstance(manifest, dict) else (
+            manifest if isinstance(manifest, list) else []
+        )
+        summary["total_optimization_targets"] = len(opts)
+        summary["bucket_a_count"] = sum(1 for o in opts if o.get("bucket") == "A")
+        summary["bucket_b_count"] = sum(1 for o in opts if o.get("bucket") == "B")
+        summary["bucket_c_count"] = sum(1 for o in opts if o.get("bucket") == "C")
+
+    forks_manifest_path = os.path.join(
+        args.results_dir, "..", "forks", "manifest.json"
+    ) if args.results_dir else ""
+    if forks_manifest_path and os.path.isfile(forks_manifest_path):
+        with open(forks_manifest_path) as f:
+            forks = json.load(f)
+        libs = forks.get("libraries", []) if isinstance(forks, dict) else []
+        summary["forks_pinned_count"] = sum(1 for l in libs if not l.get("dirty", False))
+        summary["forks_required_count"] = len(libs)
+        summary["ck_branch_merged_status"] = forks.get("ck_branch_merged_status")
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w") as f:
