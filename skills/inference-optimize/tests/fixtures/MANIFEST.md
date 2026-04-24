@@ -16,6 +16,7 @@ Each fixture is a JSON file containing the scenario description, input data, and
 | R6 | `representative/warn_band.json` | Integration lands in 0.97-1.0 warn band, completed with warnings |
 | R7 | `representative/ttft_upgrade.json` | Warn→fail upgrade due to severe TTFT regression |
 | R8 | `representative/benchmark_mode.json` | benchmark-only mode, no integration phase, completed |
+| R9 | `representative/fork_rebuild.json` | Library-rebuild contract end-to-end: GEAK winners committed onto fork `geak/` branches, rebuild completes, rocprofv3 confirms dispatch swap, e2e speedup > 1.0 |
 
 ## Adversarial Fixtures (8)
 

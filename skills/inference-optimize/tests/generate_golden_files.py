@@ -117,7 +117,7 @@ def _create_artifacts(tmpdir):
     """Create required artifact files and directories for optimize mode."""
     for d in ["handoff", "agent-results", "monitor", "results", "results/parity",
               "problems", "optimized", "profiles", "scripts", "templates",
-              "reports", "resources", "results/gap_analysis"]:
+              "reports", "resources", "results/gap_analysis", "forks"]:
         os.makedirs(os.path.join(tmpdir, d), exist_ok=True)
 
     with open(os.path.join(tmpdir, "env_info.json"), "w") as f:
@@ -128,6 +128,14 @@ def _create_artifacts(tmpdir):
         json.dump({"top_kernels": ["kernel_a", "kernel_b"]}, f)
     with open(os.path.join(tmpdir, "results/profile_analysis.json"), "w") as f:
         json.dump({"status": "complete"}, f)
+    # Library-rebuild contract: pre-stage stub manifests so kernel-optimize
+    # and integration prerequisites pass for the mock parity harness.
+    with open(os.path.join(tmpdir, "problems/optimization_manifest.json"), "w") as f:
+        json.dump({"optimizations": []}, f)
+    with open(os.path.join(tmpdir, "problems/geak_results.json"), "w") as f:
+        json.dump({"kernels": []}, f)
+    with open(os.path.join(tmpdir, "forks/manifest.json"), "w") as f:
+        json.dump({"libraries": [], "ck_branch_merged_status": False, "vllm_version": "test"}, f)
 
 
 def generate_golden(scenario_name, scenario_spec, output_dir):

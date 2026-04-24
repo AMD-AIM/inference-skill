@@ -59,7 +59,7 @@ def _build_config(tmpdir, v2=True):
 def _create_artifacts(tmpdir):
     for d in ["handoff", "agent-results", "monitor", "results", "results/parity",
               "problems", "optimized", "profiles", "scripts", "templates",
-              "reports", "resources", "results/gap_analysis"]:
+              "reports", "resources", "results/gap_analysis", "forks"]:
         os.makedirs(os.path.join(tmpdir, d), exist_ok=True)
     with open(os.path.join(tmpdir, "env_info.json"), "w") as f:
         json.dump({"gpu_arch": "mi300x", "gpu_count": 8}, f)
@@ -69,6 +69,15 @@ def _create_artifacts(tmpdir):
         json.dump({"top_kernels": ["kernel_a", "kernel_b"]}, f)
     with open(os.path.join(tmpdir, "results/profile_analysis.json"), "w") as f:
         json.dump({"status": "complete"}, f)
+    # Library-rebuild contract: kernel-optimize and integration declare
+    # requires_artifacts. Pre-stage stub manifests so the prerequisite check
+    # passes for downstream-phase dispatch in this mock harness.
+    with open(os.path.join(tmpdir, "problems/optimization_manifest.json"), "w") as f:
+        json.dump({"optimizations": []}, f)
+    with open(os.path.join(tmpdir, "problems/geak_results.json"), "w") as f:
+        json.dump({"kernels": []}, f)
+    with open(os.path.join(tmpdir, "forks/manifest.json"), "w") as f:
+        json.dump({"libraries": [], "ck_branch_merged_status": False, "vllm_version": "test"}, f)
 
 
 def _load_capped_registry(max_per_phase=2, max_total=5):

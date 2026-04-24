@@ -1,0 +1,178 @@
+{
+  "id": "R9",
+  "name": "fork_rebuild",
+  "description": "Library-rebuild contract end-to-end: GEAK winners committed onto fork geak/ branches, rebuild completes, rocprofv3 confirms dispatch swap (vendor symbol gone, GEAK symbol firing), e2e speedup > 1.0",
+  "mode": "optimize",
+  "skip_integration": false,
+  "inputs": {
+    "progress": {
+      "phases_completed": ["env", "config", "benchmark", "benchmark-analyze", "profile", "profile-analyze", "problem-generate", "kernel-optimize", "integration", "report-generate"],
+      "current_phase": null,
+      "status": "completed",
+      "retry_counts": {},
+      "total_reruns": 0,
+      "fallbacks_used": []
+    },
+    "comparison": {
+      "schema_version": "1.0",
+      "artifacts_valid": true,
+      "performance_valid": true,
+      "validated": true,
+      "performance_gate": "pass",
+      "ttft_upgraded": false,
+      "baseline_file": "run_fp4_tp8.json",
+      "optimized_file": "optimized_run_fp4_tp8.json",
+      "baseline": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0},
+      "optimized": {"total_token_throughput": 1180, "mean_ttft_ms": 92.0},
+      "speedup": 1.18,
+      "e2e_speedup": 1.18,
+      "ttft_regression_pct": -8.0
+    },
+    "blockers": {"blockers": []},
+    "baseline_benchmark": {"total_token_throughput": 1000, "mean_ttft_ms": 100.0, "mean_itl_ms": 5.0, "mean_tpot_ms": 10.0, "duration": 60},
+    "optimized_benchmark": {"total_token_throughput": 1180, "mean_ttft_ms": 92.0, "mean_itl_ms": 4.5, "mean_tpot_ms": 8.5, "duration": 60},
+    "forks_manifest": {
+      "schema_version": "1.0",
+      "ck_branch_merged_status": false,
+      "forks": [
+        {"lib": "fla", "repo_url": "https://github.com/sustcsonglin/flash-linear-attention", "pinned_commit": "abc1234567890", "fork_path": "forks/fla", "dirty": false, "rebuild_command": "pip install -e ."},
+        {"lib": "vllm", "repo_url": "https://github.com/vllm-project/vllm", "pinned_commit": "def4567890123", "fork_path": "forks/vllm", "dirty": false, "rebuild_command": "pip install -e . --no-build-isolation"}
+      ]
+    },
+    "optimization_manifest": {
+      "schema_version": "2.0",
+      "kernels": [
+        {
+          "name": "fused_recurrent_gated_delta_rule_fwd_kernel",
+          "baseline_dispatch_symbol": "fused_recurrent_gated_delta_rule_fwd_kernel",
+          "library": "fla",
+          "source_form": "triton",
+          "bucket": "A",
+          "geak_strategy": "in_place_optimize",
+          "gating_reason": null,
+          "user_decision": null,
+          "upstream_repo": "sustcsonglin/flash-linear-attention",
+          "pinned_commit": "abc1234567890",
+          "source_file": "fla/ops/gated_delta_rule/fused_recurrent.py",
+          "fork_path": "forks/fla",
+          "library_test_path": "tests/ops/test_fused_recurrent.py",
+          "expected_dispatch_symbols": ["fused_recurrent_gated_delta_rule_fwd_kernel"],
+          "vendor_baseline_symbols": [],
+          "rebuild_command": "pip install -e .",
+          "profiling_pct": 18.4,
+          "priority_score": 0.62,
+          "cost_profile": {"per_attempt_seconds": 30, "per_phase8_rebuild_seconds": 120},
+          "optimize": true,
+          "enabled": true,
+          "skip_reason": null
+        },
+        {
+          "name": "paged_attention_v2_kernel",
+          "baseline_dispatch_symbol": "paged_attention_v2_kernel",
+          "library": "vllm_csrc",
+          "source_form": "hip_cpp",
+          "bucket": "A",
+          "geak_strategy": "in_place_optimize",
+          "gating_reason": null,
+          "user_decision": null,
+          "upstream_repo": "vllm-project/vllm",
+          "pinned_commit": "def4567890123",
+          "source_file": "csrc/attention/paged_attention_v2.cu",
+          "fork_path": "forks/vllm",
+          "library_test_path": "tests/kernels/test_paged_attention.py",
+          "expected_dispatch_symbols": ["paged_attention_v2_kernel"],
+          "vendor_baseline_symbols": [],
+          "rebuild_command": "pip install -e . --no-build-isolation",
+          "profiling_pct": 27.1,
+          "priority_score": 0.81,
+          "cost_profile": {"per_attempt_seconds": 360, "per_phase8_rebuild_seconds": 3600},
+          "optimize": true,
+          "enabled": true,
+          "skip_reason": null
+        }
+      ]
+    },
+    "geak_results": {
+      "schema_version": "2.0",
+      "kernels": [
+        {
+          "name": "fused_recurrent_gated_delta_rule_fwd_kernel",
+          "library": "fla",
+          "geak_strategy": "in_place_optimize",
+          "gating_reason": null,
+          "optimization_unverified_per_kernel": false,
+          "redirect_target": null,
+          "upstream_repo": "sustcsonglin/flash-linear-attention",
+          "fork_commit_after_winner": "abc1234567890aa",
+          "library_test_pass_count": 18,
+          "library_test_fail_count": 0,
+          "library_test_log_path": "results/geak/fla_fused_recurrent_lib_tests.log",
+          "allocator_test_pass": true,
+          "allocator_test_log_path": "results/geak/fla_allocator_test.log",
+          "dispatch_pre_flight_pass": true,
+          "geak_speedup_lib_bench": 1.42,
+          "geak_attempts_used": 6,
+          "skip_reason": null,
+          "no_harness_warning": null
+        },
+        {
+          "name": "paged_attention_v2_kernel",
+          "library": "vllm_csrc",
+          "geak_strategy": "in_place_optimize",
+          "gating_reason": null,
+          "optimization_unverified_per_kernel": false,
+          "redirect_target": null,
+          "upstream_repo": "vllm-project/vllm",
+          "fork_commit_after_winner": "def4567890123bb",
+          "library_test_pass_count": 42,
+          "library_test_fail_count": 0,
+          "library_test_log_path": "results/geak/vllm_paged_attention_lib_tests.log",
+          "allocator_test_pass": true,
+          "allocator_test_log_path": "results/geak/vllm_allocator_test.log",
+          "dispatch_pre_flight_pass": true,
+          "geak_speedup_lib_bench": 1.21,
+          "geak_attempts_used": 9,
+          "skip_reason": null,
+          "no_harness_warning": null
+        }
+      ]
+    },
+    "dispatch_verification": {
+      "mode": "post-rebuild",
+      "rocprofv3_trace_path": "results/postrebuild_kernel_trace.json",
+      "expected_symbols": [
+        {"name": "fused_recurrent_gated_delta_rule_fwd_kernel", "count": 6432, "status": "present"},
+        {"name": "paged_attention_v2_kernel", "count": 12180, "status": "present"}
+      ],
+      "vendor_symbols": [],
+      "expected_symbol_total_count": 2,
+      "vendor_symbol_leaked_count": 0,
+      "redirect_required_count": 0,
+      "redirect_honored_count": 0,
+      "dispatch_verified": true
+    },
+    "integration_manifest": {
+      "schema_version": "2.0",
+      "libraries_rebuilt": [
+        {"lib": "fla", "commit": "abc1234567890aa", "install_log_path": "results/rebuild_fla.log"},
+        {"lib": "vllm", "commit": "def4567890123bb", "install_log_path": "results/rebuild_vllm.log"}
+      ],
+      "dispatch_verified": true,
+      "e2e_ran": true,
+      "artifacts_valid": true
+    }
+  },
+  "expected": {
+    "pipeline_status": "completed",
+    "all_phases_completed": true,
+    "performance_gate": "pass",
+    "artifacts_valid": true,
+    "validated": true,
+    "dispatch_verified": true,
+    "libraries_rebuilt_count": 2,
+    "vendor_symbol_leaked_count": 0,
+    "in_place_winners_count": 2,
+    "no_harness_winners_count": 0,
+    "unverified_per_kernel_count": 0
+  }
+}

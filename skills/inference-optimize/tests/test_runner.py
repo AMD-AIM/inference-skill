@@ -421,6 +421,8 @@ class TestDeterministicRunner:
         with tempfile.TemporaryDirectory() as tmpdir:
             config["OUTPUT_DIR"] = tmpdir
             os.makedirs(os.path.join(tmpdir, "results", "gap_analysis"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "problems"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "forks"), exist_ok=True)
             with open(os.path.join(tmpdir, "env_info.json"), "w") as f:
                 json.dump({"gpu_arch": "mi300x"}, f)
             with open(os.path.join(tmpdir, "results", "sweep_configs.json"), "w") as f:
@@ -429,6 +431,14 @@ class TestDeterministicRunner:
                 json.dump({"status": "complete"}, f)
             with open(os.path.join(tmpdir, "results", "gap_analysis", "gap_analysis.json"), "w") as f:
                 json.dump({"top_kernels": ["kernel_" + str(i) for i in range(1200)]}, f)
+            # Library-rebuild contract: kernel-optimize and integration declare
+            # requires_artifacts. Pre-stage so downstream phases can dispatch.
+            with open(os.path.join(tmpdir, "problems", "optimization_manifest.json"), "w") as f:
+                json.dump({"optimizations": []}, f)
+            with open(os.path.join(tmpdir, "problems", "geak_results.json"), "w") as f:
+                json.dump({"kernels": []}, f)
+            with open(os.path.join(tmpdir, "forks", "manifest.json"), "w") as f:
+                json.dump({"libraries": [], "ck_branch_merged_status": False}, f)
 
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)

@@ -565,52 +565,78 @@ class TestRepeatedRcaFingerprintTriggersSystemicDispatch:
 
 
 # ---------------------------------------------------------------------------
-# INV-16: WarmupBiasFilter predicate registered on integration phase
+# INV-16: Integration phase wires the rocprofv3 dispatch-verification gate
 # ---------------------------------------------------------------------------
 
-class TestWarmupBiasFilterMarksArtifact:
-    def test_integration_has_warmup_bias_rule(self):
+class TestIntegrationDispatchVerified:
+    def test_integration_has_dispatch_verified_rule(self):
         reg = _load_registry()
-        rules_v2 = reg["phases"]["integration"]["quality"]["detection_rules_structured_v2"]
-        named = [r for r in rules_v2 if r.get("name") == "WarmupBiasFilter"]
-        assert len(named) == 1, "WarmupBiasFilter rule must be registered exactly once"
-        rule = named[0]
-        assert rule["field"] == "std_ttft_ratio"
-        assert rule["op"] == "lt"
-        assert float(rule["value"]) == 0.1
+        rules = reg["phases"]["integration"]["quality"]["detection_rules_structured"]
+        match = [r for r in rules if r.get("field") == "dispatch_verified"]
+        assert len(match) == 1, (
+            "integration must FAIL when dispatch_verified == false; "
+            "exactly one structured rule must enforce that"
+        )
+        rule = match[0]
+        assert rule["op"] == "eq"
+        assert rule["value"] is False
         assert rule["verdict"] == "FAIL"
-        assert "sum_patch_call_counters" in rule.get("condition", "")
 
-    def test_integration_scalars_include_warmup_inputs(self):
+    def test_integration_has_vendor_leak_and_rebuild_rules(self):
+        reg = _load_registry()
+        rules = reg["phases"]["integration"]["quality"]["detection_rules_structured"]
+        fields = {(r.get("field"), r.get("op"), r.get("verdict")) for r in rules}
+        assert ("vendor_symbol_leaked_count", "gt", "FAIL") in fields
+        assert ("libraries_rebuild_failed_count", "gt", "FAIL") in fields
+
+    def test_integration_scalars_include_dispatch_inputs(self):
         reg = _load_registry()
         scalars = reg["phases"]["integration"]["monitor_context_fields"]["scalars"]
-        for required in ("std_ttft_baseline", "std_ttft_optimized",
-                         "sum_patch_call_counters", "std_ttft_ratio"):
-            assert required in scalars, f"missing scalar {required} for WarmupBiasFilter"
+        for required in (
+            "dispatch_verified",
+            "expected_symbol_total_count",
+            "vendor_symbol_leaked_count",
+            "redirect_required_count",
+            "redirect_honored_count",
+            "libraries_rebuilt_ok_count",
+            "libraries_rebuild_failed_count",
+        ):
+            assert required in scalars, f"missing scalar {required} on integration phase"
 
 
 # ---------------------------------------------------------------------------
-# INV-17: GEAKMeasurementBias predicate registered on kernel-optimize phase
+# INV-17: Kernel-optimize phase wires the pre-flight dispatch sanity check
 # ---------------------------------------------------------------------------
 
-class TestGeakMeasurementBiasFailsOnHandoff:
-    def test_kernel_optimize_has_measurement_bias_rule(self):
+class TestKernelOptimizePreFlight:
+    def test_kernel_optimize_has_preflight_rule(self):
         reg = _load_registry()
-        rules_v2 = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured_v2"]
-        named = [r for r in rules_v2 if r.get("name") == "GEAKMeasurementBias"]
-        assert len(named) == 1, "GEAKMeasurementBias rule must be registered exactly once"
-        rule = named[0]
-        assert rule["field"] == "hipGraphLaunch_pct"
-        assert rule["op"] == "gt"
-        assert float(rule["value"]) == 80.0
+        rules = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured"]
+        match = [r for r in rules if r.get("field") == "dispatch_pre_flight_pass"]
+        assert len(match) == 1, (
+            "kernel-optimize must FAIL when dispatch_pre_flight_pass == false; "
+            "exactly one structured rule must enforce that"
+        )
+        rule = match[0]
+        assert rule["op"] == "eq"
+        assert rule["value"] is False
         assert rule["verdict"] == "FAIL"
-        assert "cuda_graph_replay" in rule.get("condition", "")
 
-    def test_kernel_optimize_scalars_include_measurement_inputs(self):
+    def test_kernel_optimize_scalars_include_library_rebuild_inputs(self):
         reg = _load_registry()
         scalars = reg["phases"]["kernel-optimize"]["monitor_context_fields"]["scalars"]
-        for required in ("hipGraphLaunch_pct", "winning_kernel_measurement_env"):
-            assert required in scalars, f"missing scalar {required} for GEAKMeasurementBias"
+        for required in (
+            "library_tests_passed_count",
+            "library_tests_failed_count",
+            "allocator_test_pass",
+            "dispatch_pre_flight_pass",
+            "geak_speedup_lib_bench",
+            "redirect_commits_applied_count",
+            "in_place_winners_count",
+            "no_harness_winners_count",
+            "unverified_per_kernel_count",
+        ):
+            assert required in scalars, f"missing scalar {required} on kernel-optimize phase"
 
 
 # ---------------------------------------------------------------------------

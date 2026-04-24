@@ -410,7 +410,7 @@ def test_summary_clean_pass():
 
 
 def test_summary_integration_manifest_ingestion():
-    """Integration manifest fields are surfaced in the summary."""
+    """Integration manifest (schema 2.0) and dispatch verification fields are surfaced."""
     with tempfile.TemporaryDirectory() as tmpdir:
         results_dir = os.path.join(tmpdir, "results")
         os.makedirs(results_dir)
@@ -418,26 +418,36 @@ def test_summary_integration_manifest_ingestion():
         with open(os.path.join(results_dir, "optimization_comparison.json"), "w") as f:
             json.dump(comp, f)
         manifest = {
-            "schema_version": "1.0",
-            "plugin_type": "sglang_plugin",
-            "comparison_file": "optimization_comparison.json",
-            "targets": [
-                {"name": "fused_moe", "status": "integrated", "strategy": "plugin",
-                 "kernel_speedup": 1.35, "blocker_classification": None},
+            "schema_version": "2.0",
+            "libraries_rebuilt": [
+                {"lib": "fla", "commit": "abc1234", "install_log_path": "results/rebuild_fla.log"},
+                {"lib": "vllm", "commit": "def5678", "install_log_path": "results/rebuild_vllm.log"},
             ],
-            "summary": {
-                "total_targets": 1, "integrated": 1, "blocked": 0,
-                "skipped": 0, "coverage_pct": 1.0,
-            },
+            "dispatch_verified": True,
+            "e2e_ran": True,
+            "artifacts_valid": True,
         }
         with open(os.path.join(results_dir, "integration_manifest.json"), "w") as f:
             json.dump(manifest, f)
+        dispatch = {
+            "mode": "post-rebuild",
+            "expected_symbol_total_count": 12,
+            "vendor_symbol_leaked_count": 0,
+            "redirect_required_count": 1,
+            "redirect_honored_count": 1,
+            "dispatch_verified": True,
+        }
+        with open(os.path.join(results_dir, "dispatch_verification.json"), "w") as f:
+            json.dump(dispatch, f)
         summary = _run_generate_summary(tmpdir, results_dir)
-        assert summary["integration_plugin_type"] == "sglang_plugin"
-        assert summary["integration_total_targets"] == 1
-        assert summary["integration_integrated"] == 1
-        assert summary["integration_blocked"] == 0
-        assert summary["integration_coverage_pct"] == 1.0
+        assert summary["integration_schema_version"] == "2.0"
+        assert summary["libraries_rebuilt_count"] == 2
+        assert summary["dispatch_verified"] is True
+        assert summary["e2e_ran"] is True
+        assert summary["expected_symbol_total_count"] == 12
+        assert summary["vendor_symbol_leaked_count"] == 0
+        assert summary["redirect_required_count"] == 1
+        assert summary["redirect_honored_count"] == 1
 
 
 def test_summary_skip_integration_completed():

@@ -82,9 +82,6 @@ SKIP_PATTERNS = [
     re.compile(r"FAILED \(slower\)"),
     # SGLang/vLLM benign import warnings (model modules not available in this image)
     re.compile(r"Ignore import error"),
-    # Plugin import warnings during optimized benchmark (expected when plugin is optional)
-    re.compile(r"sglang_plugin import failed"),
-    re.compile(r"vllm_plugin import failed"),
 ]
 
 
@@ -819,50 +816,81 @@ def check_profile_analyze(output_dir, config):
 
 
 def check_problem_generate(output_dir, config):
+    """Under the library-rebuild contract, Phase 6 (`problem-generate` /
+    `upstream-resolve`) emits `problems/optimization_manifest.json`
+    (schema 2.0 — kernels keyed by upstream symbol with library /
+    geak_strategy / fork_path), `forks/manifest.json` (per-library fork
+    state), and `results/baseline_dispatch_trace.json` (rocprofv3 capture).
+    No more `problem_*.py` files (the synthetic-harness contract is gone).
+    """
     checks = []
     problems_dir = os.path.join(output_dir, "problems")
-    problem_files = glob.glob(os.path.join(problems_dir, "problem_*.py"))
-    problem_files = [f for f in problem_files if "_opt" not in os.path.basename(f)]
-
-    if not problem_files:
-        checks.append(CheckResult("problem-generate", "problem files exist", "skip"))
-        return checks
-
-    checks.append(CheckResult("problem-generate", "problem files exist", "pass",
-                              f"{len(problem_files)} file(s)"))
-
-    for pf in problem_files:
-        basename = os.path.basename(pf)
-        with open(pf) as f:
-            content = f.read()
-        # Base problem files have: class Model, get_inputs, get_init_inputs
-        # class ModelNew is only in the *_opt.py files (generated during Phase 7)
-        missing = []
-        for pattern in ["class Model", "def get_inputs", "def get_init_inputs"]:
-            if pattern not in content:
-                missing.append(pattern)
-        if missing:
-            checks.append(CheckResult("problem-generate", f"{basename} contract", "fail",
-                                      f"Missing: {missing}"))
-        else:
-            checks.append(CheckResult("problem-generate", f"{basename} contract", "pass"))
+    forks_dir = os.path.join(output_dir, "forks")
+    results_dir = os.path.join(output_dir, "results")
 
     manifest_path = os.path.join(problems_dir, "optimization_manifest.json")
     if os.path.isfile(manifest_path):
         with open(manifest_path) as f:
             manifest = json.load(f)
-        entries = manifest.get("optimizations", manifest.get("entries", []))
+        entries = manifest.get("optimizations", manifest.get("entries", manifest.get("kernels", [])))
         checks.append(CheckResult("problem-generate", "optimization_manifest.json valid", "pass",
                                   f"{len(entries)} entries"))
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name") or entry.get("kernel") or f"entry[{i}]"
+            missing_fields = [
+                f for f in ("library", "geak_strategy")
+                if f not in entry
+            ]
+            if missing_fields:
+                checks.append(CheckResult("problem-generate",
+                                          f"{name} library-rebuild contract", "warning",
+                                          f"Missing fields: {missing_fields}"))
+            else:
+                checks.append(CheckResult("problem-generate",
+                                          f"{name} library-rebuild contract", "pass",
+                                          f"library={entry.get('library')}, "
+                                          f"strategy={entry.get('geak_strategy')}"))
     else:
         checks.append(CheckResult("problem-generate", "optimization_manifest.json exists", "skip"))
+
+    forks_manifest_path = os.path.join(forks_dir, "manifest.json")
+    if os.path.isfile(forks_manifest_path):
+        with open(forks_manifest_path) as f:
+            forks_manifest = json.load(f)
+        fork_entries = forks_manifest.get("forks", forks_manifest)
+        if isinstance(fork_entries, dict) and not isinstance(fork_entries, list):
+            fork_count = len([k for k in fork_entries.keys() if k != "ck_branch_merged_status"])
+        else:
+            fork_count = len(fork_entries) if isinstance(fork_entries, list) else 0
+        checks.append(CheckResult("problem-generate", "forks/manifest.json valid", "pass",
+                                  f"{fork_count} fork(s) pinned"))
+    else:
+        checks.append(CheckResult("problem-generate", "forks/manifest.json exists", "skip"))
+
+    baseline_trace = os.path.join(results_dir, "baseline_dispatch_trace.json")
+    if os.path.isfile(baseline_trace):
+        checks.append(CheckResult("problem-generate", "baseline_dispatch_trace.json captured",
+                                  "pass"))
+    else:
+        checks.append(CheckResult("problem-generate", "baseline_dispatch_trace.json exists",
+                                  "skip"))
 
     return checks
 
 
 def check_kernel_optimize(output_dir, config):
+    """Under the library-rebuild contract, Phase 7 commits GEAK winners
+    onto the per-library `geak/` branch in `forks/<lib>/` and writes
+    `geak_results.json` with `{geak_strategy, fork_commit_after_winner,
+    library_test_pass_count, allocator_test_pass, dispatch_pre_flight_pass,
+    geak_speedup_lib_bench}` per kernel. There are no `*_opt.py` files
+    and no `optimized/` staging directory."""
     checks = []
     problems_dir = os.path.join(output_dir, "problems")
+    forks_dir = os.path.join(output_dir, "forks")
+    results_dir = os.path.join(output_dir, "results")
 
     geak_path = os.path.join(problems_dir, "geak_results.json")
     if os.path.isfile(geak_path):
@@ -871,118 +899,120 @@ def check_kernel_optimize(output_dir, config):
         checks.append(CheckResult("kernel-optimize", "geak_results.json exists", "pass",
                                   f"{len(entries)} entries"))
 
-        # List of *_opt.py files in optimized/ (staged for integration)
-        optimized_dir = os.path.join(output_dir, "optimized")
-        staged_opt_files = {os.path.basename(f)
-                           for f in glob.glob(os.path.join(optimized_dir, "*_opt.py"))}
-
         for entry in entries:
             name = entry.get("name", entry.get("kernel", "unknown"))
-            speedup = entry.get("speedup")
-            correct = entry.get("correctness", entry.get("correct", True))
-            opt_filename = f"{name}_opt.py"
-            in_optimized = opt_filename in staged_opt_files
+            strategy = entry.get("geak_strategy", "")
+            speedup = entry.get("geak_speedup_lib_bench", entry.get("speedup"))
+            preflight_pass = entry.get("dispatch_pre_flight_pass")
+            allocator_pass = entry.get("allocator_test_pass")
+            unverified = entry.get("optimization_unverified_per_kernel")
 
+            # Speedup reporting (when present)
             if speedup is not None:
-                status = "pass" if correct else "fail"
-                checks.append(CheckResult("kernel-optimize", f"{name} result", status,
-                                          f"speedup={speedup}x, correct={correct}"))
-
-                # Cross-check: kernel staging correctness
-                if speedup < 1.0:
-                    if in_optimized:
-                        checks.append(CheckResult("kernel-optimize",
-                                                  f"{name} regression not staged", "fail",
-                                                  f"speedup={speedup}x < 1.0 but {opt_filename} found in optimized/"))
-                    else:
-                        checks.append(CheckResult("kernel-optimize",
-                                                  f"{name} regression correctly skipped", "pass",
-                                                  f"speedup={speedup}x < 1.0, not in optimized/"))
-                else:
-                    if in_optimized:
-                        checks.append(CheckResult("kernel-optimize",
-                                                  f"{name} winner correctly staged", "pass",
-                                                  f"speedup={speedup}x, {opt_filename} in optimized/"))
-                    else:
-                        checks.append(CheckResult("kernel-optimize",
-                                                  f"{name} winner staged", "warning",
-                                                  f"speedup={speedup}x but {opt_filename} not in optimized/"))
+                status = "pass" if speedup >= 1.0 else "warning"
+                detail = f"strategy={strategy}, speedup={speedup}x"
+                if unverified:
+                    detail += " [unverified-per-kernel: Bucket B]"
+                checks.append(CheckResult("kernel-optimize", f"{name} result", status, detail))
             else:
                 checks.append(CheckResult("kernel-optimize", f"{name} result", "warning",
-                                          "speedup=null"))
+                                          f"strategy={strategy}, speedup=null"))
+
+            # Dispatch pre-flight gate is mandatory for all buckets
+            if preflight_pass is False:
+                checks.append(CheckResult("kernel-optimize",
+                                          f"{name} dispatch pre-flight", "fail",
+                                          "dispatch_pre_flight_pass=false"))
+            elif preflight_pass is True:
+                checks.append(CheckResult("kernel-optimize",
+                                          f"{name} dispatch pre-flight", "pass"))
+
+            # Allocator test only required for Bucket A (in_place_optimize, redirects)
+            if strategy == "in_place_optimize" and allocator_pass is False:
+                checks.append(CheckResult("kernel-optimize",
+                                          f"{name} allocator integration", "fail",
+                                          "allocator_test_pass=false"))
     else:
         checks.append(CheckResult("kernel-optimize", "geak_results.json exists", "skip"))
 
-    opt_files = glob.glob(os.path.join(problems_dir, "*_opt.py"))
-    if opt_files:
-        checks.append(CheckResult("kernel-optimize", "optimized kernel files exist", "pass",
-                                  f"{len(opt_files)} file(s)"))
+    # forks/ tree must exist when problem-generate ran
+    if os.path.isdir(forks_dir):
+        fork_subdirs = [d for d in os.listdir(forks_dir)
+                        if os.path.isdir(os.path.join(forks_dir, d))]
+        checks.append(CheckResult("kernel-optimize", "forks/ directory populated",
+                                  "pass" if fork_subdirs else "warning",
+                                  f"{len(fork_subdirs)} fork(s)"))
     else:
-        opt_files_optimized = glob.glob(os.path.join(output_dir, "optimized", "*_opt.py"))
-        if opt_files_optimized:
-            checks.append(CheckResult("kernel-optimize", "optimized kernel files exist", "pass",
-                                      f"{len(opt_files_optimized)} file(s) in optimized/"))
-        else:
-            checks.append(CheckResult("kernel-optimize", "optimized kernel files exist", "skip"))
+        checks.append(CheckResult("kernel-optimize", "forks/ directory exists", "skip"))
+
+    preflight_trace = os.path.join(results_dir, "preflight_dispatch_trace.json")
+    if os.path.isfile(preflight_trace):
+        checks.append(CheckResult("kernel-optimize", "preflight_dispatch_trace.json captured",
+                                  "pass"))
+    else:
+        checks.append(CheckResult("kernel-optimize", "preflight_dispatch_trace.json exists",
+                                  "skip"))
 
     return checks
 
 
 def check_integration(output_dir, config):
+    """Under the library-rebuild contract, Phase 8 emits
+    `results/dispatch_verification.json` (rocprofv3 expected/vendor symbol
+    counts), `results/integration_manifest.json` (schema 2.0 with
+    `libraries_rebuilt`, `dispatch_verified`, `e2e_ran`,
+    `artifacts_valid`), and the per-library `results/rebuild_<lib>.log`.
+    No plugin manifests, no `optimized/<framework>_plugin/`."""
     checks = []
-    framework = config.get("FRAMEWORK", "vllm") if config else "vllm"
+    results_dir = os.path.join(output_dir, "results")
 
-    plugin_dir_name = f"{framework}_plugin"
-    manifest_path = os.path.join(output_dir, "optimized", plugin_dir_name, "manifest.json")
+    # dispatch_verification.json
+    disp_path = os.path.join(results_dir, "dispatch_verification.json")
+    if os.path.isfile(disp_path):
+        with open(disp_path) as f:
+            disp = json.load(f)
+        verified = bool(disp.get("dispatch_verified"))
+        checks.append(CheckResult("integration", "dispatch_verified",
+                                  "pass" if verified else "fail",
+                                  f"dispatch_verified={verified}"))
+        leaked = disp.get("vendor_symbol_leaked_count")
+        if leaked is not None:
+            checks.append(CheckResult("integration", "no vendor symbol leakage",
+                                      "pass" if leaked == 0 else "fail",
+                                      f"vendor_symbol_leaked_count={leaked}"))
+        rh = disp.get("redirect_honored_count")
+        rr = disp.get("redirect_required_count")
+        if rh is not None and rr is not None:
+            checks.append(CheckResult("integration", "redirects honored",
+                                      "pass" if rh >= rr else "fail",
+                                      f"redirect_honored={rh}/{rr}"))
+    else:
+        checks.append(CheckResult("integration", "dispatch_verification.json exists", "skip"))
 
-    # Load geak_results for cross-check
-    geak_path = os.path.join(output_dir, "problems", "geak_results.json")
-    geak_speedups = {}
-    if os.path.isfile(geak_path):
-        geak_entries = extract_entries(load_json(geak_path))
-        for entry in geak_entries:
-            name = entry.get("name", entry.get("kernel", ""))
-            geak_speedups[name] = entry.get("speedup")
-
+    # integration_manifest.json (schema 2.0 — libraries_rebuilt)
+    manifest_path = os.path.join(results_dir, "integration_manifest.json")
+    libraries_rebuilt = []
     if os.path.isfile(manifest_path):
         with open(manifest_path) as f:
             manifest = json.load(f)
-
-        registered = manifest.get("registered", manifest.get("patched", []))
-        ops_key = "registered_ops" if framework == "vllm" else "patched_modules"
-        if framework == "vllm":
-            ops = manifest.get(ops_key, manifest.get("ops", registered))
-        else:
-            ops = manifest.get(ops_key, manifest.get("patched", manifest.get("ops", registered)))
-        if ops:
-            checks.append(CheckResult("integration", f"{plugin_dir_name} manifest valid", "pass",
-                                      f"{len(ops)} {ops_key}"))
-        else:
-            winners = [n for n, s in geak_speedups.items() if s is not None and s > 1.0]
-            detail = f"Empty {ops_key}"
-            if winners:
-                detail += f" (winning kernels exist: {', '.join(winners)})"
-            checks.append(CheckResult("integration", f"{plugin_dir_name} manifest valid", "warning",
-                                      detail))
-
-        for reg in registered:
-            kernel_file = reg.get("kernel", "")
-            kernel_name = kernel_file.replace("problem_", "").replace("_opt.py", "").replace("_opt", "")
-            matched_speedup = None
-            for geak_name, spd in geak_speedups.items():
-                if kernel_name in geak_name or geak_name in kernel_name:
-                    matched_speedup = spd
-                    break
-            if matched_speedup is not None and matched_speedup < 1.0:
-                checks.append(CheckResult("integration",
-                                          f"registered kernel {kernel_file} not regressed", "fail",
-                                          f"speedup={matched_speedup}x < 1.0 — regressed kernel in plugin"))
-            elif matched_speedup is not None:
-                checks.append(CheckResult("integration",
-                                          f"registered kernel {kernel_file} not regressed", "pass",
-                                          f"speedup={matched_speedup}x"))
+        libraries_rebuilt = manifest.get("libraries_rebuilt", []) or []
+        checks.append(CheckResult("integration", "libraries_rebuilt list valid",
+                                  "pass" if isinstance(libraries_rebuilt, list) else "fail",
+                                  f"{len(libraries_rebuilt)} library/libraries rebuilt"))
+        for lib_entry in libraries_rebuilt:
+            if not isinstance(lib_entry, dict):
+                continue
+            lib = lib_entry.get("lib", "?")
+            log_rel = lib_entry.get("install_log_path", f"results/rebuild_{lib}.log")
+            log_abs = os.path.join(output_dir, log_rel)
+            if not os.path.isabs(log_abs):
+                log_abs = os.path.join(output_dir, log_rel)
+            present = os.path.isfile(log_abs)
+            checks.append(CheckResult("integration", f"rebuild log for {lib}",
+                                      "pass" if present else "fail",
+                                      f"{log_rel} {'found' if present else 'missing'}"))
     else:
-        checks.append(CheckResult("integration", f"{plugin_dir_name} manifest exists", "skip"))
+        checks.append(CheckResult("integration", "integration_manifest.json exists", "skip"))
 
     comparison_path = os.path.join(output_dir, "results", "optimization_comparison.json")
     if os.path.isfile(comparison_path):
@@ -1105,62 +1135,51 @@ def check_integration_manifest(output_dir, config):
                                   str(exc)))
         return checks
 
-    required = {"schema_version", "targets", "plugin_type", "comparison_file", "summary"}
-    missing = required - set(manifest.keys())
-    if missing:
+    # Schema 2.0 (library-rebuild): libraries_rebuilt + dispatch_verified
+    # supersede plugin_type. Older schema with `targets`/`summary` is
+    # accepted as a transitional shape but warned.
+    schema_v2_required = {"libraries_rebuilt", "dispatch_verified", "e2e_ran",
+                          "artifacts_valid"}
+    missing_v2 = schema_v2_required - set(manifest.keys())
+    legacy_required = {"schema_version", "targets", "comparison_file", "summary"}
+    missing_legacy = legacy_required - set(manifest.keys())
+    if not missing_v2:
+        checks.append(CheckResult("integration", "integration_manifest.json schema valid", "pass",
+                                  "schema 2.0 (library-rebuild)"))
+    elif not missing_legacy:
+        checks.append(CheckResult("integration", "integration_manifest.json schema valid", "warning",
+                                  "legacy schema (pre library-rebuild contract)"))
+    else:
         checks.append(CheckResult("integration", "integration_manifest.json schema valid", "fail",
-                                  f"Missing: {sorted(missing)}"))
-    else:
-        checks.append(CheckResult("integration", "integration_manifest.json schema valid", "pass"))
+                                  f"Missing v2 fields: {sorted(missing_v2)}"))
 
-    summary = manifest.get("summary", {})
-    if isinstance(summary, dict):
-        summary_required = {"total_targets", "integrated", "blocked", "coverage_pct"}
-        summary_missing = summary_required - set(summary.keys())
-        if summary_missing:
-            checks.append(CheckResult("integration", "integration_manifest summary fields", "fail",
-                                      f"Missing: {sorted(summary_missing)}"))
-        else:
-            checks.append(CheckResult("integration", "integration_manifest summary fields", "pass",
-                                      f"coverage_pct={summary.get('coverage_pct')}"))
-            cov = summary.get("coverage_pct")
-            if not isinstance(cov, (int, float)) or cov < 0 or cov > 1:
-                checks.append(CheckResult("integration", "integration_manifest coverage_pct range",
-                                          "fail", f"Expected 0..1 float, got {cov}"))
-            else:
-                checks.append(CheckResult("integration", "integration_manifest coverage_pct range",
-                                          "pass", f"{cov}"))
-    else:
-        checks.append(CheckResult("integration", "integration_manifest summary is dict", "fail",
-                                  f"Expected dict, got {type(summary).__name__}"))
-
-    targets = manifest.get("targets", [])
-    if isinstance(targets, list):
-        checks.append(CheckResult("integration", "integration_manifest targets list", "pass",
-                                  f"{len(targets)} target(s)"))
-        valid_statuses = {"integrated", "blocked", "skipped"}
-        for i, t in enumerate(targets):
-            if not isinstance(t, dict):
-                checks.append(CheckResult("integration", f"integration_manifest target[{i}] valid",
-                                          "fail", f"Expected dict, got {type(t).__name__}"))
+    # Schema 2.0: validate libraries_rebuilt entries (per-library
+    # rebuild status with commit + install log path).
+    libs = manifest.get("libraries_rebuilt")
+    if isinstance(libs, list):
+        checks.append(CheckResult("integration", "integration_manifest libraries_rebuilt list",
+                                  "pass", f"{len(libs)} library/libraries"))
+        for i, entry in enumerate(libs):
+            if not isinstance(entry, dict):
+                checks.append(CheckResult("integration",
+                                          f"integration_manifest libraries_rebuilt[{i}] valid",
+                                          "fail", f"Expected dict, got {type(entry).__name__}"))
                 continue
-            t_required = {"name", "status", "strategy"}
-            t_missing = t_required - set(t.keys())
-            if t_missing:
-                checks.append(CheckResult("integration", f"integration_manifest target[{i}] schema",
-                                          "fail", f"Missing: {sorted(t_missing)}"))
-            t_status = t.get("status")
-            if t_status and t_status not in valid_statuses:
+            required = {"lib", "commit", "install_log_path"}
+            missing = required - set(entry.keys())
+            if missing:
                 checks.append(CheckResult("integration",
-                                          f"integration_manifest target[{i}] status enum",
-                                          "fail", f"Invalid status '{t_status}', expected {valid_statuses}"))
-            if t_status == "blocked" and not t.get("blocker_classification"):
+                                          f"integration_manifest libraries_rebuilt[{i}] schema",
+                                          "fail", f"Missing: {sorted(missing)}"))
+            else:
                 checks.append(CheckResult("integration",
-                                          f"integration_manifest target[{i}] blocked has classification",
-                                          "warning", "blocked target missing blocker_classification"))
-    else:
-        checks.append(CheckResult("integration", "integration_manifest targets list", "fail",
-                                  f"Expected list, got {type(targets).__name__}"))
+                                          f"integration_manifest libraries_rebuilt[{i}] schema",
+                                          "pass",
+                                          f"lib={entry['lib']} commit={entry['commit'][:7] if isinstance(entry.get('commit'), str) else '?'}"))
+    elif libs is not None:
+        # Legacy schema may not have this list; surface as warning rather than fail
+        checks.append(CheckResult("integration", "integration_manifest libraries_rebuilt list",
+                                  "fail", f"Expected list, got {type(libs).__name__}"))
 
     return checks
 
@@ -1536,11 +1555,11 @@ def _infer_phase(filepath):
         if "profile" in basename:
             return "phase-04-profile.md"
         return "phase-02-benchmark.md"
-    if "problem" in basename or "fusion" in basename or "bottleneck" in basename:
+    if "problem" in basename or "upstream" in basename or "fork" in basename or "baseline_dispatch" in basename:
         return "phase-06-problem-generate.md"
-    if "kernel" in basename or "geak" in basename or "_opt" in basename:
+    if "kernel" in basename or "geak" in basename or "library_test" in basename or "preflight_dispatch" in basename:
         return "phase-07-kernel-optimize.md"
-    if "plugin" in dirpart or "optimized" in dirpart:
+    if "rebuild" in basename or "dispatch_verification" in basename or "integration_manifest" in basename:
         return "phase-08-integration.md"
     if "report" in dirpart:
         return "phase-09-report-generate.md"
@@ -1623,56 +1642,65 @@ def scan_for_issues(output_dir):
                 context=f"speedup={speedup:.3f}x, baseline={bl}, optimized={opt}, gate={performance_gate}",
                 suggested_phase="08-integration.md",
                 analysis="Optimized E2E throughput did not land in the clean pass band. Possible causes: "
-                         "torch.compile/CUDAGraph masking kernel-level gains, plugin import overhead, "
-                         "incorrect kernel dispatch, or regression in fused ops. Warn-band results are "
-                         "allowed but should be reported honestly; fail-band results need recovery.",
+                         "torch.compile/CUDAGraph masking kernel-level gains, fork rebuild not active, "
+                         "dispatch swap not honored (vendor symbol still firing), or regression in "
+                         "fused ops. Warn-band results are allowed but should be reported honestly; "
+                         "fail-band results need recovery.",
             ))
 
-    # Check kernel→integration leakage: regressed kernels must not be in optimized/ or plugin
-    geak_path = os.path.join(output_dir, "problems", "geak_results.json")
-    if os.path.isfile(geak_path):
-        geak_entries = extract_entries(load_json(geak_path))
-        optimized_dir = os.path.join(output_dir, "optimized")
-        staged_files = {os.path.basename(f) for f in glob.glob(os.path.join(optimized_dir, "*_opt.py"))}
-
-        # Load plugin manifest
-        manifest_registered = []
-        for plugin_name in ["vllm_plugin", "sglang_plugin"]:
-            mp = os.path.join(optimized_dir, plugin_name, "manifest.json")
-            if os.path.isfile(mp):
-                with open(mp) as f:
-                    mdata = json.load(f)
-                manifest_registered = mdata.get("registered", [])
-                break
-        manifest_kernels = {r.get("kernel", "") for r in manifest_registered}
-
-        for entry in geak_entries:
-            name = entry.get("name", entry.get("kernel", ""))
-            speedup = entry.get("speedup")
-            if speedup is not None and speedup < 1.0:
-                opt_filename = f"{name}_opt.py"
-                if opt_filename in staged_files:
-                    issues.append(Issue(
-                        source=f"optimized/{opt_filename}",
-                        severity="error",
-                        pattern="regressed kernel integrated",
-                        context=f"{name}: speedup={speedup:.3f}x < 1.0 but found in optimized/",
-                        suggested_phase="07-kernel-optimize.md",
-                        analysis=f"Kernel '{name}' has speedup {speedup:.3f}x (slower than baseline) "
-                                 f"but was copied to optimized/. Phase 07 should skip kernels with "
-                                 f"speedup < 1.0.",
-                    ))
-                if opt_filename in manifest_kernels:
-                    issues.append(Issue(
-                        source=f"optimized/plugin/manifest.json",
-                        severity="error",
-                        pattern="regressed kernel in plugin",
-                        context=f"{name}: speedup={speedup:.3f}x < 1.0 but registered in plugin",
-                        suggested_phase="08-integration.md",
-                        analysis=f"Kernel '{name}' has speedup {speedup:.3f}x (slower than baseline) "
-                                 f"but was registered in the plugin manifest. This will degrade E2E "
-                                 f"performance.",
-                    ))
+    # Library-rebuild contract: dispatch swap leakage check.
+    # If rocprofv3 (Phase 8) shows the vendor symbol still firing or a
+    # required redirect was not honored, the rebuild is integrated but
+    # not actually active — surface as an integration-phase issue.
+    disp_path = os.path.join(output_dir, "results", "dispatch_verification.json")
+    if os.path.isfile(disp_path):
+        try:
+            with open(disp_path) as f:
+                disp = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            disp = {}
+        if disp.get("dispatch_verified") is False:
+            issues.append(Issue(
+                source="results/dispatch_verification.json",
+                severity="error",
+                pattern="dispatch not verified",
+                context=f"dispatch_verified=false; expected_symbol_total_count="
+                        f"{disp.get('expected_symbol_total_count')}, "
+                        f"vendor_symbol_leaked_count="
+                        f"{disp.get('vendor_symbol_leaked_count')}",
+                suggested_phase="08-integration.md",
+                analysis="Phase 8 rebuild completed but rocprofv3 did not confirm the "
+                         "expected GEAK-optimized symbols are firing. Either the fork "
+                         "rebuild did not shadow the vendor install (check Python import "
+                         "path), the kernel was never imported, or the dispatch site "
+                         "still resolves to the vendor symbol.",
+            ))
+        leaked = disp.get("vendor_symbol_leaked_count")
+        if isinstance(leaked, int) and leaked > 0:
+            issues.append(Issue(
+                source="results/dispatch_verification.json",
+                severity="error",
+                pattern="vendor symbol leaked",
+                context=f"vendor_symbol_leaked_count={leaked}",
+                suggested_phase="08-integration.md",
+                analysis="The vendor baseline symbol(s) still appear in the post-rebuild "
+                         "rocprofv3 trace. Dispatch swap is incomplete — both the "
+                         "GEAK-optimized symbol and the vendor symbol are firing, which "
+                         "means the rebuild path and the legacy dispatch path coexist.",
+            ))
+        rh = disp.get("redirect_honored_count")
+        rr = disp.get("redirect_required_count")
+        if isinstance(rh, int) and isinstance(rr, int) and rh < rr:
+            issues.append(Issue(
+                source="results/dispatch_verification.json",
+                severity="error",
+                pattern="redirect not honored",
+                context=f"redirect_honored={rh}/{rr}",
+                suggested_phase="08-integration.md",
+                analysis="A dispatch_redirect_* strategy was planned in Phase 6 but the "
+                         "post-rebuild trace does not show the redirect target firing. "
+                         "Check the dispatch-site patch in the host fork.",
+            ))
 
     return issues
 

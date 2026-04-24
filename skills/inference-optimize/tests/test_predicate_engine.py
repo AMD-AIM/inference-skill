@@ -153,21 +153,42 @@ class TestBenchmarkPredicates:
 
 
 class TestKernelOptimizePredicates:
-    def test_parity_or_blocked_is_hard_fail(self):
+    def test_pre_flight_failure_is_hard_fail(self):
+        """rocprofv3 pre-flight: when patched symbol does not actually fire on
+        the rebuilt env, the phase must FAIL before Phase 8 burns wall-clock."""
         reg = _load_registry()
         rules = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured"]
-        context = {"compiled_count": 2, "best_speedup": 1.0,
-                    "expected_improvement_status": "parity_or_blocked"}
+        context = {
+            "dispatch_pre_flight_pass": False,
+            "library_tests_failed_count": 0,
+            "allocator_test_pass": True,
+        }
         v, _ = evaluate_predicates(rules, context)
         assert v == "FAIL"
 
-    def test_compile_failure(self):
+    def test_library_test_regression_fails(self):
+        """A Bucket A library suite regression against the patched fork must
+        FAIL the phase even when the per-kernel inner loop reported success."""
         reg = _load_registry()
         rules = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured"]
-        context = {"compiled_count": 0, "best_speedup": 0,
-                    "expected_improvement_status": "improvable"}
+        context = {
+            "dispatch_pre_flight_pass": True,
+            "library_tests_failed_count": 1,
+            "allocator_test_pass": True,
+        }
         v, _ = evaluate_predicates(rules, context)
         assert v == "FAIL"
+
+    def test_clean_kernel_optimize_passes(self):
+        reg = _load_registry()
+        rules = reg["phases"]["kernel-optimize"]["quality"]["detection_rules_structured"]
+        context = {
+            "dispatch_pre_flight_pass": True,
+            "library_tests_failed_count": 0,
+            "allocator_test_pass": True,
+        }
+        v, _ = evaluate_predicates(rules, context)
+        assert v == "PASS"
 
 
 class TestAllRegistryPredicatesValid:
