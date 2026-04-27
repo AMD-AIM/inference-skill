@@ -54,6 +54,29 @@ Detection rules require judgment — they may involve conditional logic across m
 - **PASS**: All mechanical checks pass AND detection rules raise no concerns.
 - **FAIL**: Any mechanical check fails outright, OR detection rules identify a critical issue (e.g., regression, missing critical artifact, unsafe downstream comparison).
 
+### Binary verdict requirement (mandatory)
+
+`verdict` MUST be exactly `PASS` or `FAIL`. The monitor MUST NOT emit
+hybrid strings such as `PASS_with_caveats`, `PASS_with_warnings`,
+`FAIL_pushed_through`, `WARN`, `WARNING`, or `MIXED`. Caveats,
+informational findings, and partial-credit notes belong in `##
+Summary`, `## Caveats`, `## Failure Details`, or `## Rerun Guidance`
+— never in the verdict value.
+
+Under strict monitoring (`MONITOR_LEVEL=strict`):
+
+- Any mechanical check failure is FAIL.
+- Any structured detection rule trigger is FAIL.
+- RCA / handoff / running-summary text may influence retry or
+  fallback selection in downstream agents, but the monitor itself
+  cannot downgrade a structured FAIL to PASS by inserting prose
+  mitigations.
+
+If the monitor accidentally emits a non-binary verdict, the
+phase-orchestrator's self-checklist treats the review as missing and
+halts the run. The monitor must rewrite the review with a binary
+verdict before the orchestrator can advance.
+
 ### For non-critical phases (no quality checks)
 
 Perform a generic check:

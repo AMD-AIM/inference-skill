@@ -97,9 +97,15 @@ function outer_dispatch(mode, config):
     if summary.status == "fallback_requested":
       phase_idx = index_of(phase_list, summary.fallback_target)
       continue
-    if summary.status == "skip_to_report":
-      phase_idx = index_of(phase_list, "report-generate")
-      continue
+    if summary.status == "awaiting_user_instruction":
+      # Surface the user-decision request and pause the run. The
+      # outer dispatcher MUST NOT auto-skip to report-generate; the
+      # only way to advance from here is an explicit user choice
+      # (retry with new instructions, fallback, generate-report-
+      # anyway, or stop). The legacy `skip_to_report` status is gone.
+      request = read_json(OUTPUT_DIR/monitor/user_decision_request.json)
+      present_user_decision_request(phase_key, summary, request)
+      STOP  # resume only after the user provides an instruction
     # status == "ok": advance
     present_phase_to_user(phase_key, summary)
     phase_idx += 1
@@ -162,7 +168,7 @@ After spawning a per-phase RCA on attempt N (where N >= 2):
 The systemic RCA writes a `terminal_action_systemic` field (see `protocols/rca.schema.json`):
 - `continue` — fingerprint match was a false alarm; resume per-phase retry path.
 - `fallback` — roll back to a named earlier phase (`suggested_fallback_target`).
-- `accept_finding` — halt the loop. Auto-enter `budget_mode = diagnostic` (no further e2e benchmark attempts), then skip to `report-generate` with `report_freshness = post_loop_convergence`.
+- `accept_finding` — halt the loop. Auto-enter `budget_mode = diagnostic` (no further e2e benchmark attempts) and then **pause for explicit user instruction** by emitting `monitor/user_decision_request.json` and setting `progress.status = "awaiting_user_instruction"`. There is no automatic skip to `report-generate`; the user chooses retry, fallback, generate-report-anyway, or stop.
 
 The orchestrator also surfaces the systemic RCA to the user via the standard `present_monitor_findings()` step — never silently consume it.
 
@@ -179,7 +185,7 @@ When `V2_MONITOR=true` in `config.json`, the inner dispatch loop in [`PHASE-ORCH
 - **Final verdict = max(L1, L2)**: L2 may upgrade PASS→FAIL, never downgrade FAIL→PASS.
 - **Escalation**: when the L2 review sets `escalation_required` and `config.HUMAN_LOOP` is true, the phase-orchestrator returns `status: "escalation_pending"` to the outer dispatcher, which handles the AskUserQuestion interaction and re-spawns the phase-orchestrator on resume.
 
-The response-policy ordering (safety stop > human override > budget constraint > RCA recommendation > default retry), the index-driven re-dispatch on REDIRECT, and the WARN→FAIL normalization rule are all enforced inside the phase-orchestrator's inner loop. The outer dispatcher only sees the `summary.status` it returns (`ok | fallback_requested | skip_to_report | failed | escalation_pending`).
+The response-policy ordering (safety stop > human override > budget constraint > RCA recommendation > default retry), the index-driven re-dispatch on REDIRECT, and the WARN→FAIL normalization rule are all enforced inside the phase-orchestrator's inner loop. The outer dispatcher only sees the `summary.status` it returns (`ok | fallback_requested | awaiting_user_instruction | failed | escalation_pending`). The legacy `skip_to_report` status is removed: partial reports are now an explicit user choice surfaced through `monitor/user_decision_request.json`.
 
 When `V2_MONITOR=false`, the V1 inner loop runs as-is — no V2 code paths execute inside the phase-orchestrator.
 
@@ -354,14 +360,26 @@ Default timeout is 30 minutes. Long-running phases (benchmark, profile, kernel-o
 
 ## Rerun Rules
 
-- `max_per_phase`: `0` by default in the shipped registry. Positive values cap per-phase re-dispatches; `0` or negative values mean uncapped retries.
-- `max_total`: `0` by default in the shipped registry. Positive values cap total re-dispatches across the run; `0` or negative values mean uncapped retries.
+- `max_per_phase`: `1000` by default in the shipped registry. The runner keeps automatically retrying a phase up to this cap or until RCA recommends stop / a user-decision arrives. Custom registries may set a smaller positive cap for fast tests; non-positive values are still treated as uncapped for backwards compatibility.
+- `max_total`: `10000` by default in the shipped registry. Prevents accidental infinite loops across the whole run while remaining high enough that normal optimization should never hit it.
 - Retry counters increment immediately before the budget check for the rerun that is about to be dispatched. Budget exhaustion is only possible when a configured limit is positive and a counter becomes **greater than** that limit.
 - On FAIL: write a new handoff that appends `## Prior Attempt Feedback` with the monitor's failure comments, `failure_type`, and remediation guidance
 - Infrastructure failures get an additional `## Environment Check` section
 - A fresh phase agent is always spawned (never reuse a failed agent)
 - On repeated FAIL with `fallback_target`: rollback to the earlier phase, invalidate subsequent outputs
-- On limits exceeded (only when finite caps are configured): stop and report to user with full monitor history
+- On limits exceeded (only when the configured cap is actually exceeded): stop the automatic loop, write `monitor/user_decision_request.json`, and pause with `progress.status = "awaiting_user_instruction"`. The user picks retry / fallback / stop / generate-report-anyway. There is no automatic skip-to-report path.
+- On RCA `stop_with_blocker` for any critical phase: same user-decision pause behavior — write the request file, set `awaiting_user_instruction`, halt the run.
+
+### Repeated-fingerprint guardrail
+
+The default budget is intentionally large, so the runner ALSO calls
+`agents/systemic-rca.md` whenever the latest per-phase RCA
+fingerprint matches the previous attempt's fingerprint AND the
+handoff content did not change between attempts. This stops a
+high retry budget from burning hundreds of identical attempts: the
+systemic RCA either provides cross-phase guidance (`continue` /
+`fallback`) or returns `accept_finding`, which routes through the
+user-decision pause described above.
 
 ## Progress Tracking
 
@@ -371,9 +389,13 @@ Maintain `progress.json` with:
 - `phases_completed`: array of canonical phase keys (tracks which phases finished)
 - `retry_counts`: object mapping phase keys to their retry count (e.g., `{"benchmark": 1}`)
 - `current_phase`: phase key currently executing
-- `status`: "running" | "completed" | "failed"
+- `status`: `running` | `completed` | `failed` | `escalation_pending` | `awaiting_user_instruction`
 - `total_reruns`: running total across all phases
 - `fallbacks_used`: array of `{"phase_key": "...", "fallback_target": "..."}` pairs tracking which phases triggered fallbacks
+- `rca_fingerprints`: map of phase key to the latest RCA fingerprint emitted for that phase (used by the repeated-fingerprint guardrail and surfaced to users on the user-decision pause)
+- `systemic_rca_triggered`: map of phase key to `true` when systemic RCA fired at least once for that phase
+- `awaiting_user_instruction_phase`: phase key that caused the run to pause (set together with `status = "awaiting_user_instruction"`)
+- `terminal_state`: optional block populated when the runner pauses or completes; records `outcome`, `blocking_phase`, `blocker_artifact`, `winners_total`, `optimized_artifact_count`, `retry_exhausted`, `rca_stop_recommended`, `rca_fingerprint`
 
 Phase keys match the canonical names from the registry: `env`, `config`, `benchmark`, `benchmark-analyze`, `profile`, `profile-analyze`, `problem-generate`, `kernel-optimize`, `integration`, `report-generate`.
 

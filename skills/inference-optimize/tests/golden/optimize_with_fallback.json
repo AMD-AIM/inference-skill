@@ -1,12 +1,15 @@
 {
-  "blockers_emitted": [],
-  "fallbacks_used": [
+  "blockers_emitted": [
     {
-      "fallback_target": "problem-generate",
-      "phase_key": "kernel-optimize"
+      "blocker_classifications": [],
+      "phase": "kernel-optimize",
+      "rca_artifact": null,
+      "terminal_action": "systemic_rca_accept_finding",
+      "user_instruction_required": true
     }
   ],
-  "final_status": "completed",
+  "fallbacks_used": [],
+  "final_status": "awaiting_user_instruction",
   "mode": "optimize",
   "phase_sequence": [
     "env",
@@ -27,8 +30,7 @@
     "benchmark-analyze",
     "profile",
     "profile-analyze",
-    "integration",
-    "report-generate"
+    "problem-generate"
   ],
   "resolved_phases": [
     "env",
@@ -47,13 +49,11 @@
     "benchmark-analyze": 0,
     "config": 0,
     "env": 0,
-    "integration": 0,
     "problem-generate": 0,
     "profile": 0,
-    "profile-analyze": 0,
-    "report-generate": 0
+    "profile-analyze": 0
   },
-  "total_reruns": 3,
+  "total_reruns": 1,
   "verdict_sequence": [
     {
       "attempt": 1,
@@ -99,21 +99,6 @@
       "attempt": 2,
       "phase": "kernel-optimize",
       "verdict": "FAIL"
-    },
-    {
-      "attempt": 3,
-      "phase": "kernel-optimize",
-      "verdict": "FAIL"
-    },
-    {
-      "attempt": 1,
-      "phase": "integration",
-      "verdict": "PASS"
-    },
-    {
-      "attempt": 1,
-      "phase": "report-generate",
-      "verdict": "PASS"
     }
   ]
 }

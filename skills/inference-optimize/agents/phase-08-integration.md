@@ -30,6 +30,32 @@ the phase list. If you find yourself running with this flag set, run
 Steps 1-2 only (rebuild + dispatch verify) and skip the e2e benchmark.
 Document the skip in the result doc.
 
+## Prerequisite: integration inputs must exist
+
+Before Step 0, refuse to start when there is nothing concrete to
+integrate:
+
+1. Read `{{OUTPUT_DIR}}/agent-results/phase-07-result.md` and parse
+   the flat scalars block. If `winners_total_count == 0`, emit a
+   structured failure note in `agent-results/phase-08-result.md`
+   (frontmatter `verdict: blocked`, summary
+   `phase_07_winners_total_zero`) and stop. The phase-orchestrator
+   monitor will treat this as `FAIL` and route to RCA / user
+   decision.
+2. List `{{OUTPUT_DIR}}/optimized/`. If it contains zero
+   integration-ready files (`optimized_artifact_count == 0`) AND
+   the redirect plan does not declare an explicit no-export
+   integration manifest, emit a structured failure note with
+   summary `optimized_dir_empty` and stop. Do not synthesize fake
+   integration inputs.
+3. If `{{OUTPUT_DIR}}/forks/manifest.json` references a winning
+   fork commit that is not actually present on disk under
+   `forks/<lib>/.git`, fail with `forks_winner_commit_missing`.
+
+These checks are intentionally redundant with Phase 7's structured
+gates: even if a future change accidentally relaxes Phase 7, Phase 8
+must still refuse to fabricate integration data.
+
 ## Runbook
 
 ### Config Resolution

@@ -179,7 +179,9 @@ Read only the phase docs needed for the selected mode and start phase.
 
 The **deterministic runner** (`scripts/orchestrate/runner.py`) is the canonical orchestration path. It handles all mechanical work: mode resolution, dependency checks, artifact prerequisites, context-source resolution, context-budget enforcement, retry budgets, fallback invalidation, handoff generation, atomic `progress.json` writes, and parity artifact emission.
 
-The shipped registry now sets `rerun.max_per_phase=0` and `rerun.max_total=0`, which the runner interprets as uncapped retries. Set positive integers in a custom registry only if you explicitly want budget exhaustion and fallback/stop behavior.
+The shipped registry sets `rerun.max_per_phase=1000` and `rerun.max_total=10000` so RCA-driven retries keep working automatically without relying on a `0`-as-unlimited sentinel. The repeated-fingerprint guardrail (systemic RCA) prevents this large budget from burning identical attempts. Custom registries may set smaller positive caps for fast tests; non-positive values continue to mean uncapped for backwards compatibility.
+
+When the runner cannot resolve a critical FAIL automatically (RCA `stop_with_blocker`, budget exceeded with no fallback, or systemic-RCA `accept_finding`), it pauses with `progress.status = "awaiting_user_instruction"` and writes `monitor/user_decision_request.json`. The legacy `allow_partial_report` auto-skip path is gone — partial reports are an explicit user choice surfaced via that request artifact.
 
 Set `USE_RUNNER=false` in the run configuration to revert to the legacy LLM orchestrator path. The legacy path remains fully supported.
 

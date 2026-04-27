@@ -136,6 +136,8 @@ def _create_artifacts(tmpdir):
         json.dump({"kernels": []}, f)
     with open(os.path.join(tmpdir, "forks/manifest.json"), "w") as f:
         json.dump({"libraries": [], "ck_branch_merged_status": False, "vllm_version": "test"}, f)
+    with open(os.path.join(tmpdir, "optimized", "mock_winner.py"), "w") as f:
+        f.write("# mock integration input\n")
 
 
 def generate_golden(scenario_name, scenario_spec, output_dir):

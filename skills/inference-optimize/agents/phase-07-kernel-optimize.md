@@ -266,7 +266,14 @@ Bucket B to distinguish "skipped by design" from "ran and all failed".
 
 ### Completion
 
-Write `agent-results/phase-07-result.md`. Include in `## Key Findings`:
+Write `agent-results/phase-07-result.md`. Include in `## Key Findings`
+the following flat `field: value` lines. Each scalar must be present;
+omit a field only when the registry's note for it explicitly allows
+it (e.g. `redirect_count_*` may be `null` when no redirect was
+attempted). Booleans should be lower-case `true` / `false`. Integers
+are non-negative.
+
+#### Library / allocator / pre-flight scalars (existing contract)
 
 - `library_tests_passed_count` (sum across Bucket A kernels)
 - `library_tests_failed_count` (sum across Bucket A kernels)
@@ -274,10 +281,71 @@ Write `agent-results/phase-07-result.md`. Include in `## Key Findings`:
 - `dispatch_pre_flight_pass`: bool (all buckets)
 - `geak_speedup_lib_bench`: float (best per-kernel speedup reported by
   the library inner-loop)
-- `redirect_commits_applied_count`: integer
-- `in_place_winners_count`: integer
-- `no_harness_winners_count`: integer
-- `unverified_per_kernel_count`: integer (== `no_harness_winners_count`)
+- `redirect_commits_applied_count`: integer (audit-only — does NOT
+  count as a shipped winner)
+- `in_place_winners_count`: integer (shipped in-place winners only)
+- `redirect_winners_count`: integer (shipped redirect winners only —
+  redirect rows that pass dispatch verification, count tolerance, and
+  any required performance gate)
+- `no_harness_winners_count`: integer (shipped no-harness winners only)
+- `unverified_per_kernel_count`: integer (>= `no_harness_winners_count`)
+
+#### Aggregated winner / artifact scalars (required by the registry)
+
+- `winners_total_count`: integer (== `in_place_winners_count` +
+  `redirect_winners_count` + `no_harness_winners_count`). Phase 7 must
+  FAIL when this is `0`.
+- `py_exports_shipped_count`: integer (count of files written under
+  `optimized/` for shipped winners). Audit-only when no Python export
+  is required.
+- `optimized_artifact_count`: integer (count of integration-ready
+  files under `optimized/` regardless of file extension). Phase 7
+  must FAIL when this is `0` while a winner is claimed.
+- `optimized_dir_empty`: bool (`true` when `optimized/` has zero
+  files). Surface even when no winners were claimed so Phase 8 can
+  refuse to start cleanly.
+- `claimed_winner_artifacts_valid`: bool (`true` only when every row
+  with `winner_strategy != not_a_winner_*` has its required
+  integration artifact or manifest present and well-formed).
+
+#### Redirect verification scalars
+
+- `redirect_attempted`: bool (`true` if any row in `geak_results.json`
+  has `geak_strategy` starting with `dispatch_redirect_`).
+- `redirect_count_observed`: integer or `null` (count of redirect
+  symbol dispatches observed in the post-patch preflight trace).
+- `redirect_count_expected`: integer or `null` (sum of empirical
+  per-bucket call counts the patch should accept).
+- `redirect_count_ratio`: float or `null`
+  (`redirect_count_observed / redirect_count_expected`).
+- `redirect_count_within_tolerance`: bool or `null` — `true` only when
+  observed is inside `[0.5x, 1.5x]` of expected. Phase 7 must FAIL
+  when `false` and `redirect_attempted == true`.
+
+#### Mini-A/B harness scalars
+
+- `mini_ab_required`: bool (`true` whenever a redirect winner is
+  claimed; future winner types may flip this to `false`).
+- `mini_ab_harness_status`: enum: `not_applicable | passed | failed |
+  unreliable_high_variance`. Phase 7 must FAIL when value is
+  `unreliable_high_variance` and `mini_ab_required == true`.
+- `rca_fingerprint`: string or `null` (stable identifier for the
+  current failure mode; emitted only on FAIL so the orchestrator can
+  detect repeated failures and trigger systemic-rca).
+
+#### Winner accounting rules (no implicit promotion)
+
+- A fork commit is NOT a winner.
+- A generated patch source file is NOT a winner.
+- A patch that lives only in `forks/` without a corresponding
+  integration-ready artifact under `optimized/` (or an explicit
+  no-export winner contract documented in the redirect plan) MUST
+  NOT be counted in `winners_total_count`.
+- A redirect row is a winner only when `dispatch_pre_flight_pass`,
+  `redirect_count_within_tolerance`, and any required performance
+  gate are all satisfied.
+- If every candidate is degraded to `not_a_winner_*`,
+  `winners_total_count` MUST be `0` and the phase MUST FAIL.
 
 Reference `problems/geak_results.json` and
 `results/preflight_dispatch_trace.json` in `## Artifacts`. Mutated forks

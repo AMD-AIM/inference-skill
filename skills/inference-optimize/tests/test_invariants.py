@@ -337,13 +337,19 @@ class TestRegistryStructure:
         assert "context_sources" in reg
         assert "schema_version" in reg
 
-    def test_registry_defaults_to_uncapped_reruns(self):
+    def test_registry_default_retry_budget_is_large(self):
+        """The shipped registry uses an explicit large retry budget so
+        RCA-driven retries keep working automatically without relying
+        on `0`-as-unlimited semantics."""
         reg = _load_registry()
         rerun = reg["rerun"]
         assert isinstance(rerun["max_per_phase"], int)
         assert isinstance(rerun["max_total"], int)
-        assert rerun["max_per_phase"] <= 0
-        assert rerun["max_total"] <= 0
+        # Default is intentionally >= 1000 / 10000. Non-positive
+        # values are still tolerated by the runner for backwards
+        # compatibility, but the shipped registry uses positive caps.
+        assert rerun["max_per_phase"] >= 1000
+        assert rerun["max_total"] >= 10000
 
     def test_phase_indices_are_contiguous(self):
         reg = _load_registry()

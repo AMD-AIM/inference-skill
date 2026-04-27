@@ -107,26 +107,48 @@ def determine_response(verdict, failure_type, phase_key, phase_meta,
             return {"action": "redirect", "target": fallback,
                     "reason": f"Budget exhausted, falling back to {fallback}"}
 
-        allow_partial = phase_meta.get("terminal_policy") == "allow_partial_report"
-        if allow_partial:
-            return {"action": "continue", "target": None,
-                    "reason": "Budget exhausted, allowing partial report"}
-
+        # Budget exhausted with no fallback. The runner pauses for
+        # explicit user instruction; ``allow_partial_report`` no longer
+        # auto-skips to report-generate. The runner's outer loop
+        # interprets ``abort`` here as a signal to call
+        # ``enter_awaiting_user_instruction``.
         return {"action": "abort", "target": None,
                 "reason": "budget_exhausted",
                 "message": f"Budget exhausted for {phase_key}"}
 
     # 4. RCA RECOMMENDATION
     if rca_result:
-        rca_action = rca_result.get("terminal_action", "retry")
-        if rca_action == "retry":
+        # Authoritative RCA schema:
+        #   retry_recommendation: retry_same | retry_with_changes | fallback | stop
+        #   terminal_action: stop_with_blocker | continue | null
+        # Older tests/runs sometimes used terminal_action=retry/fallback;
+        # accept those as legacy aliases, but prefer retry_recommendation.
+        retry_recommendation = rca_result.get("retry_recommendation")
+        terminal_action = rca_result.get("terminal_action")
+        if retry_recommendation in ("retry_same", "retry_with_changes", "retry"):
             return {"action": "retry", "target": None,
                     "reason": f"RCA recommends retry: {rca_result.get('analysis', '')}"}
-        elif rca_action == "fallback":
+        if retry_recommendation == "fallback":
             fallback = phase_meta.get("fallback_target")
             if fallback:
                 return {"action": "redirect", "target": fallback,
                         "reason": f"RCA recommends fallback to {fallback}"}
+        if retry_recommendation == "stop":
+            return {"action": "abort", "target": None,
+                    "reason": "rca_stop",
+                    "message": f"RCA recommends stop for {phase_key}"}
+        # Legacy aliases accepted defensively.
+        if terminal_action == "retry":
+            return {"action": "retry", "target": None,
+                    "reason": f"RCA recommends retry: {rca_result.get('analysis', '')}"}
+        if terminal_action == "fallback":
+            fallback = phase_meta.get("fallback_target")
+            if fallback:
+                return {"action": "redirect", "target": fallback,
+                        "reason": f"RCA recommends fallback to {fallback}"}
+        if terminal_action == "continue" and retry_recommendation in (None, "retry_same", "retry_with_changes"):
+            return {"action": "retry", "target": None,
+                    "reason": "RCA continue with retry guidance"}
 
     # 5. DEFAULT: retry if retries are uncapped or budget remains
     return {"action": "retry", "target": None,

@@ -78,6 +78,8 @@ def _create_artifacts(tmpdir):
         json.dump({"kernels": []}, f)
     with open(os.path.join(tmpdir, "forks/manifest.json"), "w") as f:
         json.dump({"libraries": [], "ck_branch_merged_status": False, "vllm_version": "test"}, f)
+    with open(os.path.join(tmpdir, "optimized", "mock_winner.py"), "w") as f:
+        f.write("# mock integration input\n")
 
 
 def _load_capped_registry(max_per_phase=2, max_total=5):
@@ -184,8 +186,10 @@ class TestV2FallbackDispatch:
             assert state.fallbacks_used[0]["phase_key"] == "kernel-optimize"
             assert state.fallbacks_used[0]["fallback_target"] == "problem-generate"
 
-    def test_fallback_exhausted_aborts(self):
-        """If fallback also fails and budget exhausted again, pipeline aborts."""
+    def test_fallback_exhausted_pauses_for_user_instruction(self):
+        """If fallback also fails and budget exhausted again, the runner
+        pauses for explicit user instruction instead of auto-failing or
+        auto-skipping to a partial report."""
         latest_verdict_by_phase = {}
 
         def dispatch_fn(phase_key, handoff_path):
@@ -210,14 +214,27 @@ class TestV2FallbackDispatch:
                 rca_fn=_make_retry_rca_fn(),
             )
 
-            # Should eventually fail (budget exhausted after fallback exhausted)
-            assert state.status == "failed"
+            # Critical phase, no remaining fallback, budget exhausted ->
+            # pause for explicit user instruction. Phase 9 must NOT
+            # have completed automatically.
+            assert state.status == "awaiting_user_instruction"
+            assert state.awaiting_user_instruction_phase in (
+                "kernel-optimize", "problem-generate"
+            )
+            request_path = os.path.join(
+                tmpdir, "monitor", "user_decision_request.json"
+            )
+            assert os.path.isfile(request_path)
+            with open(request_path) as f:
+                request = json.load(f)
+            assert request["phase"] in ("kernel-optimize", "problem-generate")
+            assert "report-generate" not in state.phases_completed
 
-    def test_v1_path_still_has_fallback_bug(self):
-        """V1 path (V2_MONITOR=false) still has the known fallback bug.
+    def test_v1_path_redispatches_fallback_target(self):
+        """V1 path (V2_MONITOR=false) now re-dispatches fallback targets.
 
-        This documents the existing behavior. The fallback phase is NOT
-        re-dispatched in V1 because the outer for loop advances past it.
+        This used to be a documented bug. The skill-gates fix makes the
+        fallback state model cross-phase and common to V1/V2.
         """
         dispatched_phases = []
         latest_verdict_by_phase = {}
@@ -245,9 +262,9 @@ class TestV2FallbackDispatch:
                 rca_fn=_make_retry_rca_fn(),
             )
 
-            # In V1, problem-generate appears only once (initial dispatch).
-            # The fallback break doesn't re-dispatch it.
+            # V1 should re-dispatch problem-generate after the
+            # kernel-optimize fallback.
             pg_count = dispatched_phases.count("problem-generate")
-            assert pg_count == 1, (
-                f"V1 should dispatch problem-generate exactly once (bug), got {pg_count}"
+            assert pg_count >= 2, (
+                f"V1 should re-dispatch problem-generate after fallback, got {pg_count}"
             )

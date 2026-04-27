@@ -141,7 +141,11 @@ function run_phase(phase_key, phase_index, config, registry):
         # may break, fallback, or continue per outcome
         ...
 
-    # 11. Budget check (only when registry caps are positive)
+    # 11. Budget check (default budget is intentionally large; see registry)
+    #     The registry ships with `rerun.max_per_phase = 1000` and
+    #     `rerun.max_total = 10000`, so retries keep working
+    #     automatically. A custom registry with smaller positive caps
+    #     can still trigger this branch.
     if (registry.rerun.max_per_phase > 0 and phase_reruns > registry.rerun.max_per_phase) \
        or (registry.rerun.max_total > 0 and total_reruns_for_run > registry.rerun.max_total):
       if phase.fallback_target and not_already_used(phase_key):
@@ -151,16 +155,24 @@ function run_phase(phase_key, phase_index, config, registry):
                 ...}
       else:
         write_pipeline_blocker(phase_key, review, rca_result)
-        if phase.terminal_policy == "allow_partial_report":
-          return {"status": "skip_to_report"}
-        return {"status": "failed", "reason": "budget_exhausted"}
+        # `allow_partial_report` is no longer honored as an automatic
+        # skip path. Pause for explicit user instruction instead.
+        write_user_decision_request(phase_key, review, rca_result,
+                                    reason="budget_exhausted")
+        progress.status = "awaiting_user_instruction"
+        progress.awaiting_user_instruction_phase = phase_key
+        return {"status": "awaiting_user_instruction",
+                "reason": "budget_exhausted"}
 
     # 12. RCA stop_with_blocker
     if rca_result and rca_result.terminal_action == "stop_with_blocker":
       write_pipeline_blocker(phase_key, review, rca_result)
-      if phase.terminal_policy == "allow_partial_report":
-        return {"status": "skip_to_report"}
-      return {"status": "failed", "reason": "rca_stop_with_blocker"}
+      write_user_decision_request(phase_key, review, rca_result,
+                                  reason="rca_stop_with_blocker")
+      progress.status = "awaiting_user_instruction"
+      progress.awaiting_user_instruction_phase = phase_key
+      return {"status": "awaiting_user_instruction",
+              "reason": "rca_stop_with_blocker"}
 
     # 13. Rewrite handoff with feedback + RCA section, retry
     handoff = append_feedback(handoff, review, review.failure_type)
@@ -218,7 +230,7 @@ The file MUST be ≤ 30 body lines. Suggested format:
 ---
 phase: {phase_key}
 phase_index: {NN}
-status: ok | fallback_requested | skip_to_report | failed
+status: ok | fallback_requested | awaiting_user_instruction | failed
 verdict: PASS | FAIL
 retry_count: {phase_reruns}
 fallback_used: {fallback_target or null}
@@ -226,11 +238,32 @@ blocker: {short_string or null}
 review_path: monitor/phase-{NN}-review.md
 result_path: agent-results/phase-{NN}-result.md
 rca_artifact: {path or null}
+user_decision_request: {monitor/user_decision_request.json or null}
 sticky_deltas:
   {key}: {new_value}
 ---
 {Optional: 1-3 sentence narrative summary of what the monitor decided and why.}
 ```
+
+`status` values:
+
+- `ok` — phase passed; outer dispatcher advances to next phase.
+- `fallback_requested` — phase failed and the dispatcher should
+  re-dispatch the fallback dependency phase.
+- `awaiting_user_instruction` — phase failed in a way the runner
+  cannot resolve automatically (RCA `stop_with_blocker`, budget
+  exhausted with no fallback, or systemic-RCA `accept_finding`).
+  The outer dispatcher MUST stop the run, surface the contents of
+  `monitor/user_decision_request.json`, and wait for the user to
+  select retry, fallback, stop, or generate-report-anyway. There is
+  no automatic skip-to-report path.
+- `failed` — orchestration-level failure (handoff schema, monitor
+  contract violation, infrastructure error). Halt and surface the
+  blocker.
+
+The legacy `skip_to_report` value is removed: a partial report is
+now an explicit user choice surfaced through the user-decision
+request, never an automatic fallback.
 
 The summary file is the **only thing** the outer dispatcher reads from your work. It must be self-sufficient. Do not assume the dispatcher will open `phase-{NN}-review.md` or `result.md` itself.
 

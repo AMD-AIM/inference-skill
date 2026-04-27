@@ -20,7 +20,14 @@
     },
     "status": {
       "type": "string",
-      "enum": ["running", "completed", "failed", "escalation_pending"]
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "escalation_pending",
+        "awaiting_user_instruction"
+      ],
+      "description": "`awaiting_user_instruction` is set when a critical phase FAIL cannot be resolved automatically (RCA stop_with_blocker, budget exhausted with no fallback, systemic-RCA accept_finding). The runner pauses and emits monitor/user_decision_request.json instead of auto-skipping to a partial report."
     },
     "retry_counts": {
       "type": "object",
@@ -94,6 +101,37 @@
       "type": "array",
       "items": { "type": "object" },
       "description": "V2 only: sequence of response actions taken"
+    },
+    "rca_fingerprints": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "null"] },
+      "description": "Per-phase latest RCA fingerprint. Populated by the runner so the outer dispatcher can render repeated-failure context without re-reading the full rca_history.json."
+    },
+    "systemic_rca_triggered": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "description": "Per-phase flag indicating that systemic RCA fired at least once. Helps tests and dashboards distinguish per-phase retries from systemic-level decisions."
+    },
+    "awaiting_user_instruction_phase": {
+      "type": ["string", "null"],
+      "description": "Phase key whose FAIL caused the run to enter `awaiting_user_instruction`. The accompanying request artifact is monitor/user_decision_request.json."
+    },
+    "terminal_state": {
+      "type": "object",
+      "description": "Populated when the runner pauses for explicit user instruction or finishes. Records the blocker phase, retry-exhaustion flag, and rca_fingerprint without forcing the dispatcher to read large RCA artifacts.",
+      "additionalProperties": true,
+      "properties": {
+        "outcome": { "type": "string" },
+        "blocking_phase": { "type": ["string", "null"] },
+        "blocker_artifact": { "type": ["string", "null"] },
+        "report_path": { "type": ["string", "null"] },
+        "winners_total": { "type": ["integer", "null"], "minimum": 0 },
+        "optimized_artifact_count": { "type": ["integer", "null"], "minimum": 0 },
+        "retry_exhausted": { "type": ["boolean", "null"] },
+        "rca_stop_recommended": { "type": ["boolean", "null"] },
+        "user_instruction_required": { "type": ["boolean", "null"] },
+        "rca_fingerprint": { "type": ["string", "null"] }
+      }
     }
   },
   "additionalProperties": false

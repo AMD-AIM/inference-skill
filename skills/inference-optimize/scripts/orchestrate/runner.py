@@ -101,6 +101,17 @@ class RunnerState:
         }
         # rca_history tracks per-attempt fingerprints for repeated-failure detection
         self.rca_history = []  # list of {phase, attempt, fingerprint, root_cause_class, timestamp}
+        # Per-phase repeated-failure tracking:
+        #   rca_fingerprints[phase_key]            -> latest fingerprint for the phase
+        #   last_changed_handoff_hash[phase_key]   -> hash of the most recent handoff content
+        #   systemic_rca_triggered[phase_key]      -> bool, true after systemic RCA fired for the phase
+        self.rca_fingerprints = {}
+        self.last_changed_handoff_hash = {}
+        self.systemic_rca_triggered = {}
+        # Populated by enter_awaiting_user_instruction(); surfaced via to_progress()
+        # so an external caller can render the user-decision question.
+        self.terminal_state = None
+        self.awaiting_user_instruction_phase = None
 
     def to_progress(self):
         progress = {
@@ -118,6 +129,14 @@ class RunnerState:
             progress["human_extensions"] = dict(self.human_extensions)
         if self.rca_skipped:
             progress["rca_skipped"] = dict(self.rca_skipped)
+        if self.rca_fingerprints:
+            progress["rca_fingerprints"] = dict(self.rca_fingerprints)
+        if self.systemic_rca_triggered:
+            progress["systemic_rca_triggered"] = dict(self.systemic_rca_triggered)
+        if self.terminal_state is not None:
+            progress["terminal_state"] = dict(self.terminal_state)
+        if self.awaiting_user_instruction_phase:
+            progress["awaiting_user_instruction_phase"] = self.awaiting_user_instruction_phase
         # Always emit budget_mode so its provenance survives restarts.
         progress["budget_mode"] = dict(self.budget_mode)
         return progress
@@ -165,6 +184,19 @@ class RunnerState:
         state.total_reruns = progress.get("total_reruns", 0)
         state.fallbacks_used = progress.get("fallbacks_used", [])
         state.human_extensions = progress.get("human_extensions", {})
+        state.rca_fingerprints = progress.get("rca_fingerprints", {})
+        state.systemic_rca_triggered = progress.get("systemic_rca_triggered", {})
+        state.terminal_state = progress.get("terminal_state")
+        state.awaiting_user_instruction_phase = progress.get(
+            "awaiting_user_instruction_phase"
+        )
+        history_path = os.path.join(output_dir, "results", "rca_history.json")
+        if os.path.isfile(history_path):
+            try:
+                history_data = load_json(history_path)
+                state.rca_history = history_data.get("history", [])
+            except (json.JSONDecodeError, OSError):
+                state.rca_history = []
         if "budget_mode" in progress:
             state.budget_mode = dict(progress["budget_mode"])
         return state
@@ -248,6 +280,24 @@ class DeterministicRunner:
             path = os.path.join(self.output_dir, artifact)
             if not os.path.exists(path):
                 errors.append(f"Missing artifact: {artifact}")
+        if phase_key == "integration":
+            optimized_dir = os.path.join(self.output_dir, "optimized")
+            has_optimized_artifact = False
+            if os.path.isdir(optimized_dir):
+                for _root, _dirs, files in os.walk(optimized_dir):
+                    if any(not name.startswith(".") for name in files):
+                        has_optimized_artifact = True
+                        break
+            integration_manifest = os.path.join(
+                self.output_dir, "problems", "integration_manifest.json")
+            redirect_manifest = os.path.join(
+                self.output_dir, "problems", "redirect_integration_manifest.json")
+            if (not has_optimized_artifact
+                    and not os.path.isfile(integration_manifest)
+                    and not os.path.isfile(redirect_manifest)):
+                errors.append(
+                    "Missing integration input: optimized/ is empty and no "
+                    "alternative integration manifest exists")
         return errors
 
     def phases_requiring_rca(self, phase_list):
@@ -445,6 +495,45 @@ class DeterministicRunner:
         lines = truncate_context(lines, self.max_context_lines)
         return "\n".join(lines)
 
+    @staticmethod
+    def build_retry_feedback(attempt, monitor_verdict, rca_result):
+        """Build rich retry feedback for the next handoff.
+
+        Phase agents consume this under `## Prior Attempt Feedback`.
+        Include the RCA path/guidance here because the deterministic
+        runner does not rewrite handoffs after RCA in-place; the next
+        loop iteration will call build_handoff() with this text.
+        """
+        parts = [f"Attempt {attempt} failed."]
+        if monitor_verdict:
+            failure_type = monitor_verdict.get("failure_type")
+            if failure_type:
+                parts.append(f"- **Failure type**: {failure_type}")
+            summary = monitor_verdict.get("summary") or monitor_verdict.get("analysis")
+            if summary:
+                parts.append(f"- **Monitor summary**: {summary}")
+        if rca_result:
+            parts.append("")
+            parts.append("## Root Cause Analysis")
+            artifact = rca_result.get("artifact") or rca_result.get("output_path")
+            if artifact:
+                parts.append(f"- **RCA artifact**: {artifact}")
+            summary = rca_result.get("summary") or rca_result.get("analysis")
+            if summary:
+                parts.append(f"- **Summary**: {summary}")
+            recommendation = rca_result.get("retry_recommendation")
+            if recommendation:
+                parts.append(f"- **Retry recommendation**: {recommendation}")
+            guidance = rca_result.get("retry_guidance")
+            if guidance:
+                parts.append("")
+                parts.append("### Retry Guidance")
+                parts.append(str(guidance))
+            blockers = rca_result.get("blocker_classifications")
+            if blockers:
+                parts.append(f"- **Blocker classifications**: {blockers}")
+        return "\n".join(parts)
+
     def write_handoff(self, phase_key, content):
         handoff_dir = os.path.join(self.output_dir, "handoff")
         os.makedirs(handoff_dir, exist_ok=True)
@@ -603,74 +692,136 @@ class DeterministicRunner:
             "blockers": list(state.blockers_emitted),
         })
 
-    # --- V2 stub methods (filled by Phases 3-5) ---
+    def write_user_decision_request(self, phase_key, reason, rca_result, review_path):
+        """Pause the run for a user decision after a critical FAIL.
 
-    def _evaluate_v2(self, phase_key, verdict, v):
-        """V2 two-layer monitor: L1 predicates as floor, L2 (LLM) can only upgrade."""
-        try:
-            from .predicate_engine import evaluate_predicates_v2, VERDICT_RANK
-        except ImportError:
-            from predicate_engine import evaluate_predicates_v2, VERDICT_RANK
-
-        phase_meta = self.phases[phase_key]
-        quality = phase_meta.get("quality", {})
-        rules = quality.get("detection_rules_structured_v2",
-                            quality.get("detection_rules_structured", []))
-
-        if not rules:
-            return v
-
-        # Build context from monitor_context_fields scalars
-        context = {}
-        mcf = phase_meta.get("monitor_context_fields", {})
-        for scalar in mcf.get("scalars", []):
-            context[scalar] = verdict.get(scalar)
-
-        # Resolve thresholds for $ref values
-        thresholds = {}
-        cross_thresh = self.config.get("CROSS_KERNEL_INTERACTION_THRESHOLD")
-        if cross_thresh is not None:
-            thresholds["CROSS_KERNEL_THRESHOLD"] = float(cross_thresh)
-        elif os.path.isfile(os.path.join(self.output_dir, "results", "benchmark_noise.json")):
-            try:
-                noise = load_json(os.path.join(self.output_dir, "results", "benchmark_noise.json"))
-                if "stddev_pct" in noise:
-                    thresholds["CROSS_KERNEL_THRESHOLD"] = 3.0 * noise["stddev_pct"]
-            except (json.JSONDecodeError, OSError):
-                pass
-        if "CROSS_KERNEL_THRESHOLD" not in thresholds:
-            fallback_pct = float(self.config.get("CROSS_KERNEL_FALLBACK_PCT", 15.0))
-            thresholds["CROSS_KERNEL_THRESHOLD"] = fallback_pct
-
-        l1_verdict, details, categories = evaluate_predicates_v2(rules, context, thresholds)
-
-        # Write L1 results to disk for L2 to consume
-        predicate_result = {
-            "schema_version": SCHEMA_VERSION,
-            "phase": phase_key,
-            "verdict": l1_verdict,
-            "rules_evaluated": len(details),
-            "rules_triggered": sum(1 for d in details if d.get("triggered")),
-            "problem_categories": categories,
-            "details": details,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }
+        Replaces the legacy ``allow_partial_report`` auto-skip path. The
+        runner emits a structured request file under
+        ``monitor/user_decision_request.json``; an external caller (the
+        outer dispatcher, an LLM orchestrator, or a CLI prompt) chooses
+        the next step (retry with new instructions, fallback, generate
+        a user-requested report, or stop). The runner never picks
+        partial-report autonomously.
+        """
         monitor_dir = os.path.join(self.output_dir, "monitor")
         os.makedirs(monitor_dir, exist_ok=True)
-        idx = phase_meta["index"]
-        atomic_write_json(os.path.join(monitor_dir, f"phase-{idx:02d}-predicate.json"),
-                          predicate_result)
+        request = {
+            "schema_version": SCHEMA_VERSION,
+            "phase": phase_key,
+            "reason": reason,
+            "monitor_review": review_path,
+            "rca_artifact": (rca_result or {}).get("artifact"),
+            "rca_summary": (rca_result or {}).get("analysis")
+                or (rca_result or {}).get("summary"),
+            "rca_terminal_action": (rca_result or {}).get("terminal_action"),
+            "rca_fingerprint": (rca_result or {}).get("fingerprint"),
+            "rca_root_cause_class": (rca_result or {}).get("root_cause_class"),
+            "options": [
+                {
+                    "id": "retry",
+                    "label": "Retry the failed phase with new instructions",
+                    "requires": "additional_handoff_guidance",
+                },
+                {
+                    "id": "fallback",
+                    "label": "Roll back and re-run the dependency phase",
+                    "requires": "fallback_target",
+                },
+                {
+                    "id": "stop",
+                    "label": "Stop the run and leave artifacts as-is",
+                },
+                {
+                    "id": "generate_report_anyway",
+                    "label": "Force Phase 9 to render a partial report",
+                    "warning": "non-default; the run is NOT a clean optimization",
+                },
+            ],
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        atomic_write_json(os.path.join(monitor_dir, "user_decision_request.json"),
+                          request)
+        return request
 
-        # L1 is the floor; combine with dispatch verdict
-        combined = l1_verdict if VERDICT_RANK.get(l1_verdict, 0) >= VERDICT_RANK.get(v, 0) else v
-        return combined
+    def enter_awaiting_user_instruction(self, state, phase_key, reason,
+                                         rca_result=None, review_path=None,
+                                         blocker_extra=None):
+        """Mark the run as ``awaiting_user_instruction`` and pause.
+
+        The caller is responsible for returning to the dispatcher after
+        this method, since the run cannot continue until a user
+        decision arrives. The terminal_state block is populated so
+        downstream consumers can render the user-decision question.
+        """
+        terminal = {
+            "outcome": "awaiting_user_instruction",
+            "blocking_phase": phase_key,
+            "reason": reason,
+            "rca_stop_recommended": bool(
+                rca_result and rca_result.get("terminal_action") == "stop_with_blocker"
+            ),
+            "user_instruction_required": True,
+            "rca_fingerprint": (rca_result or {}).get("fingerprint"),
+            "retry_exhausted": reason == "budget_exhausted",
+        }
+        state.terminal_state = terminal
+        blocker = {
+            "phase": phase_key,
+            "terminal_action": reason,
+            "blocker_classifications": (rca_result or {}).get(
+                "blocker_classifications", []
+            ),
+            "rca_artifact": (rca_result or {}).get("artifact"),
+            "user_instruction_required": True,
+        }
+        if blocker_extra:
+            blocker.update(blocker_extra)
+        state.blockers_emitted.append(blocker)
+        self.write_pipeline_blockers(state)
+        self.write_user_decision_request(
+            phase_key=phase_key,
+            reason=reason,
+            rca_result=rca_result,
+            review_path=review_path,
+        )
+        state.status = "awaiting_user_instruction"
+        state.awaiting_user_instruction_phase = phase_key
+        state.write_progress()
+
+    # --- V2 stub methods (filled by Phases 3-5) ---
+
+    def _evaluate_v2(self, phase_key, verdict, v, result_path=None):
+        """V2 two-layer monitor: L1 predicates as floor, L2 (LLM) can only upgrade."""
+        return self.evaluate_structured_predicates(
+            phase_key, verdict, v, result_path=result_path, v2=True)
 
     @staticmethod
     def normalize_monitor_verdict(verdict_value):
-        """Normalize legacy WARN monitor verdicts to hard FAIL."""
-        if verdict_value == "WARN":
-            return "FAIL"
-        return verdict_value
+        """Normalize monitor verdicts to the binary contract.
+
+        Only ``PASS`` and ``FAIL`` are accepted. Any other value is
+        treated as ``FAIL``. This covers legacy ``WARN`` artifacts read
+        during resume as well as defensive normalization of new
+        non-binary verdicts such as ``PASS_with_caveats`` or
+        ``FAIL_pushed_through`` — the phase-orchestrator's
+        self-checklist refuses to advance until the monitor rewrites
+        such reviews with a real binary verdict, but the runner
+        normalizes here so that a buggy callback cannot silently mark a
+        critical phase as PASS.
+        """
+        if verdict_value == "PASS":
+            return "PASS"
+        return "FAIL"
+
+    @staticmethod
+    def is_invalid_verdict(verdict_value):
+        """True when the input verdict is neither PASS nor FAIL.
+
+        Used to surface monitor contract violations as structured
+        ``invalid_verdict`` blocker entries; the runner still proceeds
+        with the FAIL-normalized verdict so the loop converges.
+        """
+        return verdict_value not in ("PASS", "FAIL")
 
     def _maybe_escalate(self, phase_key, v, verdict):
         """Check if human escalation is needed. Returns escalation result or None."""
@@ -772,12 +923,10 @@ class DeterministicRunner:
                     "phase_reruns": phase_reruns}
 
         if action == "continue":
-            tp = phase_meta.get("terminal_policy")
-            if tp == "allow_partial_report" and "report-generate" in phase_list:
-                report_idx = phase_list.index("report-generate")
-                current_idx = phase_list.index(phase_key)
-                for skip_key in phase_list[current_idx + 1:report_idx]:
-                    state.phases_completed.append(skip_key)
+            # NOTE: The legacy `allow_partial_report` auto-skip path was
+            # removed. After a critical FAIL we never silently jump to
+            # report-generate; the runner pauses with
+            # ``awaiting_user_instruction`` from the FAIL branch instead.
             return {"action": "continue", "phase_reruns": phase_reruns}
 
         # Default: retry
@@ -868,6 +1017,10 @@ class DeterministicRunner:
             "root_cause_class": rcc,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         })
+        # Per-phase latest fingerprint surfaces in progress.json so the
+        # outer dispatcher can render repeated-failure context without
+        # re-reading the full history file.
+        state.rca_fingerprints[phase_key] = fp
         # Persist
         history_path = os.path.join(self.output_dir, "results", "rca_history.json")
         atomic_write_json(history_path, {
@@ -875,6 +1028,172 @@ class DeterministicRunner:
             "history": list(state.rca_history),
         })
         return fp
+
+    @staticmethod
+    def _hash_handoff(content):
+        """Stable hash of handoff content used to detect repeated
+        attempts that did not change the retry plan."""
+        return hashlib.sha256((content or "").encode()).hexdigest()
+
+    @staticmethod
+    def _parse_scalar_value(raw_value):
+        value = str(raw_value).strip()
+        if "#" in value:
+            value = value.split("#", 1)[0].strip()
+        value = value.strip("`").strip()
+        lower = value.lower()
+        if lower == "true":
+            return True
+        if lower == "false":
+            return False
+        if lower in ("null", "none", "n/a"):
+            return None
+        try:
+            if any(ch in value for ch in (".", "e", "E")):
+                return float(value)
+            return int(value)
+        except ValueError:
+            return value.strip("\"'")
+
+    def extract_result_scalars(self, result_path):
+        """Extract flat `field: value` scalars from phase result markdown.
+
+        Phase docs require registry-consumed values as flat scalar lines.
+        This parser intentionally accepts a few common Markdown forms:
+
+        - `field: value`
+        - `- field: value`
+        - `- `field`: value`
+        - ``field: value``
+        """
+        scalars = {}
+        if not result_path or not os.path.isfile(result_path):
+            return scalars
+        try:
+            with open(result_path) as f:
+                lines = f.readlines()
+        except OSError:
+            return scalars
+
+        for line in lines:
+            text = line.strip()
+            if not text or text.startswith("|"):
+                continue
+            if text.startswith("-"):
+                text = text[1:].strip()
+            if text.startswith("*"):
+                text = text[1:].strip()
+            if ":" not in text:
+                continue
+            key, value = text.split(":", 1)
+            key = key.strip().strip("`").strip()
+            if not key.replace("_", "").isalnum() or not key:
+                continue
+            scalars[key] = self._parse_scalar_value(value)
+        return scalars
+
+    def load_monitor_context(self, phase_key):
+        phase_meta = self.phases[phase_key]
+        idx = phase_meta["index"]
+        path = os.path.join(self.output_dir, "monitor", f"phase-{idx:02d}-context.json")
+        if not os.path.isfile(path):
+            return {}
+        try:
+            data = load_json(path)
+        except (json.JSONDecodeError, OSError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def build_predicate_context(self, phase_key, verdict, result_path=None):
+        """Build structured predicate context from all machine sources.
+
+        Precedence, from lowest to highest:
+        1. monitor/phase-NN-context.json (artifact scalars)
+        2. phase result flat scalars
+        3. monitor callback verdict dictionary
+        """
+        context = {}
+        context.update(self.load_monitor_context(phase_key))
+        context.update(self.extract_result_scalars(result_path))
+        if isinstance(verdict, Mapping):
+            context.update(verdict)
+        return context
+
+    def evaluate_structured_predicates(self, phase_key, verdict, current_verdict,
+                                       result_path=None, v2=False):
+        """Evaluate registry structured predicates for both V1 and V2 paths.
+
+        The V1 path previously trusted the monitor verdict directly.
+        This method makes `detection_rules_structured` an active floor
+        across all critical phases by reading the phase result scalars
+        and monitor context in addition to the monitor callback payload.
+        """
+        try:
+            from .predicate_engine import (
+                evaluate_predicates, evaluate_predicates_v2, VERDICT_RANK)
+        except ImportError:
+            from predicate_engine import (
+                evaluate_predicates, evaluate_predicates_v2, VERDICT_RANK)
+
+        phase_meta = self.phases[phase_key]
+        quality = phase_meta.get("quality", {})
+        if v2:
+            rules = quality.get(
+                "detection_rules_structured_v2",
+                quality.get("detection_rules_structured", []),
+            )
+        else:
+            rules = quality.get("detection_rules_structured", [])
+        if not rules:
+            return current_verdict
+
+        context = self.build_predicate_context(phase_key, verdict, result_path)
+
+        thresholds = {}
+        cross_thresh = self.config.get("CROSS_KERNEL_INTERACTION_THRESHOLD")
+        if cross_thresh is not None:
+            thresholds["CROSS_KERNEL_THRESHOLD"] = float(cross_thresh)
+        elif os.path.isfile(os.path.join(self.output_dir, "results", "benchmark_noise.json")):
+            try:
+                noise = load_json(os.path.join(self.output_dir, "results", "benchmark_noise.json"))
+                if "stddev_pct" in noise:
+                    thresholds["CROSS_KERNEL_THRESHOLD"] = 3.0 * noise["stddev_pct"]
+            except (json.JSONDecodeError, OSError):
+                pass
+        if "CROSS_KERNEL_THRESHOLD" not in thresholds:
+            fallback_pct = float(self.config.get("CROSS_KERNEL_FALLBACK_PCT", 15.0))
+            thresholds["CROSS_KERNEL_THRESHOLD"] = fallback_pct
+
+        if v2:
+            l1_verdict, details, categories = evaluate_predicates_v2(
+                rules, context, thresholds)
+        else:
+            l1_verdict, details = evaluate_predicates(rules, context, thresholds)
+            categories = []
+
+        predicate_result = {
+            "schema_version": SCHEMA_VERSION,
+            "phase": phase_key,
+            "verdict": l1_verdict,
+            "rules_evaluated": len(details),
+            "rules_triggered": sum(1 for d in details if d.get("triggered")),
+            "problem_categories": categories,
+            "details": details,
+            "context_fields": sorted(context.keys()),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        monitor_dir = os.path.join(self.output_dir, "monitor")
+        os.makedirs(monitor_dir, exist_ok=True)
+        idx = phase_meta["index"]
+        atomic_write_json(
+            os.path.join(monitor_dir, f"phase-{idx:02d}-predicate.json"),
+            predicate_result,
+        )
+        return (
+            l1_verdict
+            if VERDICT_RANK.get(l1_verdict, 0) >= VERDICT_RANK.get(current_verdict, 0)
+            else current_verdict
+        )
 
     def _maybe_dispatch_systemic_rca(self, state, phase_key, attempt, current_fp,
                                      systemic_rca_fn, phase_list):
@@ -897,9 +1216,9 @@ class DeterministicRunner:
         if systemic_rca_fn is None:
             logger.warning(
                 "Repeated RCA fingerprint detected for phase %s (attempt %d) "
-                "but systemic_rca_fn is not wired. Continuing per-phase retry.",
+                "but systemic_rca_fn is not wired. Pausing for user instruction.",
                 phase_key, attempt)
-            return None
+            return {"action": "accept_finding", "reason": "systemic_rca_fn_missing"}
 
         manifest = {
             "phase": phase_key,
@@ -1021,11 +1340,12 @@ class DeterministicRunner:
 
             phase_reruns = 0
             advance_phase = True  # set False on redirect to suppress phase_idx += 1
+            pending_retry_feedback = None
             while True:
                 attempt = phase_reruns + 1
                 context, context_meta = self.resolve_context_with_meta(phase_key)
-                feedback = None
-                if phase_reruns > 0:
+                feedback = pending_retry_feedback
+                if phase_reruns > 0 and not feedback:
                     feedback = f"Attempt {attempt} after {phase_reruns} prior failure(s)."
 
                 handoff = self.build_handoff(
@@ -1037,17 +1357,18 @@ class DeterministicRunner:
                     context_meta=context_meta,
                 )
                 handoff_path = self.write_handoff(phase_key, handoff)
+                state.last_changed_handoff_hash[phase_key] = self._hash_handoff(handoff)
 
                 if dispatch_fn:
                     dispatch_verdict = dispatch_fn(phase_key, handoff_path)
                 else:
                     dispatch_verdict = {"verdict": "PASS", "attempt": attempt}
 
+                result_path = os.path.join(
+                    self.output_dir, "agent-results",
+                    f"phase-{self.phases[phase_key]['index']:02d}-result.md",
+                )
                 if monitor_fn:
-                    result_path = os.path.join(
-                        self.output_dir, "agent-results",
-                        f"phase-{self.phases[phase_key]['index']:02d}-result.md",
-                    )
                     summary_path = os.path.join(self.output_dir, "monitor", "running-summary.md")
                     phase_meta = self.phases[phase_key]
                     checks = phase_meta.get("quality", {}).get("checks", []) if phase_meta.get("critical") else []
@@ -1068,7 +1389,8 @@ class DeterministicRunner:
 
                 if self.v2_monitor:
                     # --- V2 path ---
-                    v2_verdict = self._evaluate_v2(phase_key, verdict, v)
+                    v2_verdict = self._evaluate_v2(
+                        phase_key, verdict, v, result_path=result_path)
                     v = self.normalize_monitor_verdict(v2_verdict)
                     phase_meta = self.phases[phase_key]
 
@@ -1096,20 +1418,25 @@ class DeterministicRunner:
                         systemic_rca_fn, phase_list)
                     if sys_decision is not None:
                         if sys_decision["action"] == "accept_finding":
-                            # Halt e2e attempts; route to report-generate.
-                            if "report-generate" in phase_list:
-                                report_idx = phase_list.index("report-generate")
-                                current_idx = phase_list.index(phase_key)
-                                for skip_key in phase_list[current_idx:report_idx]:
-                                    if skip_key not in state.phases_completed:
-                                        state.phases_completed.append(skip_key)
-                                phase_idx = report_idx
-                                advance_phase = False
-                                break
-                            # No report phase available -- mark complete.
-                            state.phases_completed.append(phase_key)
-                            state.retry_counts[phase_key] = phase_reruns
-                            break
+                            # Systemic RCA accepted the finding. Pause
+                            # for explicit user instruction instead of
+                            # auto-skipping to report-generate. The user
+                            # can request a partial report through the
+                            # standard user-decision options.
+                            state.systemic_rca_triggered[phase_key] = True
+                            review_path = os.path.join(
+                                self.output_dir, "monitor",
+                                f"phase-{self.phases[phase_key]['index']:02d}-review.md",
+                            )
+                            self.enter_awaiting_user_instruction(
+                                state,
+                                phase_key=phase_key,
+                                reason="systemic_rca_accept_finding",
+                                rca_result=rca_result,
+                                review_path=review_path,
+                            )
+                            state.write_parity_manifest()
+                            return state
                         if sys_decision["action"] == "fallback":
                             target = sys_decision["target"]
                             already_used = any(
@@ -1123,6 +1450,7 @@ class DeterministicRunner:
                                 })
                             phase_idx = sys_decision["target_idx"]
                             state.phases_completed = state.phases_completed[:phase_idx]
+                            state.systemic_rca_triggered[phase_key] = True
                             advance_phase = False
                             break
                         # action == "continue" -> fall through to normal retry path
@@ -1138,6 +1466,8 @@ class DeterministicRunner:
                         state.retry_counts[phase_key] = phase_reruns
                         break
                     elif response["action"] == "retry":
+                        pending_retry_feedback = self.build_retry_feedback(
+                            attempt, verdict, rca_result)
                         continue
                     elif response["action"] == "redirect":
                         phase_idx = response.get("target_idx", phase_list.index(response["target"]))
@@ -1150,6 +1480,25 @@ class DeterministicRunner:
                         state.write_progress()
                         return state
                     else:  # abort
+                        # Critical-phase aborts (RCA stop_with_blocker,
+                        # budget exhausted with no fallback, etc.) pause
+                        # for explicit user instruction. Non-critical
+                        # phase aborts still hard-fail because they
+                        # cannot be retried meaningfully.
+                        review_path = os.path.join(
+                            self.output_dir, "monitor",
+                            f"phase-{self.phases[phase_key]['index']:02d}-review.md",
+                        )
+                        if phase_meta.get("critical"):
+                            self.enter_awaiting_user_instruction(
+                                state,
+                                phase_key=phase_key,
+                                reason=response.get("reason", "abort"),
+                                rca_result=rca_result,
+                                review_path=review_path,
+                            )
+                            state.write_parity_manifest()
+                            return state
                         self.write_runner_failure(
                             response.get("error_type", "budget_exhausted"),
                             response.get("message", f"Aborted at {phase_key}"),
@@ -1160,6 +1509,8 @@ class DeterministicRunner:
                         return state
                 else:
                     # --- V1 path (unchanged) ---
+                    v = self.evaluate_structured_predicates(
+                        phase_key, verdict, v, result_path=result_path, v2=False)
                     if v == "PASS":
                         state.phases_completed.append(phase_key)
                         state.retry_counts[phase_key] = phase_reruns
@@ -1184,18 +1535,23 @@ class DeterministicRunner:
                         systemic_rca_fn, phase_list)
                     if sys_decision is not None:
                         if sys_decision["action"] == "accept_finding":
-                            if "report-generate" in phase_list:
-                                report_idx = phase_list.index("report-generate")
-                                current_idx = phase_list.index(phase_key)
-                                for skip_key in phase_list[current_idx:report_idx]:
-                                    if skip_key not in state.phases_completed:
-                                        state.phases_completed.append(skip_key)
-                                phase_idx = report_idx
-                                advance_phase = False
-                                break
-                            state.phases_completed.append(phase_key)
-                            state.retry_counts[phase_key] = phase_reruns
-                            break
+                            # V1: systemic RCA accepted the finding.
+                            # Pause for user instruction; do not auto-
+                            # skip to a partial report.
+                            state.systemic_rca_triggered[phase_key] = True
+                            review_path = os.path.join(
+                                self.output_dir, "monitor",
+                                f"phase-{self.phases[phase_key]['index']:02d}-review.md",
+                            )
+                            self.enter_awaiting_user_instruction(
+                                state,
+                                phase_key=phase_key,
+                                reason="systemic_rca_accept_finding",
+                                rca_result=rca_result,
+                                review_path=review_path,
+                            )
+                            state.write_parity_manifest()
+                            return state
                         if sys_decision["action"] == "fallback":
                             target = sys_decision["target"]
                             already_used = any(
@@ -1209,12 +1565,18 @@ class DeterministicRunner:
                                 })
                             phase_idx = sys_decision["target_idx"]
                             state.phases_completed = state.phases_completed[:phase_idx]
+                            state.systemic_rca_triggered[phase_key] = True
                             advance_phase = False
                             break
                         # continue -> fall through
 
                     state.total_reruns += 1
                     phase_reruns += 1
+
+                    review_path = os.path.join(
+                        self.output_dir, "monitor",
+                        f"phase-{self.phases[phase_key]['index']:02d}-review.md",
+                    )
 
                     # Budget caps are bypassed only in extended (user-set) budget_mode.
                     if (self.budget_caps_enforced(state)
@@ -1232,50 +1594,42 @@ class DeterministicRunner:
                             })
                             fb_idx = phase_list.index(ft) if ft in phase_list else 0
                             state.phases_completed = state.phases_completed[:fb_idx]
+                            phase_idx = fb_idx
                             phase_reruns = 0
+                            advance_phase = False
                             break
                         else:
-                            state.blockers_emitted.append({
-                                "phase": phase_key,
-                                "terminal_action": "budget_exhausted",
-                                "blocker_classifications": [],
-                            })
-                            self.write_pipeline_blockers(state)
-                            tp = phase_meta.get("terminal_policy")
-                            if tp == "allow_partial_report" and "report-generate" in phase_list:
-                                report_idx = phase_list.index("report-generate")
-                                current_idx = phase_list.index(phase_key)
-                                for skip_key in phase_list[current_idx + 1:report_idx]:
-                                    state.phases_completed.append(skip_key)
-                                break
-                            else:
-                                self.write_runner_failure("budget_exhausted", f"Budget exhausted for {phase_key}", phase_key)
-                                state.status = "failed"
-                                state.write_progress()
-                                state.write_parity_manifest()
-                                return state
+                            # Budget exhausted with no fallback. Pause for
+                            # explicit user instruction; never auto-skip
+                            # to a partial report.
+                            self.enter_awaiting_user_instruction(
+                                state,
+                                phase_key=phase_key,
+                                reason="budget_exhausted",
+                                rca_result=rca_result,
+                                review_path=review_path,
+                            )
+                            state.write_parity_manifest()
+                            return state
 
                     # RCA terminal_action check
                     if rca_result and rca_result.get("terminal_action") == "stop_with_blocker":
-                        state.blockers_emitted.append({
-                            "phase": phase_key,
-                            "terminal_action": "stop_with_blocker",
-                            "blocker_classifications": rca_result.get("blocker_classifications", []),
-                        })
-                        self.write_pipeline_blockers(state)
-                        tp = phase_meta.get("terminal_policy")
-                        if tp == "allow_partial_report" and "report-generate" in phase_list:
-                            report_idx = phase_list.index("report-generate")
-                            current_idx = phase_list.index(phase_key)
-                            for skip_key in phase_list[current_idx + 1:report_idx]:
-                                state.phases_completed.append(skip_key)
-                            break
-                        else:
-                            self.write_runner_failure("manual_intervention_required", f"RCA stop for {phase_key}", phase_key)
-                            state.status = "failed"
-                            state.write_progress()
-                            state.write_parity_manifest()
-                            return state
+                        # RCA explicitly recommends stop. Pause for user
+                        # instruction instead of auto-skipping to a
+                        # partial report. ``allow_partial_report`` no
+                        # longer triggers any auto-skip path.
+                        self.enter_awaiting_user_instruction(
+                            state,
+                            phase_key=phase_key,
+                            reason="rca_stop_with_blocker",
+                            rca_result=rca_result,
+                            review_path=review_path,
+                        )
+                        state.write_parity_manifest()
+                        return state
+
+                    pending_retry_feedback = self.build_retry_feedback(
+                        attempt, verdict, rca_result)
 
             state.write_progress()
             state.write_parity_manifest()

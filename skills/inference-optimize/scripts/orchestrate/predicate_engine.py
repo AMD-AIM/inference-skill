@@ -44,8 +44,39 @@ def _num(v):
     return v
 
 
+def _str_eq(a, b):
+    """String comparison that is case-insensitive for booleans so
+    rule conditions like `redirect_attempted == true` work whether
+    the context value is a Python ``True`` or the literal string
+    ``"true"``."""
+    if isinstance(a, bool):
+        return str(a).lower() == str(b).lower()
+    return str(a) == str(b)
+
+
+_CONDITION_OPS = {
+    "==": _str_eq,
+    "!=": lambda a, b: not _str_eq(a, b),
+    "eq": _str_eq,
+    "ne": lambda a, b: not _str_eq(a, b),
+    "gt": lambda a, b: _num(a) > _num(b),
+    "ge": lambda a, b: _num(a) >= _num(b),
+    "lt": lambda a, b: _num(a) < _num(b),
+    "le": lambda a, b: _num(a) <= _num(b),
+}
+
+
 def _check_condition(condition_str: str, context: dict) -> bool:
-    """Evaluate a simple condition string like 'performance_gate == warn'."""
+    """Evaluate a simple condition string.
+
+    Supported forms (token-separated):
+      "<field> == <value>"
+      "<field> != <value>"
+      "<field> gt <numeric_value>"
+      "<field> ge <numeric_value>"
+      "<field> lt <numeric_value>"
+      "<field> le <numeric_value>"
+    """
     parts = condition_str.strip().split()
     if len(parts) != 3:
         return True
@@ -53,11 +84,13 @@ def _check_condition(condition_str: str, context: dict) -> bool:
     actual = context.get(field)
     if actual is None:
         return False
-    if op_str == "==":
-        return str(actual) == value
-    if op_str == "!=":
-        return str(actual) != value
-    return True
+    op_fn = _CONDITION_OPS.get(op_str)
+    if op_fn is None:
+        return True
+    try:
+        return op_fn(actual, value)
+    except (TypeError, ValueError):
+        return False
 
 
 # Legacy WARN is treated as FAIL to enforce hard-fail monitor semantics.

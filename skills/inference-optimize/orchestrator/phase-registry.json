@@ -219,7 +219,20 @@
           "geak_speedup_lib_bench",
           "redirect_commits_applied_count",
           "in_place_winners_count",
+          "redirect_winners_count",
           "no_harness_winners_count",
+          "winners_total_count",
+          "py_exports_shipped_count",
+          "optimized_artifact_count",
+          "optimized_dir_empty",
+          "claimed_winner_artifacts_valid",
+          "redirect_attempted",
+          "redirect_count_observed",
+          "redirect_count_expected",
+          "redirect_count_ratio",
+          "redirect_count_within_tolerance",
+          "mini_ab_required",
+          "mini_ab_harness_status",
           "unverified_per_kernel_count"
         ]
       },
@@ -227,13 +240,19 @@
         "checks": [
           { "name": "geak_results_exists", "type": "file_exists", "path": "problems/geak_results.json" },
           { "name": "preflight_trace_exists", "type": "file_exists", "path": "results/preflight_dispatch_trace.json" },
-          { "name": "winners_present", "type": "metric_threshold", "field": "in_place_winners_count", "min": 0 }
+          { "name": "winners_present", "type": "metric_threshold", "field": "winners_total_count", "min": 1 },
+          { "name": "claimed_winner_artifacts_valid", "type": "metric_threshold", "field": "claimed_winner_artifacts_valid", "min": 1 }
         ],
-        "detection_rules": "Fail kernel-optimize when any of: geak_results.json or preflight_dispatch_trace.json is missing; in_place_winners_count + redirect_commits_applied_count + no_harness_winners_count == 0 (the phase produced no usable patch on any bucket); library_tests_failed_count > 0 (Bucket A library suite regressed against the patched fork); allocator_test_pass == false (Bucket A allocator-equivalent test diverged or HSA-faulted); dispatch_pre_flight_pass == false (rocprofv3 confirmed the patched symbol does not actually fire after rebuild). Bucket B winners are expected to carry optimization_unverified_per_kernel = true; do not fail the phase merely on unverified_per_kernel_count > 0.",
+        "detection_rules": "Fail kernel-optimize when any of: geak_results.json or preflight_dispatch_trace.json is missing; winners_total_count < 1 (the phase produced no usable patch shipped as a winner on any bucket — counting only shipped in_place + redirect + no_harness winners; redirect_commits_applied_count is audit-only and never counts as a winner); claimed_winner_artifacts_valid == false (the row claims a winner but its required integration artifact is missing or invalid); optimized_artifact_count == 0 while a winner is claimed (the optimized/ directory must contain integration-ready files when Phase 8 is expected to consume them); redirect_count_within_tolerance == false (a redirect was attempted but the observed dispatch count is outside the [0.5x, 1.5x] expected window — over- or under-routing); mini_ab_harness_status == 'unreliable_high_variance' when mini-A/B is required (per-bucket trim cannot run honestly); library_tests_failed_count > 0 (Bucket A library suite regressed against the patched fork); allocator_test_pass == false (Bucket A allocator-equivalent test diverged or HSA-faulted); dispatch_pre_flight_pass == false (rocprofv3 confirmed the patched symbol does not actually fire after rebuild). Bucket B winners are expected to carry optimization_unverified_per_kernel = true; do not fail the phase merely on unverified_per_kernel_count > 0.",
         "detection_rules_structured": [
           {"field": "dispatch_pre_flight_pass", "op": "eq", "value": false, "verdict": "FAIL"},
           {"field": "library_tests_failed_count", "op": "gt", "value": 0, "verdict": "FAIL"},
-          {"field": "allocator_test_pass", "op": "eq", "value": false, "verdict": "FAIL"}
+          {"field": "allocator_test_pass", "op": "eq", "value": false, "verdict": "FAIL"},
+          {"field": "winners_total_count", "op": "lt", "value": 1, "verdict": "FAIL"},
+          {"field": "claimed_winner_artifacts_valid", "op": "eq", "value": false, "verdict": "FAIL"},
+          {"field": "optimized_artifact_count", "op": "lt", "value": 1, "verdict": "FAIL", "condition": "winners_total_count gt 0"},
+          {"field": "redirect_count_within_tolerance", "op": "eq", "value": false, "verdict": "FAIL", "condition": "redirect_attempted == true"},
+          {"field": "mini_ab_harness_status", "op": "eq", "value": "unreliable_high_variance", "verdict": "FAIL", "condition": "mini_ab_required == true"}
         ]
       },
       "rca_artifact": {
@@ -249,7 +268,7 @@
         ]
       },
       "fallback_target": "problem-generate",
-      "terminal_policy": "allow_partial_report"
+      "terminal_policy": "stop"
     },
     "integration": {
       "index": 8,
@@ -315,7 +334,7 @@
         ]
       },
       "fallback_target": "kernel-optimize",
-      "terminal_policy": "allow_partial_report"
+      "terminal_policy": "stop"
     },
     "report-generate": {
       "index": 9,
@@ -346,7 +365,7 @@
     "optimize": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]],
     "monitor": [["benchmark", "profile"], ["benchmark-analyze", "profile-analyze"]]
   },
-  "rerun": { "max_per_phase": 0, "max_total": 0 },
+  "rerun": { "max_per_phase": 1000, "max_total": 10000 },
   "systemic_rca": {
     "agent": "systemic-rca.md",
     "artifact": "results/systemic_rca.json",
@@ -386,7 +405,9 @@
     "monitor_context_fields": "Active — compact context extraction for monitor reviews on critical phases",
     "detection_rules_structured": "Active — used by monitor/orchestrator guidance; deterministic runner evaluation is enabled when V2_MONITOR=true",
     "parallel_groups": "Planning metadata for orchestrator-level concurrency; deterministic runner currently executes resolved phase lists sequentially",
-    "human_loop": "Registry default is false; runtime escalation behavior reads HUMAN_LOOP from config and requires V2_MONITOR"
+    "human_loop": "Registry default is false; runtime escalation behavior reads HUMAN_LOOP from config and requires V2_MONITOR",
+    "rerun": "Default budget is intentionally large (max_per_phase=1000, max_total=10000) so RCA-driven retry can keep working automatically. Repeated identical RCA fingerprints still trigger systemic-rca before another retry. Custom registries may set smaller positive caps for fast tests.",
+    "terminal_policy_allow_partial_report": "Removed from kernel-optimize and integration. The runner never auto-skips to report-generate after a critical FAIL; instead it pauses with status=awaiting_user_instruction and writes monitor/user_decision_request.json so the user (or dispatcher) chooses retry / fallback / stop / generate-report."
   },
   "context_sources": {
     "CONFIG_KEY":                { "source": "config" },

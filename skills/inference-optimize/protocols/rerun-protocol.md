@@ -32,8 +32,10 @@ Missing expected output files, metrics outside plausible range, empty traces, tr
 
 ## Retry Limits
 
-- `max_per_phase`: `0` in the shipped registry. Positive values cap per-phase re-dispatches; `0` or negative values mean uncapped retries.
-- `max_total`: `0` in the shipped registry. Positive values cap total re-dispatches across the run; `0` or negative values mean uncapped retries.
+- `max_per_phase`: `1000` in the shipped registry. Positive values cap per-phase re-dispatches; the cap is intentionally high so RCA-driven retries keep working automatically. Custom registries may override with smaller positive caps for fast tests; non-positive values are still treated as uncapped for backwards compatibility.
+- `max_total`: `10000` in the shipped registry. Prevents accidental infinite loops across the whole run while remaining high enough that normal optimization should never hit it.
+
+The default budget is paired with a repeated-fingerprint guardrail (see `agents/systemic-rca.md`) so the high retry cap cannot burn hundreds of identical attempts. When two consecutive per-phase RCAs share a fingerprint and the handoff content is unchanged, systemic RCA fires before another retry.
 
 ## RCA-First Recovery Flow
 
@@ -132,15 +134,26 @@ Systemic RCA `blocker_classifications` entries may be bare strings.
 
 ## Terminal Blocker Behavior
 
-When RCA-informed retry still fails and retry/fallback options are exhausted, the orchestrator writes a structured entry to `results/pipeline_blockers.json`.
+When RCA-informed retry still fails and retry/fallback options are exhausted, the orchestrator writes a structured entry to `results/pipeline_blockers.json` AND `monitor/user_decision_request.json`, then pauses the run with `progress.status = "awaiting_user_instruction"`. The runner never auto-skips to a partial report.
 
-### Stop versus Partial Report
+### Stop versus user-decision pause
 
-Early prerequisite phases (`benchmark`, `profile-analyze`):
-- `terminal_policy: stop` — halt the pipeline, do not generate a normal optimization report.
+`terminal_policy` is now binary across the registry:
 
-Later optimization phases (`kernel-optimize`, `integration`):
-- `terminal_policy: allow_partial_report` — allow Phase 09 to run; report states `completed with blockers` or `pipeline incomplete`.
+- `stop` — halt the pipeline. For early prerequisite phases (`benchmark`, `profile-analyze`, `problem-generate`) this matches the historical behavior. For later optimization phases (`kernel-optimize`, `integration`) `stop` is paired with the user-decision pause: the runner emits the request file and waits for a user choice (`retry`, `fallback`, `generate_report_anyway`, or `stop`).
+
+The legacy `allow_partial_report` value is removed. A partial report is still possible — it is now an explicit user choice surfaced through `monitor/user_decision_request.json`, never an automatic fallback.
+
+### User-decision request format
+
+`monitor/user_decision_request.json` carries:
+
+- `phase` — failing phase key
+- `reason` — `budget_exhausted`, `rca_stop_with_blocker`, `systemic_rca_accept_finding`, etc.
+- `monitor_review`, `rca_artifact`, `rca_summary`, `rca_terminal_action`, `rca_fingerprint`, `rca_root_cause_class`
+- `options` — list of structured options the dispatcher should surface to the user (`retry`, `fallback`, `stop`, `generate_report_anyway`)
+
+The dispatcher MUST present the options instead of picking one automatically. Phase 9 only runs after a clean PASS chain or after the user explicitly requests `generate_report_anyway`.
 
 ### Pipeline Status Derivation
 
@@ -176,16 +189,21 @@ When `HUMAN_LOOP=true` and `V2_MONITOR=true`, the orchestrator uses a signal-and
 |---|---|---|
 | running | phase PASS/FAIL | running |
 | running | all phases complete | completed |
-| running | budget exhausted (no fallback) | failed |
-| running | RCA stop_with_blocker | failed |
+| running | budget exhausted (no fallback) | awaiting_user_instruction |
+| running | RCA stop_with_blocker (any critical phase) | awaiting_user_instruction |
+| running | systemic-RCA accept_finding | awaiting_user_instruction |
 | running | escalation triggered | escalation_pending |
+| awaiting_user_instruction | user picks `retry` (with new instructions) | running |
+| awaiting_user_instruction | user picks `fallback` | running (re-dispatch from fallback target) |
+| awaiting_user_instruction | user picks `generate_report_anyway` | running (Phase 9 only) |
+| awaiting_user_instruction | user picks `stop` | failed |
 | escalation_pending | response received (retry) | running |
 | escalation_pending | response received (abort) | failed |
 | escalation_pending | stale timeout (no response) | failed |
 
 Re-escalation is valid: `escalation_pending -> running -> escalation_pending` can occur when a retried phase triggers another escalation.
 
-`completed` and `failed` are terminal states. No transitions leave these states.
+`completed` and `failed` are terminal states. No transitions leave these states. `awaiting_user_instruction` is a non-terminal pause: the run resumes only after the user picks one of the structured options surfaced from `monitor/user_decision_request.json`.
 
 ## Escalation Report
 

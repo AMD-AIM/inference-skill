@@ -87,12 +87,18 @@ class TestResponsePolicy:
         assert resp["action"] == "redirect"
         assert resp["target"] == "problem-generate"
 
-    def test_budget_exhausted_allow_partial(self):
+    def test_budget_exhausted_allow_partial_no_longer_auto_continues(self):
+        """Legacy `allow_partial_report` no longer triggers auto-continue.
+        The runner pauses for explicit user instruction instead. The
+        response policy returns `abort` for this branch and the runner
+        translates it into `awaiting_user_instruction` for critical
+        phases."""
         state = MockRunnerState(retry_counts={"kernel-optimize": 2}, total_reruns=3)
         meta = {"terminal_policy": "allow_partial_report"}
         resp = determine_response("FAIL", "logic", "kernel-optimize", meta, state,
                                    rerun_limits=RERUN_LIMITS, phase_reruns=3)
-        assert resp["action"] == "continue"
+        assert resp["action"] == "abort"
+        assert resp["reason"] == "budget_exhausted"
 
     def test_budget_exhausted_no_fallback_abort(self):
         state = MockRunnerState(retry_counts={"benchmark": 2}, total_reruns=3)

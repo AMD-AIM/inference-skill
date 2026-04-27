@@ -304,10 +304,13 @@ class TestDeterministicRunner:
             assert state.retry_counts.get("benchmark") == 1
             assert state.total_reruns == 1
 
-    def test_non_positive_rerun_limits_disable_budget_enforcement(self):
+    def test_default_large_retry_budget_keeps_retrying(self):
+        """Default registry budget (max_per_phase=1000, max_total=10000)
+        keeps retrying through several FAILs without hitting the cap or
+        invoking a fallback."""
         registry = _load_registry()
-        assert registry["rerun"]["max_per_phase"] == 0
-        assert registry["rerun"]["max_total"] == 0
+        assert registry["rerun"]["max_per_phase"] >= 1000
+        assert registry["rerun"]["max_total"] >= 10000
         config = _minimal_config("benchmark")
         call_count = {}
 
@@ -439,6 +442,9 @@ class TestDeterministicRunner:
                 json.dump({"kernels": []}, f)
             with open(os.path.join(tmpdir, "forks", "manifest.json"), "w") as f:
                 json.dump({"libraries": [], "ck_branch_merged_status": False}, f)
+            os.makedirs(os.path.join(tmpdir, "optimized"), exist_ok=True)
+            with open(os.path.join(tmpdir, "optimized", "mock_winner.py"), "w") as f:
+                f.write("# mock integration input\n")
 
             runner = DeterministicRunner(config, registry, tmpdir)
             state = runner.run(dispatch_fn=dispatch_fn, monitor_fn=monitor_fn, rca_fn=rca_fn)
