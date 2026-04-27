@@ -224,6 +224,7 @@ or missing `rca_fn` (when resolved critical phases require RCA) aborts startup b
 the first phase dispatch.
 
 - **Cursor**: `Task` tool with `subagent_type` per dispatch table. Prefer compact prompts with path references (handoff + agent doc), and inline only bounded snippets when required. Use `AskQuestion` for guided setup.
+- **Codex**: Skill discovery uses `$CODEX_HOME/skills/inference-optimize` by default (`~/.codex/skills/inference-optimize` when `CODEX_HOME` is unset). Follow the same path-based handoff protocol as Claude Code / OpenCode when a delegation tool is available. If Codex exposes no question tool, ask concise numbered choices in chat.
 - **Claude Code / OpenCode**: `Agent` tool with file-path handoffs. The new context-budget changes stay compatible here because the runner compacts handoffs/manifests before dispatch; phase docs are still read from disk by path. Use `question` tool for guided setup.
 
 ## Execution status updates

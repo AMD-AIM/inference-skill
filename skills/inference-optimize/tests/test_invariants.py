@@ -469,7 +469,7 @@ class TestHandoffValidation:
 # ---------------------------------------------------------------------------
 
 class TestCrossPlatformDispatchContracts:
-    """Claude Code and OpenCode must remain compatible with runner compaction."""
+    """Platform adapters must remain compatible with runner compaction."""
 
     def test_platform_dispatch_keeps_claude_code_path_handoffs(self):
         text = (PROTOCOLS_DIR / "platform-dispatch.md").read_text()
@@ -487,6 +487,18 @@ class TestCrossPlatformDispatchContracts:
         runtime = (SKILL_ROOT / "RUNTIME.md").read_text()
         assert "Claude Code / OpenCode" in runtime
         assert "runner compacts handoffs/manifests before dispatch" in runtime
+
+    def test_codex_discovery_metadata_exists(self):
+        openai_yaml = SKILL_ROOT / "agents" / "openai.yaml"
+        assert openai_yaml.exists(), "Codex metadata agents/openai.yaml must exist"
+        text = openai_yaml.read_text()
+        assert "display_name:" in text
+        assert "default_prompt:" in text
+
+    def test_platform_dispatch_mentions_codex(self):
+        text = (PROTOCOLS_DIR / "platform-dispatch.md").read_text()
+        assert "## Codex" in text
+        assert "$CODEX_HOME/skills/<skill-name>" in text
 
 
 # ---------------------------------------------------------------------------

@@ -74,6 +74,12 @@ Same as Claude Code. OpenCode discovers skills from `~/.claude/skills/` and uses
 
 Use `question` tool. For non-interactive runs (`opencode run`), set permission `"question": "allow"` in `.opencode/opencode.jsonc`.
 
+## Codex
+
+Codex discovers skills from `$CODEX_HOME/skills/<skill-name>` (default `~/.codex/skills/<skill-name>`). The installer also supports an explicit project-local target at `<project>/.codex/skills/<skill-name>` when `--project` is supplied.
+
+Use the same file-based handoff contract as Claude Code / OpenCode: pass paths to `orchestrator/PHASE-ORCHESTRATOR.md`, `phase-registry.json`, handoff files, monitor inputs, and RCA manifests instead of inlining large documents. When a Codex runtime provides a delegation tool, use it with these path-only prompts. If no dedicated question tool is available, ask concise numbered choices in chat.
+
 ## Context Budget
 
-All platforms share the same `max_context_lines` control from `phase-registry.json`. The runner's `truncate_context()` applies deterministic truncation only when this value is greater than zero. The current default is `8000` lines. `phase-registry.json` also defines `context_value_char_limit`, `context_keys_preview`, `context_items_preview`, and `cursor_agent_doc_max_lines` for deterministic context compaction. On Cursor, these caps apply to any prompt content assembled by the parent orchestrator. On Claude Code / OpenCode, the same compaction applies to handoff rendering and any optional inline snippets, while agent docs and manifests continue to be read from disk by path.
+All platforms share the same `max_context_lines` control from `phase-registry.json`. The runner's `truncate_context()` applies deterministic truncation only when this value is greater than zero. The current default is `8000` lines. `phase-registry.json` also defines `context_value_char_limit`, `context_keys_preview`, `context_items_preview`, and `cursor_agent_doc_max_lines` for deterministic context compaction. On Cursor, these caps apply to any prompt content assembled by the parent orchestrator. On Claude Code / OpenCode / Codex, the same compaction applies to handoff rendering and any optional inline snippets, while agent docs and manifests continue to be read from disk by path.

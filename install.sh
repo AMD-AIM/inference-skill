@@ -6,7 +6,7 @@ MODE="copy"
 
 usage() {
   cat <<'EOF'
-Install the inference-optimize skill for Claude Code, OpenCode, and Cursor.
+Install the inference-optimize skill for Claude Code, OpenCode, Cursor, and Codex.
 
 Usage:
   ./install.sh
@@ -14,7 +14,7 @@ Usage:
   ./install.sh --project /path/to/project --link
 
 Options:
-  --project PATH   Install into PATH/.claude/skills/SKILL_NAME
+  --project PATH   Install project-local Cursor/Codex discovery files under PATH
   --link           Symlink instead of copying files
   --copy           Copy files explicitly (default)
   --verify         Verify installation without installing
@@ -73,10 +73,48 @@ require_dir() {
   }
 }
 
+install_payload() {
+  local SOURCE_DIR="$1"
+  local DEST_DIR="$2"
+  local LABEL="$3"
+  local SKILL_NAME
+  SKILL_NAME="$(basename "$DEST_DIR")"
+
+  mkdir -p "$(dirname "$DEST_DIR")"
+
+  local BACKUP_ROOT
+  BACKUP_ROOT="$(dirname "$DEST_DIR")/.skill-backups/$SKILL_NAME"
+
+  if [[ -e "$DEST_DIR" || -L "$DEST_DIR" ]]; then
+    local TIMESTAMP
+    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_ROOT"
+    local BACKUP_PATH="${BACKUP_ROOT}/${TIMESTAMP}"
+    mv "$DEST_DIR" "$BACKUP_PATH"
+    echo "Backed up existing $LABEL install to: $BACKUP_PATH"
+  fi
+
+  if [[ "$MODE" == "link" ]]; then
+    ln -s "$SOURCE_DIR" "$DEST_DIR"
+    echo "  Linked: $LABEL $SKILL_NAME -> $SOURCE_DIR"
+  else
+    mkdir -p "$DEST_DIR"
+    cp -R "$SOURCE_DIR"/. "$DEST_DIR"/
+    echo "  Copied: $LABEL $SKILL_NAME -> $DEST_DIR"
+  fi
+}
+
 install_skill() {
   local SKILL_NAME="$1"
   local SOURCE_DIR="$REPO_ROOT/skills/$SKILL_NAME"
-  local DEST_DIR="${HOME}/.claude/skills/${SKILL_NAME}"
+  local CLAUDE_DEST_DIR="${HOME}/.claude/skills/${SKILL_NAME}"
+  local CODEX_BASE
+  if [[ -n "$CURSOR_PROJECT" ]]; then
+    CODEX_BASE="$CURSOR_PROJECT/.codex"
+  else
+    CODEX_BASE="${CODEX_HOME:-$HOME/.codex}"
+  fi
+  local CODEX_DEST_DIR="${CODEX_BASE}/skills/${SKILL_NAME}"
 
   require_dir "$SOURCE_DIR"
   require_file "$SOURCE_DIR/SKILL.md"
@@ -88,6 +126,7 @@ install_skill() {
     require_dir "$SOURCE_DIR/scripts"
     require_dir "$SOURCE_DIR/orchestrator"
     require_dir "$SOURCE_DIR/agents"
+    require_file "$SOURCE_DIR/agents/openai.yaml"
     require_dir "$SOURCE_DIR/protocols"
     require_file "$SOURCE_DIR/orchestrator/ORCHESTRATOR.md"
     require_file "$SOURCE_DIR/orchestrator/phase-registry.json"
@@ -102,47 +141,29 @@ install_skill() {
     require_file "$SOURCE_DIR/tests/e2e_optimize_test.py"
   fi
 
-  mkdir -p "$(dirname "$DEST_DIR")"
-
-  BACKUP_ROOT="$(dirname "$DEST_DIR")/.skill-backups/$SKILL_NAME"
-
-  if [[ -e "$DEST_DIR" || -L "$DEST_DIR" ]]; then
-    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$BACKUP_ROOT"
-    BACKUP_PATH="${BACKUP_ROOT}/${TIMESTAMP}"
-    mv "$DEST_DIR" "$BACKUP_PATH"
-    echo "Backed up existing install to: $BACKUP_PATH"
-  fi
-
-  if [[ "$MODE" == "link" ]]; then
-    ln -s "$SOURCE_DIR" "$DEST_DIR"
-    echo "  Linked: $SKILL_NAME -> $SOURCE_DIR"
-  else
-    mkdir -p "$DEST_DIR"
-    cp -R "$SOURCE_DIR"/. "$DEST_DIR"/
-    echo "  Copied: $SKILL_NAME -> $DEST_DIR"
-  fi
+  install_payload "$SOURCE_DIR" "$CLAUDE_DEST_DIR" "Claude/OpenCode"
+  install_payload "$SOURCE_DIR" "$CODEX_DEST_DIR" "Codex"
 
   # Cursor skill symlink
   CURSOR_BASE="${CURSOR_PROJECT:-$HOME}"
   CURSOR_SKILL_DIR="${CURSOR_BASE}/.cursor/skills/${SKILL_NAME}"
   mkdir -p "$(dirname "$CURSOR_SKILL_DIR")"
-  ln -sfn "$DEST_DIR" "$CURSOR_SKILL_DIR"
+  ln -sfn "$CLAUDE_DEST_DIR" "$CURSOR_SKILL_DIR"
 
   # Cursor rule generation
   CURSOR_RULE_DEST="${CURSOR_BASE}/.cursor/rules/${SKILL_NAME}.mdc"
   
   # Extract SKILL.md body (everything after the closing --- of frontmatter)
-  SKILL_BODY="$(awk '/^---/{if(++c==2){found=1;next}} found' "${DEST_DIR}/SKILL.md")"
+  SKILL_BODY="$(awk '/^---/{if(++c==2){found=1;next}} found' "${CLAUDE_DEST_DIR}/SKILL.md")"
 
   # Rewrite all relative markdown links to absolute paths.
   # Matches ](path) where path does not start with http, #, /, or mailto:
   SKILL_BODY_ABS="$(printf '%s\n' "$SKILL_BODY" \
-    | sed -E "s|]\(([^)#/h][^)]*)\)|](${DEST_DIR}/\1)|g")"
+    | sed -E "s|]\(([^)#/h][^)]*)\)|](${CLAUDE_DEST_DIR}/\1)|g")"
 
   # Derive rule description from SKILL.md frontmatter
   local BASE_DESC
-  BASE_DESC="$(awk '/^description:/{sub(/^description: *"?/,""); sub(/"$/,""); print; exit}' "${DEST_DIR}/SKILL.md")"
+  BASE_DESC="$(awk '/^description:/{sub(/^description: *"?/,""); sub(/"$/,""); print; exit}' "${CLAUDE_DEST_DIR}/SKILL.md")"
   local DESC="${BASE_DESC} Use this rule when the user names a config key or asks to run any phase of the inference-optimize pipeline."
 
   MDC_CONTENT="---
@@ -201,6 +222,14 @@ verify_skill() {
     fi
   done
 
+  # Codex UI/discovery metadata
+  if [[ -f "$SOURCE_DIR/agents/openai.yaml" ]]; then
+    echo "  OK  agents/openai.yaml"
+  else
+    echo "  MISSING  agents/openai.yaml"
+    ERRORS=$((ERRORS + 1))
+  fi
+
   # Optional: TraceLens tarball
   if [[ -f "$SOURCE_DIR/resources/TraceLens-internal.tar.gz" ]]; then
     echo "  OK  resources/TraceLens-internal.tar.gz (optional)"
@@ -227,7 +256,14 @@ verify_skill() {
 verify_installed_targets() {
   local SKILL_NAME="$1"
   local BASE="${CURSOR_PROJECT:-$HOME}"
+  local CODEX_BASE
+  if [[ -n "$CURSOR_PROJECT" ]]; then
+    CODEX_BASE="$CURSOR_PROJECT/.codex"
+  else
+    CODEX_BASE="${CODEX_HOME:-$HOME/.codex}"
+  fi
   local CLAUDE_DIR="${HOME}/.claude/skills/${SKILL_NAME}"
+  local CODEX_DIR="${CODEX_BASE}/skills/${SKILL_NAME}"
   local CURSOR_LINK="${BASE}/.cursor/skills/${SKILL_NAME}"
   local CURSOR_RULE="${BASE}/.cursor/rules/${SKILL_NAME}.mdc"
   local ERRORS=0
@@ -241,6 +277,16 @@ verify_installed_targets() {
     echo "  OK  Claude skill (symlink): $CLAUDE_DIR"
   else
     echo "  MISSING  Claude skill: $CLAUDE_DIR"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  # Codex skill directory
+  if [[ -d "$CODEX_DIR" ]] && [[ -f "$CODEX_DIR/SKILL.md" ]] && [[ -f "$CODEX_DIR/agents/openai.yaml" ]]; then
+    echo "  OK  Codex skill: $CODEX_DIR"
+  elif [[ -L "$CODEX_DIR" ]] && [[ -f "$CODEX_DIR/SKILL.md" ]] && [[ -f "$CODEX_DIR/agents/openai.yaml" ]]; then
+    echo "  OK  Codex skill (symlink): $CODEX_DIR"
+  else
+    echo "  MISSING  Codex skill: $CODEX_DIR"
     ERRORS=$((ERRORS + 1))
   fi
 
@@ -311,4 +357,4 @@ echo "  Installation Complete"
 echo "============================================"
 echo "Installed skills: ${SKILL_NAMES[*]}"
 echo ""
-echo "Compatible with: Claude Code, OpenCode, Cursor"
+echo "Compatible with: Claude Code, OpenCode, Cursor, Codex"

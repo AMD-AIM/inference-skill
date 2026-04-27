@@ -7,15 +7,16 @@ This repo packages GPU inference benchmarking, profiling, and kernel optimizatio
 - `Claude Code`
 - `OpenCode`
 - `Cursor`
+- `Codex`
 
-Claude Code and OpenCode discover skills from Claude-compatible install locations. Cursor uses a generated `.mdc` rule. One `./install.sh` run sets up all three.
+Claude Code and OpenCode discover skills from Claude-compatible install locations. Cursor uses a generated `.mdc` rule. Codex discovers skills from `$CODEX_HOME/skills` (default `~/.codex/skills`). One `./install.sh` run sets up all four.
 
 ## What this repo ships
 
 `inference-skill` packages one canonical skill payload:
 
 - `skills/inference-optimize/` (skill source of truth)
-- `install.sh` (installer for Claude Code, OpenCode, and Cursor)
+- `install.sh` (installer for Claude Code, OpenCode, Cursor, and Codex)
 - control-plane tests and E2E validator assets
 
 The implementation itself remains benchmark-framework agnostic while targeting the external [InferenceX repository](https://github.com/SemiAnalysisAI/InferenceX) during runtime execution.
@@ -48,17 +49,19 @@ Global install writes to:
 
 ```text
 ~/.claude/skills/inference-optimize       # skill files (Claude Code + OpenCode)
+~/.codex/skills/inference-optimize        # skill files (Codex; or $CODEX_HOME/skills)
 ~/.cursor/skills/inference-optimize       # symlink (Cursor native skill)
 ~/.cursor/rules/inference-optimize.mdc    # Cursor agent-requested rule
 ```
 
-Project install writes to the same three locations under the project directory.
+Project install writes Cursor and Codex discovery files under the project directory while preserving the Claude/OpenCode user-scoped install.
 
 ## Quick verification
 
 ```bash
 ./install.sh --verify
 opencode debug skill
+ls "${CODEX_HOME:-$HOME/.codex}/skills/inference-optimize/SKILL.md"
 ls ~/.cursor/rules/inference-optimize.mdc
 ```
 

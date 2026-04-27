@@ -1,8 +1,8 @@
 ---
 name: inference-optimize
 description: "Run inference benchmark/profiling/optimization workflow for a config key. When the user names a model or config key, immediately start a batched guided setup, then execute."
-compatibility: claude-code, opencode, cursor
 metadata:
+  compatibility: claude-code, opencode, cursor, codex
   workflow: inference
   audience: performance-engineers
   distribution: standalone-skill-repo
@@ -98,6 +98,7 @@ Communication schemas are in `protocols/`. The outer dispatcher never reads phas
 The file-based communication protocol (handoffs, results, reviews) is identical across all platforms. Only the agent spawning mechanism differs. See `protocols/platform-dispatch.md` for the full adapter contract.
 
 - **Cursor**: Discovered via `~/.cursor/skills/` symlink and `~/.cursor/rules/*.mdc` (agent-requested rule). Use `Task` tool with `subagent_type` per the dispatch table. Use `AskQuestion` for guided setup. Monitor agents can use `model: "fast"`.
+- **Codex**: Discovered via `$CODEX_HOME/skills/inference-optimize` (default `~/.codex/skills/inference-optimize`). Project installs also place a copy at `.codex/skills/inference-optimize` for explicit project-local use. Use `$inference-optimize` or the normal trigger phrase. If no question tool is available, ask concise numbered choices in chat.
 - **Claude Code**: Discovered via `~/.claude/skills/`. Use `Agent` tool with path-based handoffs. Context-budget compaction applies at handoff/manifests level; agent docs still load from disk. Use `question` tool for guided setup.
 - **OpenCode**: Same as Claude Code. Verify discovery with `opencode debug skill`. For non-interactive runs, set `"question": "allow"` in `.opencode/opencode.jsonc`. Context compaction remains handoff-based here as well.
 

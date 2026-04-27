@@ -1,6 +1,6 @@
 # Guide
 
-This guide covers verified usage of `inference-optimize` from OpenCode and Cursor after running `./install.sh`.
+This guide covers verified usage of `inference-optimize` from OpenCode, Cursor, and Codex after running `./install.sh`.
 
 ## Prerequisites
 
@@ -102,7 +102,30 @@ Prompt example in Cursor Composer:
 Use inference-optimize for qwen3.5-bf16-mi355x-sglang.
 ```
 
-## 7) Architecture references
+## 7) Codex usage
+
+After `./install.sh`, the Codex skill path is:
+
+```bash
+${CODEX_HOME:-$HOME/.codex}/skills/inference-optimize
+```
+
+Verify:
+
+```bash
+ls "${CODEX_HOME:-$HOME/.codex}/skills/inference-optimize/SKILL.md"
+ls "${CODEX_HOME:-$HOME/.codex}/skills/inference-optimize/agents/openai.yaml"
+```
+
+Prompt example in Codex:
+
+```text
+Use $inference-optimize for qwen3.5-bf16-mi355x-sglang.
+```
+
+Restart Codex after installing so new skills are picked up.
+
+## 8) Architecture references
 
 For multi-agent dispatch and protocol details:
 
@@ -110,7 +133,7 @@ For multi-agent dispatch and protocol details:
 - `skills/inference-optimize/orchestrator/PHASE-ORCHESTRATOR.md`
 - `skills/inference-optimize/protocols/platform-dispatch.md`
 
-## 8) Duplicate install note
+## 9) Duplicate install note
 
 If both global and project-local installs exist, OpenCode may resolve the global one first. For isolated verification:
 

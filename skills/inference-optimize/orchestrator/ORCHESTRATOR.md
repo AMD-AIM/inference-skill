@@ -437,6 +437,10 @@ Prompt assembly for phase agents: prefer path-based dispatch (phase doc path + h
 
 Use `question` tool for guided setup.
 
+### Codex
+
+Codex discovers this skill from `$CODEX_HOME/skills/inference-optimize` (default `~/.codex/skills/inference-optimize`). Use the same path-based prompt shapes as Claude Code / OpenCode when a Codex delegation tool is available. If no question tool is available, ask concise numbered choices in chat during guided setup.
+
 ## Status Updates
 
 Emit a visible status update to the user:

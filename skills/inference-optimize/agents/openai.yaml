@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inference Optimize"
+  short_description: "Run inference benchmark and optimization workflows"
+  default_prompt: "Use $inference-optimize for qwen3.5-bf16-mi355x-sglang."
