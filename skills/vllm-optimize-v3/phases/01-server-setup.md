@@ -229,7 +229,7 @@ echo "  Log: $VLLM_LOG"
 
 python3 -m vllm.entrypoints.openai.api_server \
     --model "$MODEL" --dtype {{DTYPE}} \
-    --tensor-parallel-size {{TP}} --trust-remote-code --enforce-eager \
+    --tensor-parallel-size {{TP}} --enforce-eager \
     --api-key dummy --max-model-len {{MAX_MODEL_LEN}} \
     --gpu-memory-utilization {{GPU_MEM_UTIL}} \
     --profiler-config "$PROFILER_JSON" \
@@ -255,7 +255,7 @@ for i in $(seq 1 36); do
         kill -0 $VLLM_PID 2>/dev/null && kill -9 $VLLM_PID 2>/dev/null || true; exit 1
     fi
     HTTP=$(curl -s -o/dev/null -w '%{http_code}' \
-        -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null)
+        -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null || echo "000")
     if [ "$HTTP" = "200" ]; then
         echo "  [${i}0s] HTTP=200 — server ready!"
         # Extract key info from vLLM log

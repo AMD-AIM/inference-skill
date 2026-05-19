@@ -26,9 +26,14 @@ set -euo pipefail
 
 echo "[$(date +%T)] === Phase 2/6: bench-profile — STARTING ==="
 
+# Resolve model: Phase 1 may have resolved MODEL to a local path.
+# Read resolved_model_path.txt and set env var for Python code below.
+RESOLVED_MODEL=$(cat "{{OUTPUT_DIR}}/resolved_model_path.txt" 2>/dev/null || echo "{{MODEL}}")
+export VLLM_BENCH_MODEL="$RESOLVED_MODEL"
+
 # Config summary
 echo "[$(date +%T)] Config:"
-echo "  Model:       {{MODEL}}"
+echo "  Model:       $VLLM_BENCH_MODEL (resolved from Phase 1)"
 echo "  ISL x OSL:   {{ISL}} x {{OSL}}"
 echo "  Concurrency: [{{CONCURRENCY_LEVELS}}]"
 echo "  Dtype:       {{DTYPE}}  TP={{TP}}"
@@ -48,7 +53,8 @@ import requests, json, time, os, concurrent.futures
 
 BASE_URL = "http://localhost:8000/v1"
 HEADERS  = {"Authorization":"Bearer dummy","Content-Type":"application/json"}
-MODEL    = "{{MODEL}}"
+# Use resolved model path from Phase 1 (fallback to template var)
+MODEL    = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
 ISL, OSL = {{ISL}}, {{OSL}}
 prompt   = "The quick brown fox jumps over the lazy dog. " * (ISL // 10 + 1)
 
@@ -120,7 +126,8 @@ import requests, json, time, concurrent.futures, os, glob, shutil
 
 BASE_URL = "http://localhost:8000/v1"
 HEADERS  = {"Authorization":"Bearer dummy","Content-Type":"application/json"}
-MODEL    = "{{MODEL}}"
+# Use resolved model path from Phase 1 (fallback to template var)
+MODEL    = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
 ISL, OSL = {{ISL}}, {{OSL}}
 PROFILE_DIR = "{{PROFILE_DIR}}"
 RESULTS_DIR = "{{RESULTS_DIR}}"

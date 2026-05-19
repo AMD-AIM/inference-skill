@@ -28,6 +28,9 @@ json.dump(p,open('{{PROGRESS_FILE}}','w'),indent=2)
 set -euo pipefail
 echo "[$(date +%T)] === Phase 4/6: optimize — STARTING ==="
 
+# Resolve model path from Phase 1
+export VLLM_BENCH_MODEL=$(cat "{{OUTPUT_DIR}}/resolved_model_path.txt" 2>/dev/null || echo "{{MODEL}}")
+
 # Config summary
 echo "[$(date +%T)] Config:"
 echo "  Untuned shapes:  {{RESULTS_DIR}}/untuned_shapes_final.csv"
@@ -112,7 +115,10 @@ echo "  Tuned entries: $N_TUNED"
 echo "  [OK] tuned_gemm.csv ready"
 
 # ── Step 0b: Micro-benchmark comparison (default vs tuned) ─────────────
-echo "[$(date +%T)] [Step 0b] Micro-benchmark: default vs tuned (key decode shapes)..."
+# NOTE: TunableOps only intercepts aten::mm (batch_size > 4 decode or prefill).
+# Small-M decode (M <= 4) dispatches through wvSplitK/LLMM1 and bypasses TunableOps.
+# We test BOTH groups and report separately for honest assessment.
+echo "[$(date +%T)] [Step 0b] Micro-benchmark: default vs tuned (separated by M value)..."
 
 python3 -u - << 'PYEOF'
 import torch, torch.nn.functional as F, time, json, os
@@ -125,50 +131,69 @@ def bench(fn, reps=300, warmup=30):
     torch.cuda.synchronize()
     return (time.perf_counter()-t0)/reps*1e6
 
-# Load real shapes
+# Load real shapes — separate decode (M <= 4, wvSplitK path) from prefill (M > 4, aten::mm)
 rs = json.load(open("{{RESULTS_DIR}}/real_shapes.json"))
-shapes = rs.get("top_shapes_by_calls", [])[:5]
-if not shapes:
-    print("  WARNING: No real shapes to benchmark"); exit(0)
+all_shapes = rs.get("shapes", [])
+decode_shapes = [s for s in all_shapes if s["MKN"][0] <= 4]
+prefill_shapes = [s for s in all_shapes if s["MKN"][0] > 4]
+# Take top 5 from each, or all if fewer
+decode_shapes = decode_shapes[:5]
+prefill_shapes = prefill_shapes[:5]
 
-print(f"  {'Shape MKN':<30}  {'Default(us)':>12}  {'Tuned(us)':>10}  {'Speedup':>8}  Status")
-print(f"  {'-'*30}  {'-'*12}  {'-'*10}  {'-'*8}  ------")
+both_groups = [("DECODE (M<=4, wvSplitK — TunableOps NOT applicable)", decode_shapes),
+               ("PREFILL (M>4, aten::mm — TunableOps applicable)", prefill_shapes)]
 
-# Default (no TunableOps)
-torch.cuda.tunable.enable(val=False)
-default_times = {}
-for entry in shapes:
-    M, K, N = entry["MKN"]
-    x = torch.randn(M, K, dtype=torch.bfloat16, device='cuda')
-    w = torch.randn(N, K, dtype=torch.bfloat16, device='cuda')
-    t = bench(lambda: F.linear(x, w))
-    default_times[(M,K,N)] = t
+total_all_default, total_all_tuned = 0, 0
 
-# Tuned
-torch.cuda.tunable.enable(val=True)
-torch.cuda.tunable.tuning_enable(val=False)
-torch.cuda.tunable.read_file("{{OPTIMIZED_DIR}}/tuned_gemm.csv")
-loaded = len(torch.cuda.tunable.get_results())
-print(f"  Loaded {loaded} tuned entries from CSV")
+for group_name, shapes in both_groups:
+    if not shapes:
+        print(f"\n  [{group_name}] No shapes to benchmark — skipping")
+        continue
+    print(f"\n  [{group_name}]")
+    print(f"  {'Shape MKN':<30}  {'Default(us)':>12}  {'Tuned(us)':>10}  {'Speedup':>8}  Status")
+    print(f"  {'-'*30}  {'-'*12}  {'-'*10}  {'-'*8}  ------")
 
-total_default, total_tuned = 0, 0
-best_speedup = 0
-for entry in shapes:
-    M, K, N = entry["MKN"]
-    x = torch.randn(M, K, dtype=torch.bfloat16, device='cuda')
-    w = torch.randn(N, K, dtype=torch.bfloat16, device='cuda')
-    t_tuned = bench(lambda: F.linear(x, w))
-    t_def = default_times[(M,K,N)]
-    speedup = t_def / t_tuned if t_tuned > 0 else 0
-    total_default += t_def
-    total_tuned   += t_tuned
-    best_speedup   = max(best_speedup, speedup)
-    status = "[IMPROVED]" if speedup > 1.05 else "[~SAME]" if speedup > 0.95 else "[REGRESSED]"
-    print(f"  M={M:<4d} K={K:<5d} N={N:<7d}  {t_def:>11.1f}us  {t_tuned:>9.1f}us  {speedup:>7.3f}x  {status}")
+    # Default (no TunableOps)
+    torch.cuda.tunable.enable(val=False)
+    default_times = {}
+    for entry in shapes:
+        M, K, N = entry["MKN"]
+        x = torch.randn(M, K, dtype=torch.bfloat16, device='cuda')
+        w = torch.randn(N, K, dtype=torch.bfloat16, device='cuda')
+        t = bench(lambda: F.linear(x, w))
+        default_times[(M,K,N)] = t
 
-overall_speedup = total_default / total_tuned if total_tuned > 0 else 0
+    # Tuned
+    torch.cuda.tunable.enable(val=True)
+    torch.cuda.tunable.tuning_enable(val=False)
+    torch.cuda.tunable.read_file("{{OPTIMIZED_DIR}}/tuned_gemm.csv")
+
+    g_total_default, g_total_tuned = 0, 0
+    for entry in shapes:
+        M, K, N = entry["MKN"]
+        x = torch.randn(M, K, dtype=torch.bfloat16, device='cuda')
+        w = torch.randn(N, K, dtype=torch.bfloat16, device='cuda')
+        t_tuned = bench(lambda: F.linear(x, w))
+        t_def = default_times[(M,K,N)]
+        speedup = t_def / t_tuned if t_tuned > 0 else 0
+        g_total_default += t_def
+        g_total_tuned   += t_tuned
+        total_all_default += t_def
+        total_all_tuned   += t_tuned
+        status = "[IMPROVED]" if speedup > 1.05 else "[~SAME]" if speedup > 0.95 else "[REGRESSED]"
+        path_note = " (wvSplitK, bypasses TunableOps)" if M <= 4 else " (aten::mm, TunableOps active)"
+        print(f"  M={M:<4d} K={K:<5d} N={N:<7d}  {t_def:>11.1f}us  {t_tuned:>9.1f}us  {speedup:>7.3f}x  {status}")
+        if M <= 4:
+            print(f"  {'':>71}{path_note}")
+
+    g_speedup = g_total_default / g_total_tuned if g_total_tuned > 0 else 0
+    g_verdict = "[IMPROVED]" if g_speedup > 1.05 else "[~SAME]" if g_speedup > 0.95 else "[NO GAIN]"
+    print(f"  {'':>30}  {'-'*12}  {'-'*10}  {'-'*8}")
+    print(f"  {'Group total':<30}  {g_total_default:>11.1f}us  {g_total_tuned:>9.1f}us  {g_speedup:>7.3f}x  {g_verdict}")
+
+overall_speedup = total_all_default / total_all_tuned if total_all_tuned > 0 else 0
 verdict = "[PROCEED]" if overall_speedup > 1.05 else "[MARGINAL]" if overall_speedup > 0.98 else "[NO GAIN]"
-print(f"\n  Overall micro-speedup: {overall_speedup:.3f}x  best_single: {best_speedup:.3f}x  {verdict}")
+print(f"\n  Combined micro-speedup: {overall_speedup:.3f}x  {verdict}")
 PYEOF
 
 # ── Step 0c: Create injection shim ─────────────────────────────────────
@@ -184,11 +209,15 @@ echo "  [OK] {{OPTIMIZED_DIR}}/pypath/sitecustomize.py ready"
 # STEP 1: Triton Kernel Optimization (only if TunableOps gain < 10%)
 # ══════════════════════════════════════════════════════════════════════
 echo "[$(date +%T)] Checking if Triton optimization is needed..."
+echo "  (Only prefill shapes M>4 reflect TunableOps effect — decode M<=4 bypass via wvSplitK)"
 python3 -u - << 'PYEOF'
-import torch, torch.nn.functional as F, time, json
+import torch, torch.nn.functional as F, time, json, os
 
 rs = json.load(open("{{RESULTS_DIR}}/real_shapes.json"))
-shapes = rs.get("top_shapes_by_calls", [])[:5]
+all_shapes = rs.get("shapes", [])
+# Separate decode (M<=4, wvSplitK path, TunableOps NOT applicable) from prefill (M>4, aten::mm)
+prefill_shapes = [s for s in all_shapes if s["MKN"][0] > 4][:5]
+decode_shapes  = [s for s in all_shapes if s["MKN"][0] <= 4][:5]
 
 torch.cuda.tunable.enable(val=True)
 torch.cuda.tunable.tuning_enable(val=False)
@@ -202,33 +231,65 @@ def bench(fn, reps=200, warmup=20):
     torch.cuda.synchronize()
     return (time.perf_counter()-t0)/reps*1e6
 
-total_default, total_tuned = 0, 0
-torch.cuda.tunable.enable(val=False)
-defaults = {}
-for e in shapes:
-    M,K,N = e["MKN"]
-    x = torch.randn(M,K,dtype=torch.bfloat16,device='cuda')
-    w = torch.randn(N,K,dtype=torch.bfloat16,device='cuda')
-    defaults[(M,K,N)] = bench(lambda: F.linear(x,w))
+# Benchmark decode shapes (M<=4, wvSplitK — expected ~1.0x)
+decode_default, decode_tuned = 0, 0
+if decode_shapes:
+    torch.cuda.tunable.enable(val=False)
+    for e in decode_shapes:
+        M,K,N = e["MKN"]
+        x = torch.randn(M,K,dtype=torch.bfloat16,device='cuda')
+        w = torch.randn(N,K,dtype=torch.bfloat16,device='cuda')
+        decode_default += bench(lambda: F.linear(x,w))
+    torch.cuda.tunable.enable(val=True)
+    for e in decode_shapes:
+        M,K,N = e["MKN"]
+        x = torch.randn(M,K,dtype=torch.bfloat16,device='cuda')
+        w = torch.randn(N,K,dtype=torch.bfloat16,device='cuda')
+        decode_tuned += bench(lambda: F.linear(x,w))
+    decode_sp = decode_default / decode_tuned if decode_tuned > 0 else 1.0
+    print(f"  DECODE (M<=4, wvSplitK): {decode_sp:.3f}x  [~1.0x expected — TunableOps not applicable]")
+else:
+    print(f"  DECODE (M<=4): no shapes found")
+    decode_sp = 1.0
 
-torch.cuda.tunable.enable(val=True)
-for e in shapes:
-    M,K,N = e["MKN"]
-    x = torch.randn(M,K,dtype=torch.bfloat16,device='cuda')
-    w = torch.randn(N,K,dtype=torch.bfloat16,device='cuda')
-    total_default += defaults[(M,K,N)]
-    total_tuned   += bench(lambda: F.linear(x,w))
+# Benchmark prefill shapes (M>4, aten::mm — TunableOps active)
+prefill_default, prefill_tuned = 0, 0
+if prefill_shapes:
+    torch.cuda.tunable.enable(val=False)
+    for e in prefill_shapes:
+        M,K,N = e["MKN"]
+        x = torch.randn(M,K,dtype=torch.bfloat16,device='cuda')
+        w = torch.randn(N,K,dtype=torch.bfloat16,device='cuda')
+        prefill_default += bench(lambda: F.linear(x,w))
+    torch.cuda.tunable.enable(val=True)
+    for e in prefill_shapes:
+        M,K,N = e["MKN"]
+        x = torch.randn(M,K,dtype=torch.bfloat16,device='cuda')
+        w = torch.randn(N,K,dtype=torch.bfloat16,device='cuda')
+        prefill_tuned += bench(lambda: F.linear(x,w))
+    prefill_sp = prefill_default / prefill_tuned if prefill_tuned > 0 else 1.0
+    print(f"  PREFILL (M>4, aten::mm): {prefill_sp:.3f}x  [TunableOps active]")
+else:
+    print(f"  PREFILL (M>4): no shapes found")
+    prefill_sp = 1.0
 
-speedup = total_default / total_tuned if total_tuned > 0 else 1.0
+# Combined speedup (weighted)
+total_default = decode_default + prefill_default
+total_tuned = decode_tuned + prefill_tuned
+combined_sp = total_default / total_tuned if total_tuned > 0 else 1.0
+print(f"  Combined: {combined_sp:.3f}x  (decode={decode_sp:.3f}x, prefill={prefill_sp:.3f}x)")
+
+# Use PREFILL speedup for Triton decision (that's where TunableOps matters)
+speedup = prefill_sp
 with open("{{OPTIMIZED_DIR}}/tunableops_speedup.txt","w") as f:
     f.write(str(round(speedup,4)))
 
 if speedup >= 1.10:
-    print(f"  TunableOps gain: {speedup:.3f}x >= 1.10x  → Triton optimization NOT needed  [SKIP Triton]")
+    print(f"\n  TunableOps PREFILL gain: {speedup:.3f}x >= 1.10x  → Triton optimization NOT needed  [SKIP Triton]")
 else:
-    print(f"  TunableOps gain: {speedup:.3f}x < 1.10x  → Triton optimization RECOMMENDED  [PROCEED to Triton]")
-    print(f"  (Read Phase 4 Triton section and {{SKILL_DIR}}/references/TRITON_KNOWLEDGE.md)
-  Note: check shape coverage — if coverage < 50% of real call volume, E2E gain will be limited")
+    print(f"\n  TunableOps PREFILL gain: {speedup:.3f}x < 1.10x  → Triton optimization RECOMMENDED  [PROCEED to Triton]")
+    print(f"  (Read Phase 4 Triton section and {{SKILL_DIR}}/references/TRITON_KNOWLEDGE.md)")
+    print(f"  Note: check shape coverage — if coverage < 50% of real call volume, E2E gain will be limited")
 PYEOF
 
 # ── Completion ─────────────────────────────────────────────────────────
@@ -261,7 +322,7 @@ echo "[$(date +%T)] [Triton] Setting up kernel workspaces..."
 CUDA_VISIBLE_DEVICES=<selected_gpu> python3 {{SCRIPTS_DIR}}/kernel_agent.py setup \
     --targets      "{{PROBLEMS_DIR}}/targets.json" \
     --real-shapes  "{{RESULTS_DIR}}/real_shapes.json" \
-    --model-config "{{MODEL}}/config.json" \
+    --model-config "${VLLM_BENCH_MODEL}/config.json" \
     --gpu-arch     "{{RESULTS_DIR}}/gpu_arch.json" \
     --output-dir   "{{OPTIMIZED_DIR}}" \
     --max-attempts {{MAX_OPTIMIZATION_ATTEMPTS}} \

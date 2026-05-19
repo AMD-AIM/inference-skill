@@ -23,6 +23,9 @@ json.dump(p,open('{{PROGRESS_FILE}}','w'),indent=2)
 set -euo pipefail
 echo "[$(date +%T)] === Phase 5/6: integrate — STARTING ==="
 
+# Resolve model path from Phase 1 (set early so ALL steps can use it)
+export VLLM_BENCH_MODEL=$(cat "{{OUTPUT_DIR}}/resolved_model_path.txt" 2>/dev/null || echo "{{MODEL}}")
+
 # Config
 echo "[$(date +%T)] Config:"
 python3 -u - << 'PYEOF'
@@ -46,16 +49,78 @@ print(f"  Injection method: PYTHONPATH={{OPTIMIZED_DIR}}/pypath")
 print(f"  Baseline: {{RESULTS_DIR}}/baseline_e2e.json (will be created now)")
 PYEOF
 
-# ── Step 1: Baseline E2E benchmark (current unpatched server) ─────────────
-echo "[$(date +%T)] [Step 1] Baseline E2E benchmark (unpatched server)..."
+# ── Step 1: Fresh baseline E2E benchmark ─────────────────────────────
+# CRITICAL: Baseline must be measured on a FRESH server, not the one that
+# has been running since Phase 1 (which may have GPU memory fragmentation
+# after Phases 2-4). Start a new baseline server, benchmark, then kill.
+echo "[$(date +%T)] [Step 1] Fresh baseline E2E benchmark (new server)..."
 T_START=$(date +%s)
 
+# Read GPU selection
+SELECTED=$(cat "{{OUTPUT_DIR}}/gpu_selection.txt" 2>/dev/null || \
+           python3 {{SCRIPTS_DIR}}/select_gpus.py {{TP}})
+echo "  GPU selection: $SELECTED"
+
+# Kill any existing vLLM (from Phases 1-4) before starting baseline
+echo "  Cleaning up previous server..."
+OLD_PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
+if [ -n "$OLD_PID" ]; then
+    kill -SIGTERM $OLD_PID 2>/dev/null || true
+    for _w in $(seq 1 30); do
+        kill -0 $OLD_PID 2>/dev/null || { echo "  Exited cleanly after ${_w}s."; break; }
+        sleep 1
+    done
+    kill -9 $OLD_PID 2>/dev/null || true; sleep 2
+fi
+rm -f "{{OUTPUT_DIR}}/vllm.pid"
+sleep 5  # ensure GPU cleanup
+
+# Start fresh baseline server (no TunableOps)
+export CUDA_VISIBLE_DEVICES="$SELECTED"
+export HF_ENDPOINT="${HF_ENDPOINT:-http://134.199.133.77}"
+export HF_HUB_DISABLE_XET=1
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export VLLM_RPC_TIMEOUT=1800000
+
+BASELINE_LOG="{{OUTPUT_DIR}}/vllm_baseline.log"
+echo "  Starting fresh baseline server..."
+python3 -m vllm.entrypoints.openai.api_server \
+    --model "$VLLM_BENCH_MODEL" --dtype {{DTYPE}} \
+    --tensor-parallel-size {{TP}} --enforce-eager \
+    --api-key dummy --max-model-len {{MAX_MODEL_LEN}} \
+    --gpu-memory-utilization {{GPU_MEM_UTIL}} \
+    > "$BASELINE_LOG" 2>&1 &
+BASELINE_PID=$!
+echo "  Baseline PID=$BASELINE_PID"
+
+for i in $(seq 1 36); do
+    sleep 10
+    kill -0 $BASELINE_PID 2>/dev/null || { echo "  ERROR: baseline server died"; tail -15 "$BASELINE_LOG"; exit 1; }
+    HTTP=$(curl -s -o/dev/null -w '%{http_code}' -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null || echo "000")
+    [ "$HTTP" = "200" ] && echo "  [${i}0s] Baseline server ready!" && break
+    [ $i -eq 36 ] && { echo "  ERROR: timeout"; tail -10 "$BASELINE_LOG"; exit 1; }
+    echo "  [${i}0s] $(tail -1 "$BASELINE_LOG" | sed 's/.*\] //' | cut -c1-100)"
+done
+
+# Warmup baseline server
+echo "  Warming up..."
+python3 -u - << 'PYEOF'
+import requests, os
+MODEL = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
+for _ in range(5):
+    r = requests.post("http://localhost:8000/v1/completions",
+        headers={"Authorization":"Bearer dummy","Content-Type":"application/json"},
+        json={"model":MODEL,"prompt":"Hello world","max_tokens":10,"temperature":0}, timeout=30)
+print("  Warmup done")
+PYEOF
+
+# Benchmark baseline
 python3 -u - << 'PYEOF'
 import requests, json, time, concurrent.futures, os
 
 BASE_URL = "http://localhost:8000/v1"
 HEADERS  = {"Authorization":"Bearer dummy","Content-Type":"application/json"}
-MODEL    = "{{MODEL}}"
+MODEL    = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
 ISL, OSL = {{ISL}}, {{OSL}}
 prompt   = "The quick brown fox jumps over the lazy dog. " * (ISL // 10 + 1)
 
@@ -95,39 +160,28 @@ PYEOF
 T_END=$(date +%s)
 echo "[$(date +%T)] [Step 1] Baseline done. ($(( T_END - T_START ))s elapsed)"
 
-# ── Step 2: Kill current server, start patched server ─────────────────────
-echo "[$(date +%T)] [Step 2] Restarting vLLM with TunableOps injection..."
+# Kill baseline server cleanly — release GPU for patched server
+echo "  Killing baseline server..."
+kill -SIGTERM $BASELINE_PID 2>/dev/null || true
+for _w in $(seq 1 30); do
+    kill -0 $BASELINE_PID 2>/dev/null || { echo "  Exited after ${_w}s."; break; }
+    sleep 1
+done
+kill -9 $BASELINE_PID 2>/dev/null || true
+rm -f "{{OUTPUT_DIR}}/vllm.pid"
+sleep 5
+echo "  Baseline server killed. GPU released."
 
-# Read GPU selection BEFORE killing the old server.
-# gpu_selection.txt was written by Phase 1. Reading /proc/{PID}/environ after
-# kill -9 is a race: the process is already dead and /proc/{PID} is gone.
-SELECTED=$(cat "{{OUTPUT_DIR}}/gpu_selection.txt" 2>/dev/null || \
-           python3 {{SCRIPTS_DIR}}/select_gpus.py {{TP}})
-echo "  GPU selection: $SELECTED (from gpu_selection.txt)"
-
-# Kill using saved PID only. Never use pkill -f patterns — they scan all
-# processes, hang on zombies, and have caused 2-minute timeouts in practice.
-# EngineCore is a child of the API server and dies automatically with it.
-OLD_PID=$(cat "{{OUTPUT_DIR}}/vllm.pid" 2>/dev/null || echo "")
-if [ -n "$OLD_PID" ]; then
-    echo "  Killing previous server PID=$OLD_PID"
-    kill -9 $OLD_PID 2>/dev/null || true
-    # Wait for port 8000 to be free (max 15s)
-    for _w in $(seq 1 15); do
-        sleep 1
-        curl -s -o/dev/null -w '%{http_code}' http://localhost:8000/health 2>/dev/null | \
-            grep -q "200" || break
-    done
-    echo "  Done."
-else
-    echo "  No previous vLLM PID found."
-fi
+# ── Step 2: Start patched server with TunableOps injection ────────────────
+echo "[$(date +%T)] [Step 2] Starting patched vLLM with TunableOps injection..."
 
 export CUDA_VISIBLE_DEVICES="$SELECTED"
 export PYTORCH_TUNABLEOP_ENABLED=1
+export PYTORCH_TUNABLEOP_TUNING=0
 export PYTHONPATH="{{OPTIMIZED_DIR}}/pypath:${PYTHONPATH:-}"
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export VLLM_RPC_TIMEOUT=1800000
 
-MODEL=$(cat "{{OUTPUT_DIR}}/resolved_model_path.txt" 2>/dev/null || echo "{{MODEL}}")
 PATCHED_LOG="{{OUTPUT_DIR}}/vllm_patched.log"
 
 echo "  CUDA_VISIBLE_DEVICES=$SELECTED"
@@ -136,8 +190,8 @@ echo "  PYTORCH_TUNABLEOP_ENABLED=1"
 echo "  Log: $PATCHED_LOG"
 
 python3 -m vllm.entrypoints.openai.api_server \
-    --model "$MODEL" --dtype {{DTYPE}} \
-    --tensor-parallel-size {{TP}} --trust-remote-code --enforce-eager \
+    --model "$VLLM_BENCH_MODEL" --dtype {{DTYPE}} \
+    --tensor-parallel-size {{TP}} --enforce-eager \
     --api-key dummy --max-model-len {{MAX_MODEL_LEN}} \
     --gpu-memory-utilization {{GPU_MEM_UTIL}} \
     > "$PATCHED_LOG" 2>&1 &
@@ -148,7 +202,7 @@ echo "  Started patched server: PID=$PATCHED_PID"
 for i in $(seq 1 36); do
     sleep 10
     kill -0 $PATCHED_PID 2>/dev/null || { echo "  ERROR: patched server died at ${i}0s"; tail -15 "$PATCHED_LOG"; exit 1; }
-    HTTP=$(curl -s -o/dev/null -w '%{http_code}' -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null)
+    HTTP=$(curl -s -o/dev/null -w '%{http_code}' -H "Authorization: Bearer dummy" http://localhost:8000/v1/models 2>/dev/null || echo "000")
     [ "$HTTP" = "200" ] && echo "  [${i}0s] HTTP=200 — patched server ready!" && break
     [ $i -eq 36 ] && { echo "  ERROR: timeout"; tail -10 "$PATCHED_LOG"; exit 1; }
     echo "  [${i}0s] $(tail -1 "$PATCHED_LOG" | sed 's/.*\] //' | cut -c1-100)"
@@ -169,9 +223,9 @@ fi
 
 # Warmup: send a few requests to confirm kernel is executing
 python3 -u - << 'PYEOF'
-import requests, time
+import requests, time, os
 HEADERS = {"Authorization":"Bearer dummy","Content-Type":"application/json"}
-MODEL   = "{{MODEL}}"
+MODEL   = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
 for _ in range(3):
     r = requests.post("http://localhost:8000/v1/completions", headers=HEADERS,
         json={"model":MODEL,"prompt":"Hello world","max_tokens":10,"temperature":0}, timeout=30)
@@ -198,7 +252,8 @@ python3 -u - << 'PYEOF'
 import requests, os
 
 HEADERS = {"Authorization":"Bearer dummy","Content-Type":"application/json"}
-MODEL   = "{{MODEL}}"
+# Use resolved model path from Phase 1
+MODEL   = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
 prompt  = "The capital of France is"
 
 r = requests.post("http://localhost:8000/v1/completions", headers=HEADERS,
@@ -224,11 +279,12 @@ echo "[$(date +%T)] [Step 5] E2E benchmark with patched server (Gates 4+5)..."
 T_START=$(date +%s)
 
 python3 -u - << 'PYEOF'
-import requests, json, time, concurrent.futures, sys
+import requests, json, time, concurrent.futures, sys, os
 
 BASE_URL = "http://localhost:8000/v1"
 HEADERS  = {"Authorization":"Bearer dummy","Content-Type":"application/json"}
-MODEL    = "{{MODEL}}"
+# Use resolved model path from Phase 1 (fallback to template var)
+MODEL    = os.environ.get("VLLM_BENCH_MODEL", "{{MODEL}}")
 ISL, OSL = {{ISL}}, {{OSL}}
 prompt   = "The quick brown fox jumps over the lazy dog. " * (ISL // 10 + 1)
 
